@@ -1,0 +1,83 @@
+# Minimal but API-faithful OpenShift config CRDs.
+#
+# These are the real group/version/kind/scope as shipped by OpenShift
+# (config.openshift.io/v1). We use x-kubernetes-preserve-unknown-fields so the
+# full upstream schema is accepted without vendoring it, and we deliberately do
+# NOT enable the /status subresource so the seeder can write status in a single
+# apply. A real cluster populates these via its operators; the collector reads
+# them identically either way.
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterversions.config.openshift.io
+spec:
+  group: config.openshift.io
+  names:
+    kind: ClusterVersion
+    listKind: ClusterVersionList
+    plural: clusterversions
+    singular: clusterversion
+  scope: Cluster
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      additionalPrinterColumns:
+        - { name: Version, type: string, jsonPath: .status.desired.version }
+        - { name: Available, type: string, jsonPath: ".status.conditions[?(@.type=='Available')].status" }
+        - { name: Progressing, type: string, jsonPath: ".status.conditions[?(@.type=='Progressing')].status" }
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusteroperators.config.openshift.io
+spec:
+  group: config.openshift.io
+  names:
+    kind: ClusterOperator
+    listKind: ClusterOperatorList
+    plural: clusteroperators
+    singular: clusteroperator
+  scope: Cluster
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      additionalPrinterColumns:
+        - { name: Version, type: string, jsonPath: ".status.versions[?(@.name=='operator')].version" }
+        - { name: Available, type: string, jsonPath: ".status.conditions[?(@.type=='Available')].status" }
+        - { name: Progressing, type: string, jsonPath: ".status.conditions[?(@.type=='Progressing')].status" }
+        - { name: Degraded, type: string, jsonPath: ".status.conditions[?(@.type=='Degraded')].status" }
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: infrastructures.config.openshift.io
+spec:
+  group: config.openshift.io
+  names:
+    kind: Infrastructure
+    listKind: InfrastructureList
+    plural: infrastructures
+    singular: infrastructure
+  scope: Cluster
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      additionalPrinterColumns:
+        - { name: Platform, type: string, jsonPath: .status.platform }
+        - { name: Region, type: string, jsonPath: .status.platformStatus.aws.region }

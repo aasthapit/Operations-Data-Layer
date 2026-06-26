@@ -1,0 +1,9 @@
+hubs:
+- name: hub-east
+  region: us-east-1
+  datacenter: iad1
+  kubeconfig: /fleet/kubeconfigs/hub-east.kubeconfig
+- name: hub-west
+  region: us-west-2
+  datacenter: sjc1
+  kubeconfig: /fleet/kubeconfigs/hub-west.kubeconfig

@@ -1,0 +1,60 @@
+# Operations Data Layer - direct cluster list
+# =================================================================
+# Point the data layer at a list of live OpenShift API endpoints, all behind a
+# single shared service account that authenticates with a username + password.
+#
+# Copy this to clusters.yaml, fill in your endpoints, set ODL_CONFIG to its path
+# (see docs/onboarding.md), and restart the API.
+#
+# Any string may reference an environment variable as ${VAR} so secrets stay out
+# of the file. Here the shared password is read from $OCP_PASSWORD.
+
+defaults:
+  # Applied to every cluster below unless the cluster overrides it.
+  auth:
+    type: password            # password | token | kubeconfig
+    username: svc-ops-data    # the shared service-account identity
+    password: ${OCP_PASSWORD} # injected from the environment / a secret
+
+  # TLS: provide a CA bundle, or skip verification for self-signed dev clusters.
+  insecure_skip_tls_verify: false
+  # ca_cert: /etc/odl/ca/ocp-ca.crt
+
+clusters:
+  # The API server URL is the `server:` from `oc whoami --show-server`
+  # (https://api.<cluster-domain>:6443). region / datacenter / environment are
+  # how you want this cluster grouped in the dashboard; `hub` is a logical
+  # grouping label (e.g. the ACM hub or fleet it belongs to).
+  - name: ocp-prod-east-1
+    api_url: https://api.ocp-prod-east-1.example.com:6443
+    region: us-east-1
+    datacenter: iad1
+    environment: prod
+    hub: prod-east
+
+  - name: ocp-prod-east-2
+    api_url: https://api.ocp-prod-east-2.example.com:6443
+    region: us-east-1
+    datacenter: iad2
+    environment: prod
+    hub: prod-east
+
+  - name: ocp-prod-west-1
+    api_url: https://api.ocp-prod-west-1.example.com:6443
+    region: us-west-2
+    datacenter: sjc1
+    environment: prod
+    hub: prod-west
+
+  - name: ocp-stage-west-1
+    api_url: https://api.ocp-stage-west-1.example.com:6443
+    region: us-west-2
+    datacenter: sjc1
+    environment: staging
+    hub: prod-west
+    # Example per-cluster override: this one uses a pre-minted token instead of
+    # the shared user/pass, and trusts a private CA.
+    auth:
+      type: token
+      token: ${OCP_STAGE_WEST_1_TOKEN}
+    ca_cert: /etc/odl/ca/west-ca.crt

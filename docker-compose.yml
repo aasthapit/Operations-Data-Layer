@@ -1,0 +1,71 @@
+# Operations Data Layer - local stack.
+#
+# The `api` service joins the external `kind` network so the collector can reach
+# the hub and managed cluster API servers by their in-network hostnames
+# (https://<cluster>-control-plane:6443), exactly as referenced by the internal
+# kubeconfigs the fleet exported.
+
+networks:
+  kind:
+    external: true        # created by kind; `make fleet-up` must run first
+  odl:
+    driver: bridge
+
+volumes:
+  pgdata:
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: odl
+      POSTGRES_PASSWORD: odl
+      POSTGRES_DB: odl
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [odl]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odl"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./data-layer
+    environment:
+      DATABASE_URL: postgresql+psycopg2://odl:odl@db:5432/odl
+      HUBS_CONFIG: /app/config/hubs.yaml
+      REFRESH_INTERVAL_SECONDS: "120"
+      REFRESH_ON_STARTUP: "true"
+      SUPPORTED_FLOOR: "4.15.0"
+    volumes:
+      - ./fleet:/fleet:ro                       # kubeconfigs referenced by hubs.yaml
+      - ./data-layer/config:/app/config:ro      # generated hub list
+    networks: [odl, kind]
+    ports:
+      - "18000:8000"     # host 8000/8001 often taken; API is reached internally as api:8000
+    depends_on:
+      db:
+        condition: service_healthy
+
+  dashboard:
+    build: ./dashboard
+    networks: [odl]
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+  # MCP server wrapping the API (streamable-http transport). Optional - start
+  # with `docker compose up -d mcp`. For local Claude Code, the stdio variant in
+  # mcp-server/README.md is usually simpler.
+  mcp:
+    build: ./mcp-server
+    environment:
+      MCP_API_BASE: http://api:8000
+      MCP_TRANSPORT: streamable-http
+    networks: [odl]
+    ports:
+      - "18080:8000"     # MCP endpoint at http://localhost:18080/mcp
+    depends_on:
+      - api

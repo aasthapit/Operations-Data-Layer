@@ -1,0 +1,33 @@
+# ACM (Red Hat Advanced Cluster Management) ManagedCluster CRD.
+#
+# Real group/version/kind as shipped by open-cluster-management. The hub uses
+# these to represent every cluster it manages; labels and clusterClaims carry
+# region / cloud / vendor / version. The collector lists these to discover the
+# fleet, then connects to each managed cluster using a per-cluster kubeconfig
+# secret (mirroring how ACM stores cluster credentials on the hub).
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: managedclusters.cluster.open-cluster-management.io
+spec:
+  group: cluster.open-cluster-management.io
+  names:
+    kind: ManagedCluster
+    listKind: ManagedClusterList
+    plural: managedclusters
+    singular: managedcluster
+    shortNames: [mcl]
+  scope: Cluster
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      additionalPrinterColumns:
+        - { name: Hub Accepted, type: boolean, jsonPath: .spec.hubAcceptsClient }
+        - { name: Joined, type: string, jsonPath: ".status.conditions[?(@.type=='ManagedClusterJoined')].status" }
+        - { name: Available, type: string, jsonPath: ".status.conditions[?(@.type=='ManagedClusterConditionAvailable')].status" }

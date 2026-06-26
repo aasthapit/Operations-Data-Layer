@@ -1,0 +1,41 @@
+# Read-only access the Operations Data Layer collector needs on EACH OpenShift
+# cluster it polls. Apply this to every managed cluster (oc apply -f ... against
+# each cluster's API), then bind it to whatever identity the collector uses.
+#
+# The collector only ever reads - it never mutates a managed cluster.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: odl-collector-readonly
+  labels: { app: odl }
+rules:
+  # cluster version + operators + platform/region
+  - apiGroups: ["config.openshift.io"]
+    resources: ["clusterversions", "clusteroperators", "infrastructures"]
+    verbs: ["get", "list"]
+  # node readiness
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces"]
+    verbs: ["get", "list"]
+  # application workloads (for blast radius)
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+---
+# Bind to the shared service-account *user* (the username/password identity from
+# your IdP, e.g. an htpasswd user named svc-ops-data). Swap kind/name if you use
+# a Kubernetes ServiceAccount + token instead (see the note in onboarding.md).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: odl-collector-readonly
+  labels: { app: odl }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: odl-collector-readonly
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: svc-ops-data

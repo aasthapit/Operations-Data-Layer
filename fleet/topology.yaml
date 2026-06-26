@@ -1,0 +1,86 @@
+# Operations Data Layer - fleet topology
+#
+# This is the single source of truth for the local fleet that stands in for a
+# real multi-hub OpenShift estate.
+#
+# Each `hub` is a kind cluster carrying the ACM ManagedCluster API. Each entry
+# under `managed` is its own kind cluster carrying the OpenShift config API
+# (ClusterVersion / ClusterOperator / Infrastructure) plus sample applications.
+#
+# The collector discovers clusters the same way it would against real ACM:
+#   hub -> list ManagedClusters -> read per-cluster kubeconfig secret -> connect
+#
+# `profile` drives the *raw* state that gets seeded onto the cluster. Health is
+# never seeded directly - the collector computes it from the seeded CR state,
+# exactly as it would against a real cluster.
+#
+#   healthy      all operators Available, ClusterVersion Available, on a supported version
+#   warning      a non-critical operator is Progressing / no update available
+#   degraded     one or more ClusterOperators Degraded=True
+#   progressing  ClusterVersion Progressing=True (mid-upgrade)
+#   eol          running a version past the supported floor
+
+supported_floor: "4.15.0"        # versions below this fail the version-supported check
+
+hubs:
+  - name: hub-east
+    region: us-east-1
+    datacenter: iad1
+    cloud: AWS
+    managed:
+      - { name: ocp-east-1, region: us-east-1, datacenter: iad1, environment: prod,    version: "4.16.7",  channel: stable-4.16, profile: healthy }
+      - { name: ocp-east-2, region: us-east-1, datacenter: iad2, environment: prod,    version: "4.15.18", channel: stable-4.15, profile: degraded }
+      - { name: ocp-east-3, region: us-east-2, datacenter: cmh1, environment: staging, version: "4.15.18", channel: stable-4.16, profile: progressing, upgrading_to: "4.16.7" }
+      - { name: ocp-east-4, region: us-east-2, datacenter: cmh1, environment: dev,     version: "4.14.33", channel: stable-4.14, profile: eol }
+
+  - name: hub-west
+    region: us-west-2
+    datacenter: sjc1
+    cloud: AWS
+    managed:
+      - { name: ocp-west-1, region: us-west-2, datacenter: sjc1, environment: prod,    version: "4.16.7",  channel: stable-4.16, profile: healthy }
+      - { name: ocp-west-2, region: us-west-2, datacenter: sjc1, environment: prod,    version: "4.16.7",  channel: stable-4.16, profile: healthy }
+      - { name: ocp-west-3, region: us-west-1, datacenter: lax1, environment: staging, version: "4.15.18", channel: stable-4.15, profile: warning }
+      - { name: ocp-west-4, region: us-west-1, datacenter: lax1, environment: dev,     version: "4.15.18", channel: stable-4.16, profile: progressing, upgrading_to: "4.16.7" }
+
+# Standard OpenShift cluster operators seeded onto every managed cluster.
+# `critical: true` operators make the cluster fail health when Degraded;
+# non-critical ones only warn.
+operators:
+  - { name: authentication,             critical: true }
+  - { name: cloud-credential,           critical: true }
+  - { name: cluster-autoscaler,         critical: false }
+  - { name: config-operator,            critical: true }
+  - { name: console,                    critical: false }
+  - { name: csi-snapshot-controller,    critical: false }
+  - { name: dns,                        critical: true }
+  - { name: etcd,                       critical: true }
+  - { name: image-registry,             critical: false }
+  - { name: ingress,                    critical: true }
+  - { name: insights,                   critical: false }
+  - { name: kube-apiserver,             critical: true }
+  - { name: kube-controller-manager,    critical: true }
+  - { name: kube-scheduler,             critical: true }
+  - { name: machine-api,                critical: true }
+  - { name: machine-config,             critical: true }
+  - { name: monitoring,                 critical: false }
+  - { name: network,                    critical: true }
+  - { name: node-tuning,                critical: false }
+  - { name: openshift-apiserver,        critical: true }
+  - { name: openshift-controller-manager, critical: false }
+  - { name: operator-lifecycle-manager, critical: false }
+  - { name: service-ca,                 critical: true }
+  - { name: storage,                    critical: true }
+
+# Applications running on the fleet. Each app maps to one or more namespaces and
+# is placed on clusters by selector (environment / region / explicit names).
+# This is what powers blast-radius: operator/version -> clusters -> apps.
+applications:
+  - { name: payments-api,          namespace: payments,      team: payments,   tier: critical, place_on: { environment: [prod] } }
+  - { name: checkout-web,          namespace: checkout,      team: storefront, tier: critical, place_on: { environment: [prod, staging] } }
+  - { name: fraud-detection,       namespace: risk,          team: risk,       tier: critical, place_on: { environment: [prod] } }
+  - { name: analytics-pipeline,    namespace: analytics,     team: data,       tier: standard, place_on: { environment: [prod, staging, dev] } }
+  - { name: notification-service,  namespace: notifications, team: platform,   tier: standard, place_on: { region: [us-east-1, us-east-2] } }
+  - { name: search-indexer,        namespace: search,        team: discovery,  tier: standard, place_on: { region: [us-west-1, us-west-2] } }
+  - { name: inventory-service,     namespace: inventory,     team: supply,     tier: critical, place_on: { environment: [prod] } }
+  - { name: recommendation-engine, namespace: reco,          team: data,       tier: standard, place_on: { environment: [prod, staging] } }

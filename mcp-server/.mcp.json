@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "operations-data-layer": {
+      "command": "mcp-server/.venv/bin/python",
+      "args": ["mcp-server/server.py"],
+      "env": {
+        "MCP_API_BASE": "http://localhost:18000",
+        "MCP_TRANSPORT": "stdio"
+      }
+    }
+  }
+}

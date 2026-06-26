@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd dashboard && VITE_PROXY_TARGET=http://localhost:18000 npm run dev"],
+      "autoPort": true,
+      "port": 5173
+    }
+  ]
+}

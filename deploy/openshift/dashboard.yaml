@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: odl-dashboard
+  labels: { app: odl, component: dashboard }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: odl, component: dashboard }
+  template:
+    metadata:
+      labels: { app: odl, component: dashboard }
+    spec:
+      containers:
+        - name: dashboard
+          image: image-registry.openshift-image-registry.svc:5000/ops-data-layer/odl-dashboard:latest
+          ports:
+            - containerPort: 8080
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: odl-dashboard
+  labels: { app: odl, component: dashboard }
+spec:
+  selector: { app: odl, component: dashboard }
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: odl-dashboard
+  labels: { app: odl, component: dashboard }
+spec:
+  to:
+    kind: Service
+    name: odl-dashboard
+  port:
+    targetPort: 8080
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
