@@ -13,6 +13,9 @@ networks:
 
 volumes:
   pgdata:
+  promdata:
+  grafanadata:
+  n8ndata:
 
 services:
   db:
@@ -38,12 +41,35 @@ services:
       REFRESH_INTERVAL_SECONDS: "120"
       REFRESH_ON_STARTUP: "true"
       SUPPORTED_FLOOR: "4.15.0"
+      # Metrics plane. Locally this points at our Thanos with the demo series.
+      # To test against a real env, override these (see docs/onboarding.md):
+      THANOS_URL: http://thanos-query:10902
+      METRICS_PROFILE: local            # set to "kube" for real kube/OCP series
+      # THANOS_TOKEN: ""                 # bearer token (e.g. Grafana SA token or `oc whoami -t`)
+      # THANOS_BASIC_AUTH: ""            # "user:password" alternative
+      # THANOS_VERIFY_TLS: "true"
     volumes:
       - ./fleet:/fleet:ro                       # kubeconfigs referenced by hubs.yaml
       - ./data-layer/config:/app/config:ro      # generated hub list
     networks: [odl, kind]
     ports:
       - "18000:8000"     # host 8000/8001 often taken; API is reached internally as api:8000
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Patching system of record (its own `patching` database in the same Postgres).
+  patching:
+    build: ./patching-service
+    environment:
+      PG_HOST: db
+      PG_PORT: "5432"
+      PG_USER: odl
+      PG_PASSWORD: odl
+      PG_DB: patching
+    networks: [odl]
+    ports:
+      - "18010:8000"     # http://localhost:18010/docs
     depends_on:
       db:
         condition: service_healthy
@@ -55,6 +81,7 @@ services:
       - "8080:80"
     depends_on:
       - api
+      - patching
 
   # MCP server wrapping the API (streamable-http transport). Optional - start
   # with `docker compose up -d mcp`. For local Claude Code, the stdio variant in
@@ -67,5 +94,93 @@ services:
     networks: [odl]
     ports:
       - "18080:8000"     # MCP endpoint at http://localhost:18080/mcp
+    depends_on:
+      - api
+
+  # ---- Metrics plane (the local stand-in for ACM Thanos) -------------------
+  # metrics-generator → Prometheus (scrape) → Thanos sidecar → Thanos Query
+  # (PromQL surface) → Grafana + the data-layer metrics API.
+  metrics-generator:
+    build: ./metrics-generator
+    environment:
+      TOPOLOGY: /fleet/topology.yaml
+    volumes:
+      - ./fleet:/fleet:ro
+    networks: [odl]
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=6h
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    networks: [odl]
+    ports:
+      - "9090:9090"
+    depends_on:
+      - metrics-generator
+
+  thanos-sidecar:
+    image: quay.io/thanos/thanos:v0.37.2
+    command:
+      - sidecar
+      - --prometheus.url=http://prometheus:9090
+      - --grpc-address=0.0.0.0:10901
+      - --http-address=0.0.0.0:10906
+    networks: [odl]
+    depends_on:
+      - prometheus
+
+  thanos-query:
+    image: quay.io/thanos/thanos:v0.37.2
+    command:
+      - query
+      - --http-address=0.0.0.0:10902
+      - --endpoint=thanos-sidecar:10901
+    networks: [odl]
+    ports:
+      - "10902:10902"   # Thanos Query PromQL/UI
+    depends_on:
+      - thanos-sidecar
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    networks: [odl]
+    ports:
+      - "3000:3000"
+    depends_on:
+      - thanos-query
+
+  # ---- Patching orchestration (N8N) ---------------------------------------
+  # Reaches the data layer at http://api:8000 inside the compose network.
+  # Import patching/n8n-patching-workflow.json once it's up.
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:1.70.0
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      N8N_SECURE_COOKIE: "false"
+      GENERIC_TIMEZONE: UTC
+      N8N_DIAGNOSTICS_ENABLED: "false"
+    volumes:
+      - n8ndata:/home/node/.n8n
+      - ./patching:/workflows:ro
+    networks: [odl]
+    ports:
+      - "5678:5678"
     depends_on:
       - api

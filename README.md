@@ -63,14 +63,24 @@ make fleet-venv      # one-time: python venv for the fleet tooling
 make fleet-up        # create + seed 2 hubs and 8 managed clusters (a few minutes)
 make up              # build + start db, api, dashboard
 
-# Dashboard:  http://localhost:8080
+# Dashboard:  http://localhost:8080      (Overview · Clusters · Versions · Utilization · Blast radius · Patching)
 # API + docs: http://localhost:18000/docs   (mapped off 8000 to avoid conflicts)
+# Patching:   http://localhost:18010/docs   (system of record: jobs, approvals, audit)
+# Grafana:    http://localhost:3000      (Fleet Utilization dashboard; anon viewer)
+# Thanos:     http://localhost:10902     # MCP: http://localhost:18080/mcp
+# N8N:        http://localhost:5678      (import patching/n8n-patching-workflow.json)
 ```
+
+The stack has two planes behind one set of interfaces: the **state/inventory** plane
+(collector → Postgres → API) and the **metrics/utilization** plane
+(generator → Prometheus → Thanos → API). The dashboard, API, and MCP query both.
 
 ## Documentation
 
 - **[docs/onboarding.md](docs/onboarding.md)** - point a list of live OCP cluster endpoints at the data layer using a single shared service account (username/password). Config format, RBAC, TLS, verification.
 - **[docs/architecture.md](docs/architecture.md)** - components, collection flow, auth flow, data model, blast radius, and deployment, with diagrams.
+- **[docs/insight-catalog.md](docs/insight-catalog.md)** - the three data planes (state/metrics/events), which source answers which question, and a researched validation.
+- **[docs/patching-workflow.md](docs/patching-workflow.md)** - the N8N patching orchestration design + data-layer integration contract (pre-check/monitor/post-check).
 - **[mcp-server/README.md](mcp-server/README.md)** - the MCP server that wraps the API so an agent can query the fleet in natural language.
 
 Tear down:
@@ -148,9 +158,13 @@ data-layer/       FastAPI app: collector, auth, models, REST API
   config/         hubs.yaml (generated) + clusters.example.yaml (direct mode)
 dashboard/        React + Vite dashboard (served by nginx)
 mcp-server/       MCP server wrapping the API
+patching-service/ patching system of record (jobs · approvals · audit) + seed_demo.py
+metrics-generator/ local stand-in for per-cluster Prometheus (metrics plane)
+observability/    Prometheus + Thanos + Grafana config
+patching/         N8N patching orchestration starter workflow (writes to patching-service)
 deploy/openshift/ manifests for a real OpenShift deployment
 deploy/rbac/      read-only ClusterRole for the collector
-docs/             onboarding + architecture
+docs/             onboarding · architecture · insight-catalog · patching-workflow
 docker-compose.yml / Makefile
 ```
 

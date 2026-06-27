@@ -5,12 +5,16 @@ import Clusters from "./views/Clusters";
 import ClusterDetail from "./views/ClusterDetail";
 import BlastRadius from "./views/BlastRadius";
 import Versions from "./views/Versions";
+import Metrics from "./views/Metrics";
+import Patching from "./views/Patching";
 
 const TABS = [
   ["overview", "Overview"],
   ["clusters", "Clusters"],
   ["versions", "Versions"],
+  ["metrics", "Utilization"],
   ["blast", "Blast radius"],
+  ["patching", "Patching"],
 ];
 
 export default function App() {
@@ -75,6 +79,10 @@ export default function App() {
           <Clusters initialFilter={clusterFilter} onOpen={openCluster} />
         ) : tab === "versions" ? (
           <Versions onOpen={openCluster} onBlast={goBlast} />
+        ) : tab === "metrics" ? (
+          <Metrics />
+        ) : tab === "patching" ? (
+          <Patching />
         ) : (
           <BlastRadius initialOcpVersion={blastVersion} onOpen={openCluster} />
         )}

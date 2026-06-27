@@ -129,6 +129,44 @@ def blast_radius(operator: str = "", operator_version: str = "",
 
 
 @mcp.tool()
+def top_namespaces_by_usage(by: str = "cpu", limit: int = 10) -> dict:
+    """Namespaces using the most resources across the fleet. by = cpu | memory.
+    This is the METRICS plane (Thanos/PromQL), not the inventory API - actual
+    usage is not in the Kubernetes API. Use for "noisy neighbour" / hot-namespace
+    questions."""
+    return _get("/api/metrics/top-namespaces", {"by": by, "limit": limit})
+
+
+@mcp.tool()
+def top_nodes_by_usage(by: str = "cpu", limit: int = 10) -> dict:
+    """Nodes with the highest CPU or memory utilization percentage across the
+    fleet (metrics plane). by = cpu | memory."""
+    return _get("/api/metrics/top-nodes", {"by": by, "limit": limit})
+
+
+@mcp.tool()
+def cluster_utilization(name: str) -> dict:
+    """Live CPU and memory used vs allocatable (and headroom) for one cluster,
+    from the metrics plane. Use for capacity/headroom questions and as a patch
+    pre-check signal."""
+    return _get(f"/api/metrics/cluster/{name}/utilization")
+
+
+@mcp.tool()
+def capacity_headroom(group_by: str = "cluster") -> dict:
+    """CPU capacity headroom (allocatable - used) grouped by cluster, region, or
+    environment (metrics plane). Use for capacity planning / where to schedule."""
+    return _get("/api/metrics/capacity", {"group_by": group_by})
+
+
+@mcp.tool()
+def metrics_query(promql: str) -> dict:
+    """Run an arbitrary instant PromQL query against the metrics plane (Thanos).
+    Escape hatch for utilization questions not covered by the other tools."""
+    return _get("/api/metrics/query", {"promql": promql})
+
+
+@mcp.tool()
 def refresh_data() -> dict:
     """Trigger an on-demand collection sweep of the fleet (runs in the
     background). Use when you want the freshest data before answering."""

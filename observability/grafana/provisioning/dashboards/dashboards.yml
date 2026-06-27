@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: odl
+    orgId: 1
+    folder: "Operations Data Layer"
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

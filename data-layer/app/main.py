@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .api import admin, blast_radius, clusters, health, versions
+from .api import admin, blast_radius, clusters, health, metrics, versions
 from .collector.runner import run_collection
 from .db import engine, init_db
 from .scheduler import start_scheduler, stop_scheduler
@@ -66,6 +66,7 @@ app.include_router(clusters.router)
 app.include_router(health.router)
 app.include_router(versions.router)
 app.include_router(blast_radius.router)
+app.include_router(metrics.router)
 app.include_router(admin.router)
 
 

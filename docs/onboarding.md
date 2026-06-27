@@ -127,3 +127,44 @@ The data layer supports two discovery modes in the same config file, and you can
 
 For a large estate, ACM-hub discovery scales better because you onboard a hub once instead of maintaining a per-cluster list.
 The direct list is the simplest way to get started and to onboard clusters that are not under ACM.
+
+## Connecting the metrics plane to another environment
+
+The utilization endpoints (`/api/metrics/*`) query a **Prometheus-compatible PromQL API**, not Grafana directly.
+Grafana is a visualization frontend; what answers `topk(namespace by CPU)` is the **Thanos Querier / Prometheus** behind it.
+There are two ways to point the data layer at a real environment, controlled by environment variables on the `api` service.
+
+### Option A - point at the real Thanos / Prometheus (preferred)
+
+```sh
+THANOS_URL=https://thanos-querier.apps.<cluster-domain>   # the ACM hub's Thanos Querier
+METRICS_PROFILE=kube                                      # use standard kube/OCP series, not our odl_* demo series
+THANOS_TOKEN=<bearer-token>                               # e.g. `oc whoami -t`, or a ServiceAccount token
+# THANOS_BASIC_AUTH=user:password                         # alternative to a token
+# THANOS_VERIFY_TLS=false                                 # only for self-signed endpoints
+```
+
+### Option B - you only have a Grafana URL + login
+
+Query *through* Grafana's datasource proxy, which forwards `/api/v1/query` to the datasource using Grafana's auth:
+
+```sh
+# 1. Create a Grafana service-account token (Administration -> Service accounts), or use an API key.
+# 2. Find the datasource UID (Connections -> Data sources -> your Prometheus/Thanos -> the uid in the URL),
+#    or: curl -H "Authorization: Bearer <token>" https://<grafana>/api/datasources
+THANOS_URL=https://<grafana>/api/datasources/proxy/uid/<DATASOURCE_UID>
+THANOS_TOKEN=<grafana-service-account-token>
+METRICS_PROFILE=kube
+```
+
+### Verify
+
+```sh
+curl -s http://localhost:18000/api/metrics/health         # { reachable: true }
+curl -s "http://localhost:18000/api/metrics/top-namespaces?by=cpu&limit=5"
+```
+
+Notes:
+- `METRICS_PROFILE=kube` switches the PromQL from our demo `odl_*` series to standard ones (`container_cpu_usage_seconds_total`, `kube_node_status_allocatable`, etc.).
+- The **namespace** and **capacity/allocatable** queries are standard and portable; **node-level usage** PromQL varies by environment's recording rules - adjust the `kube` `node_*` expressions in `data-layer/app/metrics.py` if your cluster labels usage differently (e.g. `instance` vs `node`).
+- The metrics client sends the token/basic-auth and honors `THANOS_VERIFY_TLS`, so it works against secured endpoints.
