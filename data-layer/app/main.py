@@ -14,9 +14,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .api import admin, blast_radius, clusters, health, versions
+from .api import (
+    admin,
+    applications,
+    blast_radius,
+    clusters,
+    health,
+    insights,
+    manifest,
+    metrics,
+    versions,
+)
 from .collector.runner import run_collection
 from .db import engine, init_db
+from .manifest import get_manifest
 from .scheduler import start_scheduler, stop_scheduler
 from .settings import settings
 
@@ -27,6 +38,7 @@ log = logging.getLogger("odl")
 
 def _wait_for_db(retries=30, delay=2):
     import time
+
     from sqlalchemy import text
     for i in range(retries):
         try:
@@ -41,6 +53,8 @@ def _wait_for_db(retries=30, delay=2):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    m = get_manifest()      # fail fast on a bad manifest
+    log.info("manifest %s: %d resources enabled", m.source, len(m.enabled_keys()))
     _wait_for_db()
     init_db()
     if settings.refresh_on_startup:
@@ -53,9 +67,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Operations Data Layer",
-    description="Fleet health, versions, and blast-radius over a multi-hub "
-                "OpenShift estate.",
-    version="0.1.0",
+    description="Fleet health, inventory, utilization, insights and blast radius "
+                "over a multi-hub OpenShift estate - everything sourced from the "
+                "OCP API, values scrubbed.",
+    version="0.2.0",
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -63,9 +78,13 @@ app.add_middleware(
 )
 
 app.include_router(clusters.router)
+app.include_router(applications.router)
 app.include_router(health.router)
 app.include_router(versions.router)
 app.include_router(blast_radius.router)
+app.include_router(insights.router)
+app.include_router(metrics.router)
+app.include_router(manifest.router)
 app.include_router(admin.router)
 
 

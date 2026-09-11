@@ -2,7 +2,10 @@
 Operations Data Layer - MCP server.
 
 Wraps the data layer's REST API as MCP tools so an agent can ask about fleet
-health, versions, and blast radius in natural language.
+health, inventory, applications, utilization, insights and blast radius in
+natural language. Everything the data layer knows was read from the clusters'
+own API servers; ConfigMap / Secret values, certificates and env values are
+never collected, so nothing here can leak them.
 
 Transport is selectable via MCP_TRANSPORT (stdio | sse | streamable-http).
 stdio is the default and is what Claude Code / Claude Desktop use locally.
@@ -25,7 +28,7 @@ mcp = FastMCP(
     host=os.environ.get("MCP_HOST", "127.0.0.1"),
     port=int(os.environ.get("MCP_PORT", "8000")),
 )
-_client = httpx.Client(base_url=API_BASE, timeout=30.0)
+_client = httpx.Client(base_url=API_BASE, timeout=60.0)
 
 
 def _get(path: str, params: dict | None = None):
@@ -49,12 +52,25 @@ def _post(path: str):
         return {"error": str(e)}
 
 
+# --------------------------------------------------------------------------- #
+# fleet health
+# --------------------------------------------------------------------------- #
 @mcp.tool()
 def fleet_overview() -> dict:
     """Fleet-wide health summary: total clusters, counts by status
     (healthy/warning/critical/unknown), how many are upgrading, hub status, and
     info about the last collection sweep. Start here for "how is the fleet?"."""
     return _get("/api/health/overview")
+
+
+@mcp.tool()
+def insights_summary() -> dict:
+    """Fleet-wide problem counters in one call: expired / expiring certificates,
+    platform vs application pod issues, quotas near their limit, degraded or
+    updating machine config pools, unhealthy OLM operators and pending OLM
+    upgrades, pending PVCs, rejected routes, warning events, application count,
+    and clusters without metrics. Use for "what needs attention right now?"."""
+    return _get("/api/insights/summary")
 
 
 @mcp.tool()
@@ -69,9 +85,10 @@ def health_summary(group_by: str = "region") -> dict:
 def list_clusters(region: str = "", environment: str = "", status: str = "",
                   version: str = "", team: str = "", hub: str = "") -> dict:
     """List clusters, optionally filtered. status is
-    healthy|warning|critical|unknown. team filters to clusters running an app
-    owned by that team. Returns a summary per cluster (status, version, region,
-    checks, nodes)."""
+    healthy|warning|critical|unknown. team filters to clusters running an
+    application owned by that team. Each cluster summary includes version,
+    checks, node counts, namespace counts, pod issues, expiring certs and live
+    CPU / memory utilization percentages."""
     return _get("/api/clusters", {
         "region": region, "environment": environment, "status": status,
         "version": version, "team": team, "hub": hub})
@@ -79,9 +96,11 @@ def list_clusters(region: str = "", environment: str = "", status: str = "",
 
 @mcp.tool()
 def get_cluster(name: str) -> dict:
-    """Full detail for one cluster: version/upgrade state, every cluster
-    operator and its condition, the applications running on it, and all
-    precondition health-check results."""
+    """Full detail for one cluster: version/upgrade state, platform config
+    (network type, CIDRs, apps domain, topology), capacity and live
+    utilization, every cluster operator, nodes, all namespaces (application
+    and platform) with pod counts and usage, pod issues, which manifest
+    resources this cluster served, and all precondition health checks."""
     return _get(f"/api/clusters/{name}")
 
 
@@ -94,11 +113,102 @@ def cluster_health(name: str) -> dict:
 
 @mcp.tool()
 def cluster_timeline(name: str) -> dict:
-    """Health-score history for one cluster over recent collection sweeps - use
-    to see whether a cluster is improving, degrading, or mid-upgrade."""
+    """Per-sweep history for one cluster: health score plus CPU / memory usage,
+    running pods and pod issues - use to see whether a cluster is improving,
+    degrading, mid-upgrade, or trending towards capacity."""
     return _get(f"/api/clusters/{name}/timeline")
 
 
+# --------------------------------------------------------------------------- #
+# inventory
+# --------------------------------------------------------------------------- #
+@mcp.tool()
+def cluster_nodes(name: str) -> dict:
+    """Nodes of one cluster: roles, readiness, pressure conditions, cordoned,
+    kubelet / OS / runtime versions, capacity vs allocatable vs live usage,
+    pods per node, cached images, taints."""
+    return _get(f"/api/clusters/{name}/nodes")
+
+
+@mcp.tool()
+def cluster_namespaces(name: str, ns_class: str = "", status: str = "") -> dict:
+    """Namespaces of one cluster with pod counts / restarts / issues, replicas,
+    requests / limits / live usage, ownership (app, team, tier) and resource
+    counts. ns_class = application | platform groups OpenShift's own
+    namespaces separately from application namespaces."""
+    return _get(f"/api/clusters/{name}/namespaces", {"class": ns_class, "status": status})
+
+
+@mcp.tool()
+def cluster_workloads(name: str, namespace: str = "", kind: str = "", ns_class: str = "",
+                      status: str = "", detail: bool = False) -> dict:
+    """Deployments / StatefulSets / DaemonSets on one cluster with replica
+    state, images and status (healthy | progressing | degraded). detail=true adds
+    containers (env var NAMES and their Secret/ConfigMap sources - never values),
+    config references, selectors and conditions."""
+    return _get(f"/api/clusters/{name}/workloads", {
+        "namespace": namespace, "kind": kind, "class": ns_class, "status": status,
+        "detail": detail})
+
+
+@mcp.tool()
+def inventory(kind: str, cluster: str = "", namespace: str = "", name: str = "",
+              status: str = "", ns_class: str = "", limit: int = 200) -> dict:
+    """Generic fleet-wide inventory query over any collected kind. kind is a
+    manifest key: routes, services, ingresses, networkpolicies, configmaps,
+    secrets, persistentvolumeclaims, persistentvolumes, storageclasses,
+    resourcequotas, events, cronjobs, horizontalpodautoscalers,
+    clusterserviceversions, subscriptions, machineconfigpools,
+    clusterrolebindings. Rows are scrubbed summaries (secrets/configmaps show
+    key names, sizes and certificate facts only)."""
+    return _get("/api/insights/resources", {
+        "kind": kind, "cluster": cluster, "namespace": namespace, "name": name,
+        "status": status, "class": ns_class, "limit": limit})
+
+
+@mcp.tool()
+def what_is_collected() -> dict:
+    """The OCP API manifest: every resource the collector knows about, whether
+    it is enabled, the scrub policy (what is never collected), how platform vs
+    application namespaces are classified, ownership label keys, and health
+    thresholds. Use to answer "can the data layer tell me X?"."""
+    return _get("/api/manifest")
+
+
+@mcp.tool()
+def resource_availability() -> dict:
+    """Per cluster, per resource: collected / unavailable (API not served) /
+    forbidden (RBAC) / error / disabled. Use to explain why a cluster lacks
+    some insight (e.g. no OLM, no metrics.k8s.io)."""
+    return _get("/api/manifest/availability")
+
+
+# --------------------------------------------------------------------------- #
+# applications
+# --------------------------------------------------------------------------- #
+@mcp.tool()
+def list_applications(team: str = "", tier: str = "", environment: str = "",
+                      region: str = "", cluster: str = "", status: str = "") -> dict:
+    """Applications across the fleet. An application is an application-class
+    namespace (every namespace that is not an OpenShift / Kubernetes platform
+    namespace), identified by its app label or name, with team / tier from
+    labels. Grouped per application with its placements (cluster, namespace,
+    status, replicas, pod issues, live usage)."""
+    return _get("/api/applications", {
+        "team": team, "tier": tier, "environment": environment, "region": region,
+        "cluster": cluster, "status": status})
+
+
+@mcp.tool()
+def get_application(app: str) -> dict:
+    """One application everywhere it runs: placements, per-cluster namespace
+    detail, and every workload with scrubbed container detail."""
+    return _get(f"/api/applications/{app}")
+
+
+# --------------------------------------------------------------------------- #
+# versions + blast radius
+# --------------------------------------------------------------------------- #
 @mcp.tool()
 def version_distribution() -> dict:
     """How OCP versions are spread across the fleet, with the clusters on each
@@ -115,17 +225,154 @@ def operator_versions(name: str = "") -> dict:
 
 
 @mcp.tool()
+def olm_operators(name: str = "", cluster: str = "") -> dict:
+    """OLM-installed operators (ClusterServiceVersions) across the fleet:
+    version spread per package, install phase per cluster, unhealthy installs,
+    and pending upgrades from Subscriptions. name filters to one package."""
+    return _get("/api/insights/olm-operators", {"name": name, "cluster": cluster})
+
+
+@mcp.tool()
 def blast_radius(operator: str = "", operator_version: str = "",
-                 ocp_version: str = "", degraded_only: bool = False) -> dict:
-    """Impact analysis. Given a bad OCP version and/or a cluster operator
-    (optionally pinned to a version), return the clusters carrying it and the
-    applications + teams riding on top of those clusters. Supply at least one of
-    operator or ocp_version. Set degraded_only=true to limit to clusters where
-    the operator is currently degraded. Use for "if operator X v1.2 is buggy,
-    what's affected?"."""
+                 ocp_version: str = "", degraded_only: bool = False,
+                 olm_operator: str = "", olm_version: str = "", image: str = "") -> dict:
+    """Impact analysis. Given something bad - an OCP version, a cluster
+    operator (optionally at a version), an OLM operator package (optionally at
+    a version), or a container image substring - return the clusters carrying
+    it, the applications + teams riding on top, and (for images) the exact
+    workloads. Supply at least one of operator / ocp_version / olm_operator /
+    image. Use for "if X is buggy, what's affected?"."""
     return _get("/api/blast-radius", {
         "operator": operator, "operator_version": operator_version,
-        "ocp_version": ocp_version, "degraded_only": degraded_only})
+        "ocp_version": ocp_version, "degraded_only": degraded_only,
+        "olm_operator": olm_operator, "olm_version": olm_version, "image": image})
+
+
+# --------------------------------------------------------------------------- #
+# insights
+# --------------------------------------------------------------------------- #
+@mcp.tool()
+def expiring_certificates(within_days: int = 0, include_valid: bool = False,
+                          cluster: str = "", ns_class: str = "") -> dict:
+    """Certificates in Secrets and ConfigMaps ordered by soonest expiry, with
+    subject / issuer / not-after (the certificate material itself is never
+    collected). within_days defaults to the manifest threshold (30)."""
+    return _get("/api/insights/certificates", {
+        "within_days": within_days or None, "include_valid": include_valid,
+        "cluster": cluster, "class": ns_class})
+
+
+@mcp.tool()
+def pod_issues(cluster: str = "", ns_class: str = "", reason: str = "", namespace: str = "") -> dict:
+    """Pods that are currently unhealthy across the fleet: CrashLoopBackOff,
+    ImagePullBackOff, Unschedulable, Pending, OOMKilled, HighRestarts,
+    NotReady, Failed, Evicted - with owner workload and node. ns_class =
+    platform | application separates OpenShift's own pods from app pods."""
+    return _get("/api/insights/pod-issues", {
+        "cluster": cluster, "class": ns_class, "reason": reason, "namespace": namespace})
+
+
+@mcp.tool()
+def quota_pressure(cluster: str = "", min_percent: float = 0) -> dict:
+    """ResourceQuotas across the fleet with hard vs used per resource and the
+    worst usage percentage, highest first. min_percent filters to quotas at or
+    above that usage."""
+    return _get("/api/insights/quotas", {"cluster": cluster, "min_percent": min_percent or None})
+
+
+@mcp.tool()
+def machine_config_pools(cluster: str = "", status: str = "") -> dict:
+    """MachineConfigPool rollout state across the fleet: degraded / updating /
+    paused / updated with machine counts. The patching signal for node-level
+    config rollouts. status filters, e.g. degraded."""
+    return _get("/api/insights/machine-config-pools", {"cluster": cluster, "status": status})
+
+
+@mcp.tool()
+def storage_summary(cluster: str = "", storage_class: str = "") -> dict:
+    """Storage graph: storage classes and provisioners per cluster, PVCs
+    (pending first) with what mounts them, and PVs with CSI driver and bound
+    claim. Use for "if storage provider X has a problem, what is impacted?"."""
+    return _get("/api/insights/storage", {"cluster": cluster, "storage_class": storage_class})
+
+
+@mcp.tool()
+def find_routes(host: str = "", cluster: str = "", namespace: str = "", status: str = "") -> dict:
+    """OpenShift Routes across the fleet: host, target service, TLS
+    termination, admitted / rejected. host does a substring match - use to find
+    which cluster and namespace serves a URL."""
+    return _get("/api/insights/routes", {
+        "host": host, "cluster": cluster, "namespace": namespace, "status": status})
+
+
+@mcp.tool()
+def warning_events(cluster: str = "", namespace: str = "", ns_class: str = "",
+                   reason: str = "", limit: int = 100) -> dict:
+    """Most recent Kubernetes Warning events across the fleet (what is going
+    wrong right now), newest first, with counts by reason."""
+    return _get("/api/insights/events", {
+        "cluster": cluster, "namespace": namespace, "class": ns_class, "reason": reason,
+        "limit": limit})
+
+
+@mcp.tool()
+def image_usage(image: str = "", registry: str = "", cluster: str = "",
+                group_by: str = "image") -> dict:
+    """Which workloads run which container images across the fleet. image is a
+    substring match; group_by = image | registry | repository. The input to a
+    CVE blast radius ("who runs nginx:1.19?")."""
+    return _get("/api/insights/images", {
+        "image": image, "registry": registry, "cluster": cluster, "group_by": group_by})
+
+
+@mcp.tool()
+def config_references(kind: str, name: str = "", cluster: str = "", namespace: str = "") -> dict:
+    """Which workloads reference a Secret / ConfigMap / PersistentVolumeClaim /
+    ServiceAccount (via env, envFrom, volume, imagePullSecret, serviceAccount).
+    The blast radius of rotating a secret or changing a config map. kind is
+    one of Secret, ConfigMap, PersistentVolumeClaim, ServiceAccount."""
+    return _get("/api/insights/references", {
+        "kind": kind, "name": name, "cluster": cluster, "namespace": namespace})
+
+
+@mcp.tool()
+def cluster_admins(cluster: str = "") -> dict:
+    """Users / groups / service accounts bound to cluster-admin across the
+    fleet, with the clusters each holds it on."""
+    return _get("/api/insights/cluster-admins", {"cluster": cluster})
+
+
+# --------------------------------------------------------------------------- #
+# utilization (from metrics.k8s.io via each cluster's API server)
+# --------------------------------------------------------------------------- #
+@mcp.tool()
+def top_namespaces_by_usage(by: str = "cpu", limit: int = 10, ns_class: str = "") -> dict:
+    """Namespaces using the most CPU or memory across the fleet (by = cpu |
+    memory), from the Kubernetes metrics API on each cluster. ns_class =
+    application | platform. Use for noisy-neighbour / hot-namespace questions."""
+    return _get("/api/metrics/top-namespaces", {"by": by, "limit": limit, "class": ns_class})
+
+
+@mcp.tool()
+def top_nodes_by_usage(by: str = "cpu", limit: int = 10) -> dict:
+    """Nodes with the highest CPU or memory utilization percentage across the
+    fleet. by = cpu | memory."""
+    return _get("/api/metrics/top-nodes", {"by": by, "limit": limit})
+
+
+@mcp.tool()
+def cluster_utilization(name: str) -> dict:
+    """CPU / memory / pods: capacity, allocatable, requests, limits, live usage,
+    headroom and percentages for one cluster, plus its top namespaces. Use for
+    capacity questions and as a patch pre-check signal."""
+    return _get(f"/api/metrics/cluster/{name}/utilization")
+
+
+@mcp.tool()
+def capacity_headroom(group_by: str = "cluster") -> dict:
+    """Capacity headroom (allocatable - used, CPU and memory) grouped by
+    cluster, region, environment, or datacenter. Use for capacity planning."""
+    return _get("/api/metrics/capacity", {"group_by": group_by})
 
 
 @mcp.tool()

@@ -1,0 +1,380 @@
+{
+  "name": "OCP Patching Orchestration (starter)",
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "n-manual",
+      "name": "Run manually (test)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [ 220, 60 ]
+    },
+    {
+      "parameters": { "rule": { "interval": [ { "field": "weeks" } ] } },
+      "id": "n-schedule",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [ 220, 220 ]
+    },
+    {
+      "parameters": { "httpMethod": "POST", "path": "patch-adhoc", "options": {} },
+      "id": "n-webhook",
+      "name": "Admin Ad-hoc Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [ 220, 380 ],
+      "webhookId": "patch-adhoc"
+    },
+    {
+      "parameters": {
+        "formTitle": "Schedule a patching job",
+        "formDescription": "Submit a plan for approval and execution against the fleet.",
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Requested by", "fieldType": "text", "requiredField": true },
+            { "fieldLabel": "Change record", "fieldType": "text", "placeholder": "CHG0012345", "requiredField": true },
+            { "fieldLabel": "Target version", "fieldType": "text", "placeholder": "4.16.7", "requiredField": true },
+            { "fieldLabel": "Clusters", "fieldType": "text", "placeholder": "ocp-east-2,ocp-west-3", "requiredField": true },
+            { "fieldLabel": "Approval threshold %", "fieldType": "number", "requiredField": false }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n-form",
+      "name": "Patch Request Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.1,
+      "position": [ 220, 560 ],
+      "webhookId": "patch-request-form"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the Plan from the submitted form (or defaults). In production this\n// loads plans -> pipelines -> clusters from the patching app DB.\nconst f = $json || {};\nconst clusters = String(f['Clusters'] || 'ocp-east-3,ocp-west-3,ocp-east-2')\n  .split(',').map(s => s.trim()).filter(Boolean);\nreturn [{ json: {\n  change_record: f['Change record'] || 'CHG-LOCAL',\n  requested_by: f['Requested by'] || 'local-tester',\n  approved: true,\n  threshold_pct: Number(f['Approval threshold %']) || 90,\n  target_version: f['Target version'] || '4.16.7',\n  clusters\n} }];"
+      },
+      "id": "n-loadplan",
+      "name": "Load Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [ 460, 320 ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "c-approved", "leftValue": "={{ $json.approved }}", "rightValue": "", "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n-approved",
+      "name": "Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [ 680, 320 ]
+    },
+    {
+      "parameters": {},
+      "id": "n-reqapproval",
+      "name": "Request Approval (notify + wait)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [ 680, 540 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://patching:8000/api/jobs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"requested_by\": $json.requested_by, \"change_record\": $json.change_record, \"target_version\": $json.target_version, \"clusters\": $json.clusters, \"threshold_pct\": $json.threshold_pct, \"source\": \"n8n\" } }}",
+        "options": {}
+      },
+      "id": "n-createjob",
+      "name": "Create Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 900, 280 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://patching:8000/api/jobs/{{ $json.id }}/approve",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"approver\": \"auto-approver (demo)\", \"decision\": \"approve\", \"note\": \"approved via workflow - replace with a human approval gate\" } }}",
+        "options": {}
+      },
+      "id": "n-recordapproval",
+      "name": "Record Approval",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 1120, 280 ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// One item per cluster, carrying the job id so every downstream call can\n// reference it without fragile cross-node data threading.\nconst plan = $('Load Plan').first().json;\nconst job = $('Create Job').first().json;\nreturn plan.clusters.map(c => ({ json: {\n  cluster: c, job_id: job.id, target_version: plan.target_version\n} }));"
+      },
+      "id": "n-expand",
+      "name": "Expand Clusters",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [ 1340, 280 ]
+    },
+    {
+      "parameters": { "batchSize": 1, "options": {} },
+      "id": "n-batch",
+      "name": "Rolling Batch",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [ 1560, 280 ]
+    },
+    {
+      "parameters": { "url": "=http://api:8000/api/clusters/{{ $json.cluster }}/health", "options": {} },
+      "id": "n-precheck",
+      "name": "Pre-check (data layer)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 1780, 260 ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "c-notcrit", "leftValue": "={{ $json.overall_status }}", "rightValue": "critical", "operator": { "type": "string", "operation": "notEquals" } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n-safe",
+      "name": "Safe to patch?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [ 2000, 260 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://patching:8000/api/jobs/{{ $('Expand Clusters').item.json.job_id }}/events",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"actor\": \"n8n\", \"action\": \"task.precheck\", \"phase\": \"precheck\", \"cluster\": $('Expand Clusters').item.json.cluster, \"outcome\": \"passed\", \"health_before\": $('Pre-check (data layer)').item.json.health_score, \"job_status\": \"running\", \"message\": \"pre-check passed\" } }}",
+        "options": {}
+      },
+      "id": "n-auditpre-pass",
+      "name": "Audit: pre-check passed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 2220, 160 ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://patching:8000/api/jobs/{{ $('Expand Clusters').item.json.job_id }}/events",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"actor\": \"n8n\", \"action\": \"task.precheck\", \"phase\": \"precheck\", \"cluster\": $('Expand Clusters').item.json.cluster, \"outcome\": \"skipped\", \"message\": \"not safe to patch (\" + $('Pre-check (data layer)').item.json.overall_status + \")\" } }}",
+        "options": {}
+      },
+      "id": "n-auditpre-skip",
+      "name": "Audit: pre-check skipped",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 2220, 440 ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": { "method": "POST", "url": "http://alertmanager.example.local/api/v2/silences", "options": {} },
+      "id": "n-suppress",
+      "name": "Suppress Alerts (Alertmanager)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 2440, 160 ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://pipeline-controller.example.local/api/runs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"cluster\": $('Expand Clusters').item.json.cluster, \"target_version\": $('Expand Clusters').item.json.target_version } }}",
+        "options": {}
+      },
+      "id": "n-trigger",
+      "name": "Trigger Pipeline (controller)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 2660, 160 ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": { "amount": 2, "unit": "seconds" },
+      "id": "n-wait",
+      "name": "Wait / poll",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [ 2880, 160 ]
+    },
+    {
+      "parameters": { "url": "=http://api:8000/api/clusters/{{ $('Expand Clusters').item.json.cluster }}", "options": {} },
+      "id": "n-monitor",
+      "name": "Monitor + Post-check fetch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 3100, 160 ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "c-healthy", "leftValue": "={{ $json.overall_status }}", "rightValue": "critical", "operator": { "type": "string", "operation": "notEquals" } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n-postcheck",
+      "name": "Post-check pass?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [ 3320, 160 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://patching:8000/api/jobs/{{ $('Expand Clusters').item.json.job_id }}/events",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"actor\": \"n8n\", \"action\": \"task.postcheck\", \"phase\": \"done\", \"cluster\": $('Expand Clusters').item.json.cluster, \"outcome\": \"passed\", \"version_to\": $('Monitor + Post-check fetch').item.json.ocp_version, \"health_after\": $('Monitor + Post-check fetch').item.json.health_score, \"message\": \"post-check passed; at target version\" } }}",
+        "options": {}
+      },
+      "id": "n-auditpost-pass",
+      "name": "Audit: post-check passed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 3540, 60 ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://patching:8000/api/jobs/{{ $('Expand Clusters').item.json.job_id }}/events",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"actor\": \"n8n\", \"action\": \"task.postcheck\", \"phase\": \"done\", \"cluster\": $('Expand Clusters').item.json.cluster, \"outcome\": \"failed\", \"message\": \"post-check failed - escalated\" } }}",
+        "options": {}
+      },
+      "id": "n-auditpost-fail",
+      "name": "Audit: post-check failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 3540, 300 ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": { "method": "POST", "url": "http://notify.example.local/notify", "options": {} },
+      "id": "n-notify",
+      "name": "Notify Success",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 3760, 60 ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": { "method": "POST", "url": "http://notify.example.local/escalate", "options": {} },
+      "id": "n-escalate",
+      "name": "Escalate (email + on-page)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 3760, 300 ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": { "method": "DELETE", "url": "http://alertmanager.example.local/api/v2/silence/PLACEHOLDER", "options": {} },
+      "id": "n-reenable",
+      "name": "Re-enable Alerts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 3980, 160 ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": { "url": "=http://patching:8000/api/jobs/{{ $('Create Job').item.json.id }}", "options": {} },
+      "id": "n-threshold",
+      "name": "Read Job Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 1780, 480 ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "c-thr", "leftValue": "={{ $json.totals.success_pct }}", "rightValue": "={{ $json.threshold_pct }}", "operator": { "type": "number", "operation": "gte" } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n-thrif",
+      "name": "Threshold met?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [ 2000, 480 ]
+    },
+    {
+      "parameters": {},
+      "id": "n-proceed",
+      "name": "Proceed / complete",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [ 2220, 420 ]
+    },
+    {
+      "parameters": {},
+      "id": "n-pause",
+      "name": "Pause + notify human",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [ 2220, 560 ]
+    }
+  ],
+  "connections": {
+    "Run manually (test)": { "main": [ [ { "node": "Load Plan", "type": "main", "index": 0 } ] ] },
+    "Schedule Trigger": { "main": [ [ { "node": "Load Plan", "type": "main", "index": 0 } ] ] },
+    "Admin Ad-hoc Trigger": { "main": [ [ { "node": "Load Plan", "type": "main", "index": 0 } ] ] },
+    "Patch Request Form": { "main": [ [ { "node": "Load Plan", "type": "main", "index": 0 } ] ] },
+    "Load Plan": { "main": [ [ { "node": "Approved?", "type": "main", "index": 0 } ] ] },
+    "Approved?": { "main": [ [ { "node": "Create Job", "type": "main", "index": 0 } ], [ { "node": "Request Approval (notify + wait)", "type": "main", "index": 0 } ] ] },
+    "Create Job": { "main": [ [ { "node": "Record Approval", "type": "main", "index": 0 } ] ] },
+    "Record Approval": { "main": [ [ { "node": "Expand Clusters", "type": "main", "index": 0 } ] ] },
+    "Expand Clusters": { "main": [ [ { "node": "Rolling Batch", "type": "main", "index": 0 } ] ] },
+    "Rolling Batch": { "main": [ [ { "node": "Read Job Result", "type": "main", "index": 0 } ], [ { "node": "Pre-check (data layer)", "type": "main", "index": 0 } ] ] },
+    "Pre-check (data layer)": { "main": [ [ { "node": "Safe to patch?", "type": "main", "index": 0 } ] ] },
+    "Safe to patch?": { "main": [ [ { "node": "Audit: pre-check passed", "type": "main", "index": 0 } ], [ { "node": "Audit: pre-check skipped", "type": "main", "index": 0 } ] ] },
+    "Audit: pre-check passed": { "main": [ [ { "node": "Suppress Alerts (Alertmanager)", "type": "main", "index": 0 } ] ] },
+    "Audit: pre-check skipped": { "main": [ [ { "node": "Rolling Batch", "type": "main", "index": 0 } ] ] },
+    "Suppress Alerts (Alertmanager)": { "main": [ [ { "node": "Trigger Pipeline (controller)", "type": "main", "index": 0 } ] ] },
+    "Trigger Pipeline (controller)": { "main": [ [ { "node": "Wait / poll", "type": "main", "index": 0 } ] ] },
+    "Wait / poll": { "main": [ [ { "node": "Monitor + Post-check fetch", "type": "main", "index": 0 } ] ] },
+    "Monitor + Post-check fetch": { "main": [ [ { "node": "Post-check pass?", "type": "main", "index": 0 } ] ] },
+    "Post-check pass?": { "main": [ [ { "node": "Audit: post-check passed", "type": "main", "index": 0 } ], [ { "node": "Audit: post-check failed", "type": "main", "index": 0 } ] ] },
+    "Audit: post-check passed": { "main": [ [ { "node": "Notify Success", "type": "main", "index": 0 } ] ] },
+    "Audit: post-check failed": { "main": [ [ { "node": "Escalate (email + on-page)", "type": "main", "index": 0 } ] ] },
+    "Notify Success": { "main": [ [ { "node": "Re-enable Alerts", "type": "main", "index": 0 } ] ] },
+    "Escalate (email + on-page)": { "main": [ [ { "node": "Re-enable Alerts", "type": "main", "index": 0 } ] ] },
+    "Re-enable Alerts": { "main": [ [ { "node": "Rolling Batch", "type": "main", "index": 0 } ] ] },
+    "Read Job Result": { "main": [ [ { "node": "Threshold met?", "type": "main", "index": 0 } ] ] },
+    "Threshold met?": { "main": [ [ { "node": "Proceed / complete", "type": "main", "index": 0 } ], [ { "node": "Pause + notify human", "type": "main", "index": 0 } ] ] }
+  }
+}

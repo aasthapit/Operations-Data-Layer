@@ -19,6 +19,11 @@ export default defineConfig({
     proxy: {
       "/api": { target, changeOrigin: true },
       "/healthz": { target, changeOrigin: true },
+      "/patching": {
+        target: process.env.VITE_PATCHING_TARGET || "http://localhost:18010",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/patching/, "/api"),
+      },
     },
   },
 });

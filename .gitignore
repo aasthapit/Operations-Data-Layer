@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Fleet (generated)
+fleet/kubeconfigs/
+
+# Local / editor
+.DS_Store
+*.log
+.env

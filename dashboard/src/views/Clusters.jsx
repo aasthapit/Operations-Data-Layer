@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Pill, Loading, ErrorBanner } from "../components";
+import { Pill, Loading, ErrorBanner, FilterSelect, UsageBar } from "../components";
 
 export default function Clusters({ initialFilter, onOpen }) {
   const [filters, setFilters] = useState(initialFilter || {});
@@ -9,7 +9,6 @@ export default function Clusters({ initialFilter, onOpen }) {
   const meta = useFetch(() => api.clusters(), []); // unfiltered, for filter options
 
   const opts = buildOptions(meta.data?.clusters || []);
-
   const set = (k, v) => setFilters((f) => ({ ...f, [k]: v || undefined }));
 
   return (
@@ -27,12 +26,13 @@ export default function Clusters({ initialFilter, onOpen }) {
       </div>
 
       {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
-        <div className="card" style={{ padding: 0 }}>
+        <div className="card flush">
           <table>
             <thead>
               <tr>
-                <th>Cluster</th><th>Status</th><th>Region</th><th>DC</th><th>Env</th>
-                <th>OCP version</th><th>Nodes</th><th>Checks</th>
+                <th>Cluster</th><th>Status</th><th>Region / DC</th><th>Env</th>
+                <th>OCP version</th><th>Nodes</th><th>CPU</th><th>Memory</th>
+                <th>Apps</th><th>Pod issues</th><th>Certs</th><th>Checks</th>
               </tr>
             </thead>
             <tbody>
@@ -40,8 +40,7 @@ export default function Clusters({ initialFilter, onOpen }) {
                 <tr key={c.name} className="clickable" onClick={() => onOpen(c.name)}>
                   <td className="mono">{c.name}</td>
                   <td><Pill status={c.overall_status} /></td>
-                  <td>{c.region}</td>
-                  <td>{c.datacenter}</td>
+                  <td>{c.region} <span className="muted">/ {c.datacenter}</span></td>
                   <td><span className="tag">{c.environment}</span></td>
                   <td className="mono">
                     {c.ocp_version}
@@ -50,7 +49,12 @@ export default function Clusters({ initialFilter, onOpen }) {
                     )}
                   </td>
                   <td>{c.nodes.ready}/{c.nodes.total}</td>
-                  <td>
+                  <td><UsageBar percent={c.utilization.cpu_percent} width={70} label="CPU used / allocatable" /></td>
+                  <td><UsageBar percent={c.utilization.memory_percent} width={70} label="Memory used / allocatable" /></td>
+                  <td>{c.namespaces.application} <span className="muted">/ {c.namespaces.platform} platform</span></td>
+                  <td>{c.pod_issues ? <span style={{ color: "var(--warning)" }}>{c.pod_issues}</span> : <span className="muted">0</span>}</td>
+                  <td>{c.certs_expiring ? <span style={{ color: "var(--critical)" }}>{c.certs_expiring}</span> : <span className="muted">0</span>}</td>
+                  <td className="nowrap">
                     <span style={{ color: "var(--healthy)" }}>{c.checks.passed}✓</span>{" "}
                     {c.checks.warned ? <span style={{ color: "var(--warning)" }}>{c.checks.warned}!</span> : null}{" "}
                     {c.checks.failed ? <span style={{ color: "var(--critical)" }}>{c.checks.failed}✕</span> : null}
@@ -58,7 +62,7 @@ export default function Clusters({ initialFilter, onOpen }) {
                 </tr>
               ))}
               {data.clusters.length === 0 && (
-                <tr><td colSpan={8} className="empty">No clusters match these filters.</td></tr>
+                <tr><td colSpan={12} className="empty">No clusters match these filters.</td></tr>
               )}
             </tbody>
           </table>
@@ -66,18 +70,6 @@ export default function Clusters({ initialFilter, onOpen }) {
       )}
       <div className="muted" style={{ marginTop: 10, fontSize: 12.5 }}>{data?.count ?? 0} clusters</div>
     </div>
-  );
-}
-
-function FilterSelect({ label, value, options, onChange }) {
-  return (
-    <label className="fld">
-      {label}
-      <select value={value || ""} onChange={(e) => onChange(e.target.value)}>
-        <option value="">All</option>
-        {options.map((o) => <option key={o} value={o}>{o}</option>)}
-      </select>
-    </label>
   );
 }
 

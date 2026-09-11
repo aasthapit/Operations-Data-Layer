@@ -4,6 +4,10 @@
 # the hub and managed cluster API servers by their in-network hostnames
 # (https://<cluster>-control-plane:6443), exactly as referenced by the internal
 # kubeconfigs the fleet exported.
+#
+# Everything the data layer knows comes from the clusters' own API servers
+# (inventory, configuration, and utilization via metrics.k8s.io). There is no
+# Prometheus / Thanos dependency.
 
 networks:
   kind:
@@ -13,6 +17,7 @@ networks:
 
 volumes:
   pgdata:
+  n8ndata:
 
 services:
   db:
@@ -35,15 +40,34 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://odl:odl@db:5432/odl
       HUBS_CONFIG: /app/config/hubs.yaml
+      # What is collected from every cluster (see docs/ocp-api-manifest.md).
+      ODL_MANIFEST: /app/config/ocp-api-manifest.yaml
       REFRESH_INTERVAL_SECONDS: "120"
       REFRESH_ON_STARTUP: "true"
+      COLLECT_WORKERS: "4"
       SUPPORTED_FLOOR: "4.15.0"
     volumes:
       - ./fleet:/fleet:ro                       # kubeconfigs referenced by hubs.yaml
-      - ./data-layer/config:/app/config:ro      # generated hub list
+      - ./data-layer/config:/app/config:ro      # generated hub list + the OCP API manifest
     networks: [odl, kind]
     ports:
       - "18000:8000"     # host 8000/8001 often taken; API is reached internally as api:8000
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Patching system of record (its own `patching` database in the same Postgres).
+  patching:
+    build: ./patching-service
+    environment:
+      PG_HOST: db
+      PG_PORT: "5432"
+      PG_USER: odl
+      PG_PASSWORD: odl
+      PG_DB: patching
+    networks: [odl]
+    ports:
+      - "18010:8000"     # http://localhost:18010/docs
     depends_on:
       db:
         condition: service_healthy
@@ -55,6 +79,7 @@ services:
       - "8080:80"
     depends_on:
       - api
+      - patching
 
   # MCP server wrapping the API (streamable-http transport). Optional - start
   # with `docker compose up -d mcp`. For local Claude Code, the stdio variant in
@@ -67,5 +92,26 @@ services:
     networks: [odl]
     ports:
       - "18080:8000"     # MCP endpoint at http://localhost:18080/mcp
+    depends_on:
+      - api
+
+  # ---- Patching orchestration (N8N) ---------------------------------------
+  # Reaches the data layer at http://api:8000 inside the compose network.
+  # Import patching/n8n-patching-workflow.json once it's up.
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:1.70.0
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      N8N_SECURE_COOKIE: "false"
+      GENERIC_TIMEZONE: UTC
+      N8N_DIAGNOSTICS_ENABLED: "false"
+    volumes:
+      - n8ndata:/home/node/.n8n
+      - ./patching:/workflows:ro
+    networks: [odl]
+    ports:
+      - "5678:5678"
     depends_on:
       - api

@@ -1,0 +1,131 @@
+# Additional OpenShift / OLM CRDs the data layer reads, with the real
+# group/version/kind/scope. Same approach as openshift-config.yaml:
+# x-kubernetes-preserve-unknown-fields and no /status subresource so the seeder
+# can write status in a single apply.
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: networks.config.openshift.io
+spec:
+  group: config.openshift.io
+  names: { kind: Network, listKind: NetworkList, plural: networks, singular: network }
+  scope: Cluster
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema: { type: object, x-kubernetes-preserve-unknown-fields: true }
+      additionalPrinterColumns:
+        - { name: Type, type: string, jsonPath: .status.networkType }
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ingresses.config.openshift.io
+spec:
+  group: config.openshift.io
+  names: { kind: Ingress, listKind: IngressList, plural: ingresses, singular: ingress }
+  scope: Cluster
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema: { type: object, x-kubernetes-preserve-unknown-fields: true }
+      additionalPrinterColumns:
+        - { name: Domain, type: string, jsonPath: .spec.domain }
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: routes.route.openshift.io
+spec:
+  group: route.openshift.io
+  names: { kind: Route, listKind: RouteList, plural: routes, singular: route }
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema: { type: object, x-kubernetes-preserve-unknown-fields: true }
+      additionalPrinterColumns:
+        - { name: Host, type: string, jsonPath: .spec.host }
+        - { name: Service, type: string, jsonPath: .spec.to.name }
+        - { name: Termination, type: string, jsonPath: .spec.tls.termination }
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: machineconfigpools.machineconfiguration.openshift.io
+spec:
+  group: machineconfiguration.openshift.io
+  names:
+    kind: MachineConfigPool
+    listKind: MachineConfigPoolList
+    plural: machineconfigpools
+    singular: machineconfigpool
+    shortNames: [mcp]
+  scope: Cluster
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema: { type: object, x-kubernetes-preserve-unknown-fields: true }
+      additionalPrinterColumns:
+        - { name: Updated, type: string, jsonPath: ".status.conditions[?(@.type=='Updated')].status" }
+        - { name: Updating, type: string, jsonPath: ".status.conditions[?(@.type=='Updating')].status" }
+        - { name: Degraded, type: string, jsonPath: ".status.conditions[?(@.type=='Degraded')].status" }
+        - { name: MachineCount, type: integer, jsonPath: .status.machineCount }
+        - { name: UpdatedMachineCount, type: integer, jsonPath: .status.updatedMachineCount }
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterserviceversions.operators.coreos.com
+spec:
+  group: operators.coreos.com
+  names:
+    kind: ClusterServiceVersion
+    listKind: ClusterServiceVersionList
+    plural: clusterserviceversions
+    singular: clusterserviceversion
+    shortNames: [csv, csvs]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema: { type: object, x-kubernetes-preserve-unknown-fields: true }
+      additionalPrinterColumns:
+        - { name: Display, type: string, jsonPath: .spec.displayName }
+        - { name: Version, type: string, jsonPath: .spec.version }
+        - { name: Phase, type: string, jsonPath: .status.phase }
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: subscriptions.operators.coreos.com
+spec:
+  group: operators.coreos.com
+  names:
+    kind: Subscription
+    listKind: SubscriptionList
+    plural: subscriptions
+    singular: subscription
+    shortNames: [sub, subs]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema: { type: object, x-kubernetes-preserve-unknown-fields: true }
+      additionalPrinterColumns:
+        - { name: Package, type: string, jsonPath: .spec.name }
+        - { name: Channel, type: string, jsonPath: .spec.channel }
+        - { name: State, type: string, jsonPath: .status.state }

@@ -10,7 +10,8 @@ The collector reproduces exactly that flow: for each cluster it discovers the OA
 Tokens are cached for 30 minutes and re-fetched automatically, so the credentials are exchanged a handful of times, not on every sweep.
 
 The collector is strictly read-only.
-It reads `ClusterVersion`, `ClusterOperator`, `Infrastructure`, `Node`, and `Deployment` resources, and nothing else.
+What it reads is declared in the OCP API manifest (`data-layer/config/ocp-api-manifest.yaml`) - cluster configuration, nodes and `metrics.k8s.io`, namespaces, workloads, pods, configuration objects, storage, networking, OLM operators, machine config pools and warning events - and nothing outside that manifest is ever requested.
+ConfigMap and Secret values, certificate material and container env values are scrubbed at parse time and never stored; see [ocp-api-manifest.md](ocp-api-manifest.md).
 
 ## 1. Create the shared service account
 
@@ -22,8 +23,8 @@ The rest of this guide assumes the shared user/pass identity.
 
 ## 2. Grant it read-only access on every cluster
 
-The identity needs read access to a handful of resources on each cluster.
-Apply the bundled `ClusterRole` + `ClusterRoleBinding` to each cluster:
+The identity needs `get` / `list` on the resources enabled in the manifest.
+The bundled `ClusterRole` + `ClusterRoleBinding` is generated from the manifest (`make rbac`); apply it to each cluster:
 
 ```sh
 # Run against each cluster's API (switch contexts or KUBECONFIG per cluster).
@@ -32,6 +33,9 @@ oc apply -f deploy/rbac/odl-collector-readonly.yaml
 
 The binding grants the `svc-ops-data` user the `odl-collector-readonly` role.
 Edit the `subjects` in that file if your identity has a different name, or if you are binding a `ServiceAccount` instead of a user.
+
+If a resource is not granted (or not served) on a cluster, collection of that resource is recorded as `forbidden` (or `unavailable`) for that cluster and everything else proceeds; `GET /api/manifest/availability` and the dashboard's Collected tab show exactly what each cluster served.
+To narrow the footprint, disable resources in the manifest and regenerate the RBAC.
 
 ## 3. Write the cluster list
 
@@ -127,3 +131,21 @@ The data layer supports two discovery modes in the same config file, and you can
 
 For a large estate, ACM-hub discovery scales better because you onboard a hub once instead of maintaining a per-cluster list.
 The direct list is the simplest way to get started and to onboard clusters that are not under ACM.
+
+## Utilization on real clusters
+
+Live CPU and memory come from the Kubernetes metrics API (`metrics.k8s.io/v1beta1`), which OpenShift serves through the API server via `prometheus-adapter` in `openshift-monitoring`.
+No Prometheus, Thanos or Grafana access is needed; the generated RBAC already includes `get` / `list` on `nodes` and `pods` in the `metrics.k8s.io` group.
+
+Verify on a cluster:
+
+```sh
+oc get --raw /apis/metrics.k8s.io/v1beta1/nodes | head -c 400
+```
+
+If the API is not served, the cluster reports `metrics_available: false`, its capacity check becomes informational, and every other insight still works.
+
+```sh
+curl -s http://localhost:18000/api/metrics/health         # clusters_with_metrics / without_metrics
+curl -s "http://localhost:18000/api/metrics/top-namespaces?by=cpu&limit=5"
+```
