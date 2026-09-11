@@ -19,15 +19,18 @@ flowchart TB
   subgraph fleet["OpenShift Fleet"]
     direction LR
     hub["ACM Hub<br/>(ManagedClusters)"]
-    ocp["OCP cluster<br/>ClusterVersion · Operators<br/>Infrastructure · Apps"]
+    ocp["OCP cluster<br/>config CRs · nodes · metrics.k8s.io<br/>namespaces · workloads · pods<br/>routes · secrets · PVCs · OLM · MCPs ..."]
     hub --> ocp
   end
 
   subgraph dl["Data Layer (FastAPI)"]
-    collector["Collector<br/>APScheduler"]
+    manifest["OCP API manifest<br/>(what to read)"]
+    collector["Collector<br/>APScheduler · parallel"]
+    scrub["Scrub + normalise<br/>(values never stored)"]
     checks["Precondition<br/>health checks"]
     api["REST API"]
-    collector --> checks
+    manifest --> collector
+    collector --> scrub --> checks
   end
 
   db[("Postgres")]
@@ -64,11 +67,14 @@ sequenceDiagram
   S->>C: run_collection()
   C->>H: list ManagedClusters
   H-->>C: clusters + kubeconfig secrets
-  loop each cluster
-    C->>K: get ClusterVersion / Operators / Infrastructure / Nodes / Deployments
-    K-->>C: raw custom resources
+  par each cluster (COLLECT_WORKERS)
+    loop each manifest-enabled resource
+      C->>K: list / get (paginated)
+      K-->>C: raw objects, or 404 (unavailable) / 403 (forbidden)
+    end
+    C->>C: scrub + assemble: pods & metrics → namespaces/nodes, workloads → images/refs
     C->>C: run precondition health checks
-    C->>DB: upsert current state + append health snapshot
+    C->>DB: replace current state + append health/utilization snapshot
   end
   C->>DB: record collection run
 ```
@@ -97,10 +103,20 @@ sequenceDiagram
 
 Per-cluster `token` and `kubeconfig` auth are also supported.
 
+## What is collected
+
+The OCP API manifest (`data-layer/config/ocp-api-manifest.yaml`) declares every resource the collector reads, each with an `enabled` flag; the resource registry in code defines how each is fetched and generates the read-only RBAC.
+Per cluster and per resource the outcome (collected / unavailable / forbidden / error) is stored, so the API can say what each cluster can answer.
+ConfigMap and Secret values, certificate material, container env values and non-allow-listed annotations are scrubbed inside the parsers and never persisted.
+See [ocp-api-manifest.md](ocp-api-manifest.md).
+
+Applications are namespaces: every non-platform namespace is an application, with ownership from labels; OpenShift's own namespaces are collected and grouped separately.
+Utilization comes from `metrics.k8s.io` on each cluster (no Prometheus).
+
 ## Health model
 
 Each cluster runs a panel of precondition checks, each returning pass / warn / fail at a severity (critical / warning / info):
-ACM availability, ClusterVersion availability, critical operators available, no degraded operators, nodes ready, supported version, upgrade in progress, operator drift, update available.
+ACM availability, ClusterVersion availability, critical operators available, no degraded operators, nodes ready, node pressure, supported version, upgrade in progress, operator drift, machine config pools, platform pods, application pods, capacity headroom, certificates valid, quota headroom, OLM operators, update available.
 
 The rollup rule:
 
@@ -113,13 +129,21 @@ Health is always **computed** from collected state - never read from a field on 
 
 ## Data model
 
-Current-state tables (`cluster`, `cluster_operator`, `application`, `health_check`) are replaced on every sweep; `health_snapshot` is append-only for history.
+Current-state tables are replaced on every sweep; `health_snapshot` is append-only for history (health and utilization).
+Typed tables hold what has rollups (nodes, namespaces, workloads, pod issues); everything else is a scrubbed row in `resource` with a kind-specific `status` and, for certificate-bearing kinds, `expires_at`.
 
 ```mermaid
 erDiagram
   HUB ||--o{ CLUSTER : manages
   CLUSTER ||--o{ CLUSTER_OPERATOR : has
-  CLUSTER ||--o{ APPLICATION : runs
+  CLUSTER ||--o{ NODE : has
+  CLUSTER ||--o{ NAMESPACE : "has (application | platform)"
+  CLUSTER ||--o{ WORKLOAD : runs
+  WORKLOAD ||--o{ WORKLOAD_IMAGE : uses
+  WORKLOAD ||--o{ WORKLOAD_REF : "references Secret / ConfigMap / PVC"
+  CLUSTER ||--o{ POD_ISSUE : reports
+  CLUSTER ||--o{ RESOURCE : "inventories (scrubbed)"
+  CLUSTER ||--o{ RESOURCE_STATUS : "collected / unavailable / forbidden"
   CLUSTER ||--o{ HEALTH_CHECK : evaluates
   CLUSTER ||--o{ HEALTH_SNAPSHOT : records
   HUB {
@@ -146,12 +170,43 @@ erDiagram
     bool degraded
     bool critical
   }
-  APPLICATION {
+  NAMESPACE {
     int id PK
     string cluster_name FK
     string name
+    string ns_class
+    string app_name
     string team
     string tier
+    string status
+    float cpu_usage
+  }
+  NODE {
+    int id PK
+    string cluster_name FK
+    string name
+    bool ready
+    float cpu_allocatable
+    float cpu_usage
+  }
+  WORKLOAD {
+    int id PK
+    string cluster_name FK
+    string namespace
+    string kind
+    string name
+    string status
+  }
+  RESOURCE {
+    int id PK
+    string cluster_name FK
+    string key
+    string kind
+    string namespace
+    string name
+    string status
+    datetime expires_at
+    json summary
   }
   HEALTH_CHECK {
     int id PK
@@ -169,15 +224,17 @@ erDiagram
 
 ## Blast radius
 
-Because operators, versions, and applications are all persisted and indexed, a single query turns "version X / operator Y is bad" into a concrete impact list.
+Because operators, versions, OLM operators, images and applications are all persisted and indexed, a single query turns "X is bad" into a concrete impact list.
 
 ```mermaid
 flowchart LR
-  q["Query:<br/>operator (+version)<br/>and / or OCP version"] --> m["Match clusters<br/>by operator + version<br/>or ClusterVersion"]
+  q["Query:<br/>OCP version · cluster operator<br/>OLM operator · image"] --> m["Match clusters<br/>(and workloads, for images)"]
   m --> cl["Impacted clusters"]
-  cl --> app["Applications running<br/>on those clusters"]
-  app --> r["Impact report<br/>clusters · apps · teams<br/>by environment / region"]
+  cl --> app["Application namespaces<br/>on those clusters"]
+  app --> r["Impact report<br/>clusters · apps · teams · workloads<br/>by environment / region"]
 ```
+
+The same graph answers dependency questions directly: `/api/insights/references` (who uses this Secret / ConfigMap / PVC), `/api/insights/storage` (which claims ride on a storage class), `/api/insights/images` (who runs this image).
 
 ## Refresh & caching strategy
 

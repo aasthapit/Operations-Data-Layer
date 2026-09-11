@@ -3,9 +3,9 @@ import threading
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from ..collector.runner import last_run, run_collection
 from ..db import get_session
 from ..models import CollectionRun
-from ..collector.runner import last_run, run_collection
 
 router = APIRouter(prefix="/api", tags=["admin"])
 

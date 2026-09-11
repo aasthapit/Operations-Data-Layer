@@ -72,9 +72,20 @@ operators:
   - { name: service-ca,                 critical: true }
   - { name: storage,                    critical: true }
 
-# Applications running on the fleet. Each app maps to one or more namespaces and
-# is placed on clusters by selector (environment / region / explicit names).
-# This is what powers blast-radius: operator/version -> clusters -> apps.
+# OLM-installed operators (ClusterServiceVersions in openshift-operators) seeded
+# onto every managed cluster. `alt_version` goes onto every other cluster so the
+# fleet shows realistic version drift; `channel` feeds the Subscription.
+olm_operators:
+  - { package: openshift-pipelines-operator-rh, display: "Red Hat OpenShift Pipelines", provider: "Red Hat", channel: latest,   version: "1.15.0", alt_version: "1.14.3" }
+  - { package: cert-manager,                    display: "cert-manager",                 provider: "The cert-manager maintainers", channel: stable, version: "1.14.4", alt_version: "1.14.4", next_version: "1.15.0" }
+  - { package: elasticsearch-operator,          display: "OpenShift Elasticsearch Operator", provider: "Red Hat", channel: stable-5.8, version: "5.8.5", alt_version: "5.8.2" }
+  - { package: kubernetes-nmstate-operator,     display: "Kubernetes NMState Operator",  provider: "Red Hat", channel: stable,   version: "4.16.0", alt_version: "4.15.2" }
+
+# Applications running on the fleet. Each app maps to one namespace (the
+# namespace *is* the application, as the data layer sees it) and is placed on
+# clusters by selector (environment / region / explicit names). Ownership
+# (team / tier) is written as labels on the namespace and on every workload.
+# This is what powers blast-radius: operator/version/image -> clusters -> apps.
 applications:
   - { name: payments-api,          namespace: payments,      team: payments,   tier: critical, place_on: { environment: [prod] } }
   - { name: checkout-web,          namespace: checkout,      team: storefront, tier: critical, place_on: { environment: [prod, staging] } }

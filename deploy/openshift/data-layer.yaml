@@ -5,9 +5,10 @@ metadata:
   labels: { app: odl }
 ---
 # Per-hub access. In a real ACM deployment, replace these kubeconfigs with
-# cluster-proxy / ManagedServiceAccount tokens. The data layer only needs read
-# access to ManagedCluster, ClusterVersion, ClusterOperator, Infrastructure,
-# Node and Deployment resources.
+# cluster-proxy / ManagedServiceAccount tokens. On each managed cluster the data
+# layer needs only the read access generated from the OCP API manifest
+# (deploy/rbac/odl-collector-readonly.yaml); on the hub it needs to list
+# ManagedClusters and read the per-cluster kubeconfig secrets.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -43,6 +44,10 @@ spec:
               value: postgresql+psycopg2://odl:odl@odl-db:5432/odl
             - name: HUBS_CONFIG
               value: /etc/odl/hubs.yaml
+            # The OCP API manifest ships in the image; mount a ConfigMap over
+            # this path to customise what is collected without a rebuild.
+            - name: ODL_MANIFEST
+              value: /app/config/ocp-api-manifest.yaml
             - name: REFRESH_INTERVAL_SECONDS
               value: "300"
             - name: SUPPORTED_FLOOR

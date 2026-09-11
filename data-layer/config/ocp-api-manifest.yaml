@@ -1,0 +1,109 @@
+# Operations Data Layer - OCP API manifest
+# =========================================
+#
+# Everything the collector reads from an OpenShift cluster is declared here.
+# Nothing outside this file is ever requested from a cluster, and the read-only
+# ClusterRole in deploy/rbac/ is generated from the enabled entries:
+#
+#     cd data-layer && .venv/bin/python -m app.manifest rbac > ../deploy/rbac/odl-collector-readonly.yaml
+#
+# Flip `enabled` to control what is collected. Disabled resources are still
+# listed by GET /api/manifest, so it is always clear what the data layer can and
+# cannot answer. Point ODL_MANIFEST at a copy of this file to customise it
+# without rebuilding the image.
+#
+# What is scrubbed is NOT configurable. ConfigMap values, Secret values,
+# certificate material, and container env values are dropped at parse time and
+# never reach the database or the API. Only names, key names, byte sizes,
+# references, and certificate facts (subject / issuer / expiry) are kept.
+# See docs/ocp-api-manifest.md.
+
+namespaces:
+  # OpenShift / Kubernetes platform namespaces are grouped separately.
+  # Every other namespace is treated as an application.
+  platform:
+    names:
+      - default
+      - kube-system
+      - kube-public
+      - kube-node-lease
+      - openshift
+      - local-path-storage        # kind's default storage provisioner
+    prefixes:
+      - openshift-
+      - kube-
+      - open-cluster-management
+      - multicluster-engine
+      - hive
+      - rhacs-operator
+      - stackrox
+    # A namespace carrying any of these label keys is platform, whatever its name.
+    label_keys:
+      - openshift.io/run-level
+
+  # Where application identity comes from. For each field the first label
+  # present on the namespace wins (in order); if none is present the most
+  # common value across the namespace's workloads is used; `app` finally falls
+  # back to the namespace name.
+  ownership:
+    app:  [odl.io/app, app.kubernetes.io/part-of, app.kubernetes.io/name]
+    team: [odl.io/team, team, owner, app.kubernetes.io/managed-by-team]
+    tier: [odl.io/tier, tier, criticality]
+
+# Annotations are dropped unless listed here. (kubectl's
+# last-applied-configuration annotation can embed an entire object, including
+# Secret data, so annotations default to closed.)
+keep_annotations:
+  - openshift.io/requester
+  - openshift.io/display-name
+  - openshift.io/description
+  - deployment.kubernetes.io/revision
+  - service.beta.openshift.io/serving-cert-secret-name
+  - cert-manager.io/certificate-name
+  - storageclass.kubernetes.io/is-default-class
+
+thresholds:
+  certificate_expiry_days: 30      # certs expiring within this window are flagged
+  pod_restart_threshold: 5         # restarts at/above this make a pod an issue
+  pod_pending_seconds: 300         # Pending longer than this is an issue
+  quota_warning_percent: 90        # ResourceQuota usage at/above this warns
+  capacity_warning_percent: 85     # cluster CPU/memory usage vs allocatable
+  capacity_critical_percent: 95
+  cluster_admin_roles: [cluster-admin]   # ClusterRoleBindings to report
+
+resources:
+  # ---- cluster-scoped platform state --------------------------------------
+  clusterversion:        { enabled: true }
+  clusteroperators:      { enabled: true }
+  infrastructure:        { enabled: true }
+  network_config:        { enabled: true }
+  ingress_config:        { enabled: true }
+  nodes:                 { enabled: true }
+  node_metrics:          { enabled: true }   # metrics.k8s.io - live CPU/memory per node
+  machineconfigpools:    { enabled: true }
+  clusterrolebindings:   { enabled: true }   # only bindings to thresholds.cluster_admin_roles
+  storageclasses:        { enabled: true }
+  persistentvolumes:     { enabled: true }
+
+  # ---- namespaced ------------------------------------------------------------
+  # `namespace_class` limits a namespaced resource to application or platform
+  # namespaces (default: all).
+  namespaces:            { enabled: true }
+  pods:                  { enabled: true }
+  pod_metrics:           { enabled: true }   # metrics.k8s.io - live CPU/memory per pod, rolled up per namespace
+  deployments:           { enabled: true }
+  statefulsets:          { enabled: true }
+  daemonsets:            { enabled: true }
+  cronjobs:              { enabled: true }
+  horizontalpodautoscalers: { enabled: true }
+  services:              { enabled: true }
+  routes:                { enabled: true }
+  ingresses:             { enabled: true }
+  networkpolicies:       { enabled: true }
+  configmaps:            { enabled: true }   # names, keys, sizes, certificate facts - never values
+  secrets:               { enabled: true }   # names, types, keys, certificate facts - never values
+  persistentvolumeclaims: { enabled: true }
+  resourcequotas:        { enabled: true }
+  events:                { enabled: true, limit: 200 }   # most recent Warning events
+  clusterserviceversions: { enabled: true }  # OLM-installed operators
+  subscriptions:         { enabled: true }

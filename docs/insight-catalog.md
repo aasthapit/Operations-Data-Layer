@@ -1,5 +1,10 @@
 # Operations insight catalog & data-sourcing strategy
 
+> **Decision (September 2026): everything from the OCP API, scrubbed.**
+> The data layer now reads *only* each cluster's API server - inventory, configuration, and utilization via `metrics.k8s.io` - and depends on no Prometheus, Thanos or external system.
+> The rest of this document is the original analysis and is kept because its framing (state / metrics / events planes) still explains *why* each insight is shaped the way it is; where it recommends querying Thanos, the implemented answer is the metrics API served by the cluster itself.
+> The current list of collected resources is the OCP API manifest ([ocp-api-manifest.md](ocp-api-manifest.md)); the "Have it today?" column below is superseded by the table at the end.
+
 How to answer "what is the state of my multi-ACM estate, and what's going on when there are issues?"
 This maps the kinds of questions a platform team asks to the data plane that actually holds the answer, how to get it, and whether our current data layer can.
 
@@ -102,3 +107,25 @@ A multi-source, adversarially-verified research pass (25 claims voted, 0 refuted
 - **Sourced but not separately voted here (treat as standard, not re-verified):** Golden Signals / USE / RED; the apiserver mitigations (resourceVersion=0, pagination, informers, APF); CMDB/ServiceNow/Backstage as the ownership source; OpenCost/Koku and ACS/Quay as the cost/vuln sources.
 
 Key sources to read: Red Hat ACM Observability and Multicluster Global Hub docs (2.11-2.13); `stolostron/multicluster-observability-operator`; Kubernetes resource-metrics-pipeline and manage-resources-containers docs; Google SRE "Monitoring Distributed Systems"; Brendan Gregg's USE method; Kubernetes API Priority & Fairness (flow-control) docs and ahmet.im "Kubernetes API list performance".
+
+
+## Status after the OCP-API-only decision
+
+| Question | Answered from | Endpoint |
+|---|---|---|
+| What images are on this cluster / who runs image X? | pod status + workload specs | `/api/insights/images`, blast radius `image=` |
+| What is the capacity of these nodes? Free / used? | `Node` capacity + allocatable, `metrics.k8s.io` NodeMetrics | `/api/clusters/{name}/nodes`, `/api/metrics/*` |
+| Which namespaces / nodes have the highest CPU / memory? | `metrics.k8s.io` PodMetrics rolled up per namespace, NodeMetrics | `/api/metrics/top-namespaces`, `/top-nodes` |
+| If storage provider X has a problem, what's the impact? | StorageClass → PVC (mounted-by from pod volumes) → workload → app | `/api/insights/storage`, `/references?kind=PersistentVolumeClaim` |
+| Which pods are crashlooping / restarting / unschedulable? | pod status, per namespace class | `/api/insights/pod-issues` |
+| What's going wrong right now? | Warning events (most recent N per cluster) | `/api/insights/events` |
+| Are any certs about to expire? | TLS Secrets + PEM ConfigMap keys, parsed for facts only | `/api/insights/certificates` |
+| Where is quota nearly exhausted? | `ResourceQuota` hard vs used | `/api/insights/quotas` |
+| Which OLM operators, at which versions, are failing or have upgrades pending? | CSVs + Subscriptions | `/api/insights/olm-operators` |
+| Is a node config rollout stuck? | MachineConfigPools | `/api/insights/machine-config-pools` |
+| Which cluster serves this hostname? | Routes | `/api/insights/routes?host=` |
+| Who depends on this secret / config map? | env / envFrom / volume references on workloads | `/api/insights/references` |
+| Who is cluster-admin? | ClusterRoleBindings | `/api/insights/cluster-admins` |
+| Which clusters are out of compliance (ACM policy)? | not yet - ACM `Policy` CRs on the hub are the next registry entry | - |
+| What's firing (Alertmanager)? | out of scope by design - alerts are not in the OCP API | - |
+| What does this cost by team? | out of scope - needs pricing | - |

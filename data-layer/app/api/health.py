@@ -3,9 +3,9 @@ from collections import defaultdict
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from ..collector.runner import last_run
 from ..db import get_session
 from ..models import Cluster, CollectionRun, Hub
-from ..collector.runner import last_run
 
 router = APIRouter(prefix="/api/health", tags=["health"])
 

@@ -9,11 +9,29 @@ This stands up a multi-hub estate entirely on kind:
     per-cluster kubeconfig secret (how a real ACM hub stores cluster access).
 
   * Each `managed` cluster becomes its own kind cluster carrying the OpenShift
-    config API: a ClusterVersion, the standard ClusterOperators, an
-    Infrastructure object, and sample application workloads.
+    config API (ClusterVersion, ClusterOperators, Infrastructure, Network,
+    Ingress config, MachineConfigPools), OLM operators (CSVs + Subscriptions),
+    OpenShift-style platform namespaces with pods, application namespaces
+    with the full workload footprint the data layer reads (Deployments with
+    env references, Services, Routes, ConfigMaps, Secrets with *real* TLS
+    certificates at varied expiry, ResourceQuotas, NetworkPolicies, PVCs,
+    HPAs, CronJobs), and metrics-server so metrics.k8s.io is served like on
+    OpenShift.
 
-Health is never seeded. The `profile` only sets the raw CR state; the data
-layer computes health from that state exactly as it would on a real cluster.
+Health is never seeded. The `profile` only sets the raw state; the data layer
+computes health from that state exactly as it would on a real cluster:
+
+    healthy      everything settled
+    warning      a non-critical operator progressing, an image-pull failure in a
+                 platform namespace, a failed OLM install, app certs expiring soon,
+                 a quota near its limit
+    degraded     ClusterOperators Degraded, a degraded MachineConfigPool, a
+                 crashlooping platform pod and app pod, an expired cert, an
+                 exhausted quota
+    progressing  ClusterVersion + MachineConfigPool mid-rollout, an OLM upgrade
+                 pending, an unschedulable pod
+    eol          a version past the supported floor, a paused MCP, the router
+                 cert expiring soon
 
 Commands:
     python fleet.py up         # create + seed everything, export kubeconfigs
@@ -36,10 +54,13 @@ import yaml
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 CRDS = os.path.join(HERE, "crds")
+ADDONS = os.path.join(HERE, "addons")
 KUBECONFIG_DIR = os.path.join(HERE, "kubeconfigs")
 HUB_CONFIG_OUT = os.path.join(REPO, "data-layer", "config", "hubs.yaml")
 
 NOW = datetime.now(timezone.utc)
+PAUSE = "registry.k8s.io/pause:3.9"
+MISSING_IMAGE = "registry.example.com/platform/image-registry:4.16.7"   # never resolves
 
 
 def ts(delta_hours=0):
@@ -48,7 +69,19 @@ def ts(delta_hours=0):
 
 def load_topology():
     with open(os.path.join(HERE, "topology.yaml")) as f:
-        return yaml.safe_load(f)
+        topo = yaml.safe_load(f)
+    # FLEET_CLUSTERS=hub-east,ocp-east-1,... limits every command to a subset
+    # (a hub is included when named; a managed cluster needs its hub named too).
+    # Useful on laptops with a small Docker disk / memory allocation.
+    only = {n.strip() for n in os.environ.get("FLEET_CLUSTERS", "").split(",") if n.strip()}
+    if only:
+        topo["hubs"] = [
+            {**hub, "managed": [m for m in hub["managed"] if m["name"] in only]}
+            for hub in topo["hubs"] if hub["name"] in only
+        ]
+        if not topo["hubs"]:
+            sys.exit(f"FLEET_CLUSTERS={','.join(sorted(only))} matches no hub in topology.yaml")
+    return topo
 
 
 # --------------------------------------------------------------------------- #
@@ -73,7 +106,7 @@ def kctx(name):
 
 def existing_clusters():
     res = sh(["kind", "get", "clusters"], check=False, quiet=True)
-    return set(l.strip() for l in res.stdout.splitlines() if l.strip())
+    return set(line.strip() for line in res.stdout.splitlines() if line.strip())
 
 
 def all_cluster_names(topo):
@@ -87,13 +120,23 @@ def all_cluster_names(topo):
 # --------------------------------------------------------------------------- #
 # cluster lifecycle
 # --------------------------------------------------------------------------- #
-def create_cluster(name):
+def create_cluster(name, attempts=2):
     existing = existing_clusters()
     if name in existing:
         print(f"  = {name} already exists")
         return
-    sh(["kind", "create", "cluster", "--name", name, "--wait", "90s"], quiet=True)
-    print(f"  + created {name}")
+    # kind leaves nothing behind when creation fails, so a retry is safe. Under
+    # memory pressure (several clusters booting at once) kubeadm can time out.
+    for attempt in range(1, attempts + 1):
+        res = sh(["kind", "create", "cluster", "--name", name, "--wait", "120s"],
+                 check=False, quiet=True)
+        if res.returncode == 0:
+            print(f"  + created {name}")
+            return
+        sys.stderr.write(res.stderr[-2000:])
+        if attempt < attempts:
+            print(f"  ! creating {name} failed (attempt {attempt}), retrying")
+    raise RuntimeError(f"could not create kind cluster {name}")
 
 
 def apply_manifests(context, objs):
@@ -110,6 +153,12 @@ CRD_NAMES = [
     "clusterversions.config.openshift.io",
     "clusteroperators.config.openshift.io",
     "infrastructures.config.openshift.io",
+    "networks.config.openshift.io",
+    "ingresses.config.openshift.io",
+    "routes.route.openshift.io",
+    "machineconfigpools.machineconfiguration.openshift.io",
+    "clusterserviceversions.operators.coreos.com",
+    "subscriptions.operators.coreos.com",
     "managedclusters.cluster.open-cluster-management.io",
 ]
 
@@ -124,8 +173,52 @@ def apply_crd_files(context, files):
            check=False, quiet=True)
 
 
+def apply_addons(context):
+    """metrics-server, so metrics.k8s.io is served like OpenShift's prometheus-adapter."""
+    for f in sorted(os.listdir(ADDONS)):
+        if f.endswith(".yaml"):
+            sh(["kubectl", "apply", "--context", context, "-f", os.path.join(ADDONS, f)], quiet=True)
+
+
 # --------------------------------------------------------------------------- #
-# operator / version modelling
+# certificates (real, self-signed; the data layer only ever sees their facts)
+# --------------------------------------------------------------------------- #
+def make_cert(cn, days, ca=False, sans=()):
+    """Return (cert_pem, key_pem). `days` may be negative for an expired cert."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn),
+                         x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Example Corp")])
+    issuer = subject if ca else x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, "Example Corp Issuing CA"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Example Corp")])
+    b = (x509.CertificateBuilder()
+         .subject_name(subject).issuer_name(issuer).public_key(key.public_key())
+         .serial_number(x509.random_serial_number())
+         .not_valid_before(NOW - timedelta(days=365))
+         .not_valid_after(NOW + timedelta(days=days))
+         .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True))
+    if sans:
+        b = b.add_extension(x509.SubjectAlternativeName([x509.DNSName(s) for s in sans]), critical=False)
+    cert = b.sign(key, hashes.SHA256())
+    return (cert.public_bytes(serialization.Encoding.PEM).decode(),
+            key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                              serialization.NoEncryption()).decode())
+
+
+def tls_secret(name, ns, cn, days, labels=None):
+    crt, key = make_cert(cn, days, sans=(cn,))
+    return {"apiVersion": "v1", "kind": "Secret", "type": "kubernetes.io/tls",
+            "metadata": {"name": name, "namespace": ns, "labels": labels or {}},
+            "stringData": {"tls.crt": crt, "tls.key": key}}
+
+
+# --------------------------------------------------------------------------- #
+# cluster-scoped platform state
 # --------------------------------------------------------------------------- #
 def condition(ctype, status, reason="AsExpected", message="", hours=2):
     return {
@@ -214,7 +307,8 @@ def build_clusterversion(m):
     if progressing and upgrading_to:
         history.append({
             "state": "Partial", "version": upgrading_to,
-            "startedTime": ts(1), "image": f"quay.io/openshift-release-dev/ocp-release:{upgrading_to}-x86_64",
+            "startedTime": ts(1),
+            "image": f"quay.io/openshift-release-dev/ocp-release:{upgrading_to}-x86_64",
             "verified": True,
         })
     history.append({
@@ -236,8 +330,7 @@ def build_clusterversion(m):
             })
 
     conditions = [
-        condition("Available", "False" if degraded and False else "True",
-                  "AsExpected"),
+        condition("Available", "True", "AsExpected"),
         condition("Failing", "True" if degraded else "False",
                   "ClusterOperatorDegraded" if degraded else "AsExpected",
                   "Cluster operator ingress is degraded" if degraded else ""),
@@ -272,6 +365,10 @@ def build_clusterversion(m):
     }
 
 
+def apps_domain(m):
+    return f"apps.{m['name']}.{m['region']}.example.com"
+
+
 def build_infrastructure(m, cloud):
     region = m["region"]
     return {
@@ -280,7 +377,7 @@ def build_infrastructure(m, cloud):
         "metadata": {"name": "cluster"},
         "spec": {"cloudConfig": {"name": ""}, "platformSpec": {"type": "AWS"}},
         "status": {
-            "infrastructureName": f"{m['name']}-{str(uuid.uuid4())[:5]}",
+            "infrastructureName": f"{m['name']}-{str(uuid.uuid5(uuid.NAMESPACE_DNS, m['name'] + '-infra'))[:5]}",
             "platform": "AWS",
             "controlPlaneTopology": "HighlyAvailable",
             "infrastructureTopology": "HighlyAvailable",
@@ -293,8 +390,195 @@ def build_infrastructure(m, cloud):
     }
 
 
+def build_network_and_ingress_config(m):
+    return [
+        {"apiVersion": "config.openshift.io/v1", "kind": "Network",
+         "metadata": {"name": "cluster"},
+         "spec": {"networkType": "OVNKubernetes",
+                  "clusterNetwork": [{"cidr": "10.128.0.0/14", "hostPrefix": 23}],
+                  "serviceNetwork": ["172.30.0.0/16"]},
+         "status": {"networkType": "OVNKubernetes",
+                    "clusterNetwork": [{"cidr": "10.128.0.0/14", "hostPrefix": 23}],
+                    "serviceNetwork": ["172.30.0.0/16"], "clusterNetworkMTU": 8901}},
+        {"apiVersion": "config.openshift.io/v1", "kind": "Ingress",
+         "metadata": {"name": "cluster"},
+         "spec": {"domain": apps_domain(m)}, "status": {}},
+    ]
+
+
+def build_machineconfigpools(m):
+    """master + worker pools; the worker pool carries the profile's rollout state."""
+    profile = m["profile"]
+    rendered = f"rendered-worker-{str(uuid.uuid5(uuid.NAMESPACE_DNS, m['name'] + m['version']))[:12]}"
+
+    def pool(name, count, updated, ready, degraded, unavailable, conds, paused=False):
+        return {
+            "apiVersion": "machineconfiguration.openshift.io/v1", "kind": "MachineConfigPool",
+            "metadata": {"name": name, "labels": {f"pools.operator.machineconfiguration.openshift.io/{name}": ""}},
+            "spec": {"paused": paused, "configuration": {"name": rendered.replace("worker", name)}},
+            "status": {
+                "machineCount": count, "updatedMachineCount": updated, "readyMachineCount": ready,
+                "degradedMachineCount": degraded, "unavailableMachineCount": unavailable,
+                "configuration": {"name": rendered.replace("worker", name)},
+                "conditions": conds,
+            },
+        }
+
+    settled = [condition("Updated", "True", "", f"All nodes are updated with {rendered}"),
+               condition("Updating", "False"), condition("Degraded", "False"),
+               condition("NodeDegraded", "False"), condition("RenderDegraded", "False")]
+    pools = [pool("master", 3, 3, 3, 0, 0, settled)]
+    if profile == "progressing":
+        pools.append(pool("worker", 3, 1, 2, 0, 1, [
+            condition("Updated", "False"),
+            condition("Updating", "True", "", f"All nodes are updating to {rendered}"),
+            condition("Degraded", "False"), condition("NodeDegraded", "False"),
+            condition("RenderDegraded", "False")]))
+    elif profile == "degraded":
+        pools.append(pool("worker", 3, 2, 2, 1, 1, [
+            condition("Updated", "False"), condition("Updating", "False"),
+            condition("Degraded", "True", "", "Node ip-10-0-143-7 is reporting: unexpected on-disk state"),
+            condition("NodeDegraded", "True", "", "1 nodes are reporting degraded status on sync"),
+            condition("RenderDegraded", "False")]))
+    elif profile == "eol":
+        pools.append(pool("worker", 3, 3, 3, 0, 0, settled, paused=True))
+    else:
+        pools.append(pool("worker", 3, 3, 3, 0, 0, settled))
+    return pools
+
+
+def build_storage_and_rbac(m):
+    return [
+        {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
+         "metadata": {"name": "gp3-csi"}, "provisioner": "ebs.csi.aws.com",
+         "parameters": {"type": "gp3"}, "reclaimPolicy": "Delete",
+         "volumeBindingMode": "WaitForFirstConsumer", "allowVolumeExpansion": True},
+        {"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding",
+         "metadata": {"name": "platform-admins"},
+         "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "cluster-admin"},
+         "subjects": [{"apiGroup": "rbac.authorization.k8s.io", "kind": "Group", "name": "platform-admins"},
+                      {"apiGroup": "rbac.authorization.k8s.io", "kind": "User", "name": "ops-oncall@example.com"}]
+                     + ([{"apiGroup": "rbac.authorization.k8s.io", "kind": "User", "name": "dev-lead@example.com"}]
+                        if m["environment"] == "dev" else [])},
+    ]
+
+
 # --------------------------------------------------------------------------- #
-# application placement
+# platform namespaces (OpenShift's own) with pods, config and OLM operators
+# --------------------------------------------------------------------------- #
+PLATFORM_NAMESPACES = {
+    "openshift-monitoring": {"openshift.io/cluster-monitoring": "true"},
+    "openshift-ingress": {"openshift.io/cluster-monitoring": "true"},
+    "openshift-dns": {"openshift.io/run-level": "0"},
+    "openshift-image-registry": {},
+    "openshift-operators": {},
+    "openshift-config": {},
+}
+
+
+def deployment(name, ns, replicas, labels, image=PAUSE, command=None, env=None, env_from=None,
+               volumes=None, mounts=None, requests=None, limits=None, sa=None):
+    container = {
+        "name": "app", "image": image,
+        "resources": {"requests": requests or {"cpu": "100m", "memory": "128Mi"},
+                      "limits": limits or {"cpu": "500m", "memory": "256Mi"}},
+    }
+    if command:
+        container["command"] = command
+    if env:
+        container["env"] = env
+    if env_from:
+        container["envFrom"] = env_from
+    if mounts:
+        container["volumeMounts"] = mounts
+    spec = {"containers": [container]}
+    if volumes:
+        spec["volumes"] = volumes
+    if sa:
+        spec["serviceAccountName"] = sa
+    return {
+        "apiVersion": "apps/v1", "kind": "Deployment",
+        "metadata": {"name": name, "namespace": ns, "labels": labels},
+        "spec": {
+            "replicas": replicas,
+            "selector": {"matchLabels": {"app": name}},
+            "template": {"metadata": {"labels": {"app": name, **labels}}, "spec": spec},
+        },
+    }
+
+
+def build_platform_namespaces(topo, m, index):
+    profile = m["profile"]
+    objs = []
+    for ns, labels in PLATFORM_NAMESPACES.items():
+        objs.append({"apiVersion": "v1", "kind": "Namespace",
+                     "metadata": {"name": ns, "labels": {"kubernetes.io/metadata.name": ns, **labels},
+                                  "annotations": {"openshift.io/sa.scc.mcs": "s0:c25,c10"}}})
+    plat = {"app.kubernetes.io/managed-by": "cluster-version-operator"}
+
+    # monitoring: alertmanager crashloops on the degraded profile
+    objs.append(deployment("prometheus-k8s", "openshift-monitoring", 2, {**plat, "app.kubernetes.io/name": "prometheus"}))
+    objs.append(deployment("alertmanager-main", "openshift-monitoring", 2,
+                           {**plat, "app.kubernetes.io/name": "alertmanager"},
+                           command=["/nonexistent-alertmanager"] if profile == "degraded" else None))
+    # ingress router + its serving cert (expiring soon on the eol profile)
+    objs.append(deployment("router-default", "openshift-ingress", 2, {**plat, "ingresscontroller.operator.openshift.io/deployment-ingresscontroller": "default"}))
+    objs.append(tls_secret("router-certs-default", "openshift-ingress", f"*.{apps_domain(m)}",
+                           12 if profile == "eol" else 300))
+    # dns as a DaemonSet
+    objs.append({
+        "apiVersion": "apps/v1", "kind": "DaemonSet",
+        "metadata": {"name": "dns-default", "namespace": "openshift-dns", "labels": plat},
+        "spec": {"selector": {"matchLabels": {"app": "dns-default"}},
+                 "template": {"metadata": {"labels": {"app": "dns-default", **plat}},
+                              "spec": {"tolerations": [{"operator": "Exists"}],
+                                       "containers": [{"name": "dns", "image": PAUSE,
+                                                       "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}}}]}}},
+    })
+    # image registry: pull failure on the warning profile
+    objs.append(deployment("image-registry", "openshift-image-registry", 1, plat,
+                           image=MISSING_IMAGE if profile == "warning" else PAUSE))
+    # cluster config: the API serving CA bundle (a ConfigMap carrying a cert)
+    ca_crt, _ = make_cert("kube-apiserver-serving-ca", 730, ca=True)
+    objs.append({"apiVersion": "v1", "kind": "ConfigMap",
+                 "metadata": {"name": "kube-apiserver-server-ca", "namespace": "openshift-config"},
+                 "data": {"ca-bundle.crt": ca_crt}})
+    objs.append({"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                 "metadata": {"name": "pull-secret", "namespace": "openshift-config"},
+                 "stringData": {".dockerconfigjson": json.dumps({"auths": {"quay.io": {"auth": "c2VjcmV0"}}})}})
+    # OLM: CSVs + Subscriptions in openshift-operators
+    for i, op in enumerate(topo.get("olm_operators", [])):
+        version = op["version"] if index % 2 == 0 else op.get("alt_version", op["version"])
+        failed = profile == "warning" and op["package"] == "elasticsearch-operator"
+        csv_name = f"{op['package']}.v{version}"
+        objs.append({
+            "apiVersion": "operators.coreos.com/v1alpha1", "kind": "ClusterServiceVersion",
+            "metadata": {"name": csv_name, "namespace": "openshift-operators",
+                         "labels": {f"operators.coreos.com/{op['package']}.openshift-operators": ""}},
+            "spec": {"displayName": op["display"], "version": version,
+                     "provider": {"name": op["provider"]}, "install": {"strategy": "deployment"}},
+            "status": {"phase": "Failed" if failed else "Succeeded",
+                       "reason": "InstallCheckFailed" if failed else "InstallSucceeded",
+                       "message": ("install failed: deployment elasticsearch-operator not ready"
+                                   if failed else "install strategy completed with no errors"),
+                       "lastUpdateTime": ts(3)},
+        })
+        next_version = op.get("next_version")
+        pending = profile == "progressing" and next_version
+        objs.append({
+            "apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
+            "metadata": {"name": op["package"], "namespace": "openshift-operators"},
+            "spec": {"name": op["package"], "channel": op["channel"], "source": "redhat-operators",
+                     "sourceNamespace": "openshift-marketplace", "installPlanApproval": "Manual"},
+            "status": {"installedCSV": csv_name,
+                       "currentCSV": f"{op['package']}.v{next_version}" if pending else csv_name,
+                       "state": "UpgradePending" if pending else "AtLatestKnown"},
+        })
+    return objs
+
+
+# --------------------------------------------------------------------------- #
+# application namespaces
 # --------------------------------------------------------------------------- #
 def app_matches(app, m):
     sel = app.get("place_on", {})
@@ -308,57 +592,144 @@ def app_matches(app, m):
 
 
 def build_apps(topo, m):
+    profile = m["profile"]
+    domain = apps_domain(m)
     objs = []
     for app in topo["applications"]:
         if not app_matches(app, m):
             continue
         ns = app["namespace"]
-        replicas = 3 if app["tier"] == "critical" else 2
-        labels = {
-            "odl.io/app": app["name"],
-            "odl.io/team": app["team"],
-            "odl.io/tier": app["tier"],
-        }
+        name = app["name"]
+        critical = app["tier"] == "critical"
+        replicas = 3 if critical else 2
+        labels = {"odl.io/app": name, "odl.io/team": app["team"], "odl.io/tier": app["tier"]}
+
         objs.append({
             "apiVersion": "v1", "kind": "Namespace",
-            "metadata": {"name": ns, "labels": {"odl.io/managed": "true"}},
+            "metadata": {"name": ns,
+                         "labels": {"odl.io/managed": "true", **labels},
+                         "annotations": {"openshift.io/requester": f"{app['team']}-deployer",
+                                         "openshift.io/display-name": name.replace("-", " ").title(),
+                                         "openshift.io/description": f"{name} owned by {app['team']}"}},
         })
-        objs.append({
-            "apiVersion": "apps/v1", "kind": "Deployment",
-            "metadata": {"name": app["name"], "namespace": ns, "labels": labels},
-            "spec": {
-                "replicas": replicas,
-                "selector": {"matchLabels": {"app": app["name"]}},
-                "template": {
-                    "metadata": {"labels": {"app": app["name"], **labels}},
-                    "spec": {"containers": [{
-                        "name": "app",
-                        "image": "registry.k8s.io/pause:3.9",
-                        "resources": {"requests": {"cpu": "1m", "memory": "8Mi"}},
-                    }]},
-                },
-            },
-        })
+        # config the workload references (values are what the data layer must never keep)
+        objs.append({"apiVersion": "v1", "kind": "ConfigMap",
+                     "metadata": {"name": f"{name}-config", "namespace": ns, "labels": labels},
+                     "data": {"application.yaml": f"server:\n  port: 8080\nlogging:\n  level: info\napp: {name}\n",
+                              "feature-flags": "new-checkout=true\nbeta-search=false\n"}})
+        ca_crt, _ = make_cert(f"{app['team']}-internal-ca", 900, ca=True)
+        objs.append({"apiVersion": "v1", "kind": "ConfigMap",
+                     "metadata": {"name": f"{name}-ca-bundle", "namespace": ns, "labels": labels},
+                     "data": {"ca-bundle.crt": ca_crt}})
+        objs.append({"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                     "metadata": {"name": f"{name}-credentials", "namespace": ns, "labels": labels},
+                     "stringData": {"username": f"{name}-svc", "password": f"s3cr3t-{uuid.uuid4().hex[:12]}",
+                                    "url": f"postgres://{name}-svc:s3cr3t@db.{ns}.svc:5432/{name}"}})
+        # TLS cert: expired for checkout on the degraded cluster, expiring soon on the warning cluster
+        days = 300
+        if profile == "degraded" and name == "checkout-web":
+            days = -3
+        elif profile == "warning":
+            days = 20
+        objs.append(tls_secret(f"{name}-tls", ns, f"{name}.{domain}", days, labels))
+
+        volumes = [{"name": "tls", "secret": {"secretName": f"{name}-tls"}},
+                   {"name": "config", "configMap": {"name": f"{name}-config"}}]
+        mounts = [{"name": "tls", "mountPath": "/etc/tls", "readOnly": True},
+                  {"name": "config", "mountPath": "/etc/app", "readOnly": True}]
+        if critical:
+            objs.append({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                         "metadata": {"name": f"{name}-data", "namespace": ns, "labels": labels},
+                         "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}},
+                                  "storageClassName": "standard"}})
+            volumes.append({"name": "data", "persistentVolumeClaim": {"claimName": f"{name}-data"}})
+            mounts.append({"name": "data", "mountPath": "/var/lib/app"})
+        objs.append(deployment(
+            name, ns, replicas, labels,
+            env=[{"name": "LOG_LEVEL", "value": "info"},
+                 {"name": "DATABASE_URL", "valueFrom": {"secretKeyRef": {"name": f"{name}-credentials", "key": "url"}}},
+                 {"name": "DATABASE_PASSWORD", "valueFrom": {"secretKeyRef": {"name": f"{name}-credentials", "key": "password"}}},
+                 {"name": "FEATURE_FLAGS", "valueFrom": {"configMapKeyRef": {"name": f"{name}-config", "key": "feature-flags"}}},
+                 {"name": "POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}}],
+            env_from=[{"configMapRef": {"name": f"{name}-config"}}],
+            volumes=volumes, mounts=mounts))
+        objs.append({"apiVersion": "v1", "kind": "Service",
+                     "metadata": {"name": name, "namespace": ns, "labels": labels},
+                     "spec": {"selector": {"app": name}, "ports": [{"name": "http", "port": 8080, "targetPort": 8080}]}})
+        objs.append({"apiVersion": "route.openshift.io/v1", "kind": "Route",
+                     "metadata": {"name": name, "namespace": ns, "labels": labels},
+                     "spec": {"host": f"{name}.{domain}", "to": {"kind": "Service", "name": name},
+                              "port": {"targetPort": "http"},
+                              "tls": {"termination": "edge", "insecureEdgeTerminationPolicy": "Redirect"},
+                              "wildcardPolicy": "None"},
+                     "status": {"ingress": [{"host": f"{name}.{domain}", "routerName": "default",
+                                             "conditions": [condition("Admitted", "True", "", "")]}]}})
+        if critical:
+            # quota: exhausted for payments on the degraded cluster, near the limit for checkout on warning
+            hard = {"pods": "10", "requests.cpu": "2", "requests.memory": "4Gi", "limits.cpu": "6"}
+            if profile == "degraded" and name == "payments-api":
+                hard["pods"] = "3"
+            if profile == "warning" and name == "checkout-web":
+                hard["requests.cpu"] = "320m"
+            objs.append({"apiVersion": "v1", "kind": "ResourceQuota",
+                         "metadata": {"name": f"{ns}-quota", "namespace": ns, "labels": labels},
+                         "spec": {"hard": hard}})
+            objs.append({"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+                         "metadata": {"name": "default-deny-ingress", "namespace": ns, "labels": labels},
+                         "spec": {"podSelector": {}, "policyTypes": ["Ingress"],
+                                  "ingress": [{"from": [{"namespaceSelector": {"matchLabels": {
+                                      "network.openshift.io/policy-group": "ingress"}}}]}]}})
+        if name == "checkout-web":
+            objs.append({"apiVersion": "autoscaling/v2", "kind": "HorizontalPodAutoscaler",
+                         "metadata": {"name": name, "namespace": ns, "labels": labels},
+                         "spec": {"scaleTargetRef": {"apiVersion": "apps/v1", "kind": "Deployment", "name": name},
+                                  "minReplicas": replicas, "maxReplicas": 6,
+                                  "metrics": [{"type": "Resource", "resource": {
+                                      "name": "cpu", "target": {"type": "Utilization", "averageUtilization": 70}}}]}})
+        if app["team"] == "data":
+            objs.append({"apiVersion": "batch/v1", "kind": "CronJob",
+                         "metadata": {"name": f"{name}-nightly", "namespace": ns, "labels": labels},
+                         "spec": {"schedule": "0 2 * * *", "suspend": True, "concurrencyPolicy": "Forbid",
+                                  "jobTemplate": {"spec": {"template": {"spec": {
+                                      "restartPolicy": "Never",
+                                      "containers": [{"name": "job", "image": PAUSE}]}}}}}})
+        # profile-driven application problems
+        if name == "analytics-pipeline":
+            if profile == "progressing":
+                objs.append(deployment(f"{name}-backfill", ns, 1, labels,
+                                       requests={"cpu": "64", "memory": "256Mi"},
+                                       limits={"cpu": "64", "memory": "512Mi"}))   # unschedulable
+            objs.append({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                         "metadata": {"name": f"{name}-scratch", "namespace": ns, "labels": labels},
+                         "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "5Gi"}},
+                                  "storageClassName": "standard"}})     # never mounted -> Pending
+        if name == "fraud-detection" and profile == "degraded":
+            objs.append(deployment(f"{name}-scorer", ns, 1, labels, command=["/nonexistent-scorer"]))
     return objs
 
 
 # --------------------------------------------------------------------------- #
 # seeding
 # --------------------------------------------------------------------------- #
-def seed_managed(topo, hub, m):
+def seed_managed(topo, hub, m, index):
     ctx = kctx(m["name"])
-    objs = []
-    objs.append(build_clusterversion(m))
-    objs.extend(build_clusteroperators(topo, m))
-    objs.append(build_infrastructure(m, hub.get("cloud", "AWS")))
-    apply_manifests(ctx, objs)
-    # apps applied separately (namespaces must exist before deployments; a List
-    # is applied in order, but splitting keeps failures isolated)
+    cluster_objs = [build_clusterversion(m)]
+    cluster_objs.extend(build_clusteroperators(topo, m))
+    cluster_objs.append(build_infrastructure(m, hub.get("cloud", "AWS")))
+    cluster_objs.extend(build_network_and_ingress_config(m))
+    cluster_objs.extend(build_machineconfigpools(m))
+    cluster_objs.extend(build_storage_and_rbac(m))
+    apply_manifests(ctx, cluster_objs)
+
+    platform = build_platform_namespaces(topo, m, index)
     apps = build_apps(topo, m)
-    if apps:
-        apply_manifests(ctx, apps)
-    print(f"  seeded {m['name']} ({m['profile']}, {m['version']}, "
-          f"{len([o for o in apps if o['kind']=='Deployment'])} apps)")
+    # namespaces first, then everything that lives in them
+    namespaced = platform + apps
+    apply_manifests(ctx, [o for o in namespaced if o["kind"] == "Namespace"])
+    apply_manifests(ctx, [o for o in namespaced if o["kind"] != "Namespace"])
+    n_apps = len([o for o in apps if o["kind"] == "Namespace"])
+    print(f"  seeded {m['name']} ({m['profile']}, {m['version']}, {n_apps} apps, "
+          f"{len(cluster_objs) + len(namespaced)} objects)")
 
 
 def managed_internal_kubeconfig(name):
@@ -453,23 +824,32 @@ def export_kubeconfigs(topo):
 # --------------------------------------------------------------------------- #
 # commands
 # --------------------------------------------------------------------------- #
+def managed_with_index(topo):
+    i = 0
+    for hub in topo["hubs"]:
+        for m in hub["managed"]:
+            yield hub, m, i
+            i += 1
+
+
 def cmd_up(topo):
     names = all_cluster_names(topo)
     print(f"==> creating {len(names)} kind clusters (parallel)")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+    workers = int(os.environ.get("FLEET_PARALLEL", "3"))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(create_cluster, names))
 
-    print("==> installing CRDs")
+    print("==> installing CRDs + addons")
     crd_files = [os.path.join(CRDS, f) for f in os.listdir(CRDS) if f.endswith(".yaml")]
     for hub in topo["hubs"]:
         apply_crd_files(kctx(hub["name"]), crd_files)
         for m in hub["managed"]:
             apply_crd_files(kctx(m["name"]), crd_files)
+            apply_addons(kctx(m["name"]))
 
     print("==> seeding managed clusters")
-    for hub in topo["hubs"]:
-        for m in hub["managed"]:
-            seed_managed(topo, hub, m)
+    for hub, m, i in managed_with_index(topo):
+        seed_managed(topo, hub, m, i)
 
     print("==> registering managed clusters on hubs")
     for hub in topo["hubs"]:
@@ -487,9 +867,13 @@ def cmd_down(topo):
 
 
 def cmd_seed(topo):
+    crd_files = [os.path.join(CRDS, f) for f in os.listdir(CRDS) if f.endswith(".yaml")]
+    for hub, m, i in managed_with_index(topo):
+        apply_crd_files(kctx(m["name"]), crd_files)
+        apply_addons(kctx(m["name"]))
+        seed_managed(topo, hub, m, i)
     for hub in topo["hubs"]:
-        for m in hub["managed"]:
-            seed_managed(topo, hub, m)
+        apply_crd_files(kctx(hub["name"]), crd_files)
         register_on_hub(hub, topo)
 
 

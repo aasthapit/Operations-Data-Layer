@@ -9,16 +9,18 @@ operator at 4.15.18 is buggy?"*, *"what OCP versions are we running?"*.
 
 | Tool | What it answers |
 |---|---|
-| `fleet_overview` | totals, status counts, upgrading, hub status, last sweep |
-| `health_summary(group_by)` | health rolled up by region/datacenter/environment/hub/version |
-| `list_clusters(...)` | filterable cluster list (region, environment, status, version, team, hub) |
-| `get_cluster(name)` | full detail: operators, apps, health checks |
-| `cluster_health(name)` | just the precondition checks + score |
-| `cluster_timeline(name)` | health-score history over recent sweeps |
-| `version_distribution` | OCP version spread across the fleet |
-| `operator_versions(name?)` | per-operator version spread / drift |
-| `blast_radius(...)` | clusters + apps + teams impacted by a bad version/operator |
+| `fleet_overview` · `insights_summary` · `health_summary(group_by)` | how is the fleet, what needs attention, health by region/env/version |
+| `list_clusters(...)` · `get_cluster(name)` · `cluster_health` · `cluster_timeline` | clusters, full detail (platform config, capacity, nodes, namespaces, checks), history |
+| `cluster_nodes` · `cluster_namespaces(class)` · `cluster_workloads(detail)` · `inventory(kind)` | per-cluster inventory; any collected kind fleet-wide |
+| `what_is_collected` · `resource_availability` | the OCP API manifest and what each cluster actually served |
+| `list_applications(...)` · `get_application(app)` | applications (application namespaces) across the fleet |
+| `version_distribution` · `operator_versions` · `olm_operators` | OCP, cluster-operator and OLM version spread / drift |
+| `blast_radius(operator / ocp_version / olm_operator / image)` | clusters, apps, teams, workloads impacted |
+| `expiring_certificates` · `pod_issues` · `quota_pressure` · `machine_config_pools` · `storage_summary` · `find_routes` · `warning_events` · `image_usage` · `config_references` · `cluster_admins` | the insights |
+| `top_namespaces_by_usage` · `top_nodes_by_usage` · `cluster_utilization` · `capacity_headroom` | utilization from `metrics.k8s.io` |
 | `refresh_data` | trigger a fresh collection sweep |
+
+Nothing an agent can retrieve contains ConfigMap / Secret values, certificate material or env values - those are scrubbed before storage.
 
 ## Run it locally over stdio (recommended for Claude Code)
 
@@ -65,5 +67,6 @@ MCP_API_BASE=http://localhost:18000 .venv/bin/python - <<'PY'
 import server
 print(server.fleet_overview()["counts"])
 print(server.blast_radius(ocp_version="4.15.18")["summary"]["clusters_impacted"])
+print(server.expiring_certificates()["count"], "certs expiring")
 PY
 ```
