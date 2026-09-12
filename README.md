@@ -128,6 +128,7 @@ fleet at a time on smaller Docker allocations.
 
 - **[docs/onboarding.md](docs/onboarding.md)** - point a list of live OCP cluster endpoints at the data layer using a single shared service account (username/password). Config format, RBAC, TLS, verification.
 - **[docs/architecture.md](docs/architecture.md)** - components, collection flow, auth flow, storage model, natural-language queries, blast radius, and deployment, with diagrams.
+- **[docs/findings.md](docs/findings.md)** - notable findings: what only the OCP API can tell us versus Prometheus and logs, the scale numbers, store behaviour, and the read-only value the API can still add (ingress and egress posture, resilience, security) versus what needs an actions plane (dumps, exec).
 - **[docs/redis-keyspace.md](docs/redis-keyspace.md)** - the Redis keyspace contract: every key, its type, and who writes and reads it.
 - **[docs/nl-query.md](docs/nl-query.md)** - natural-language queries: the DuckDB snapshot, the guard, the semantic layer, the settings, and how to add a golden question.
 - **[docs/adr/](docs/adr/)** - the architecture decision records: [Redis as the fleet state store](docs/adr/0001-redis-as-fleet-state-store.md), [natural-language queries](docs/adr/0002-natural-language-queries.md), [operating at enterprise scale](docs/adr/0003-enterprise-scale.md).
