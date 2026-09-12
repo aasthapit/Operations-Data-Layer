@@ -1,8 +1,42 @@
-"""Plain-dict serializers for ORM rows (kept out of the routers)."""
+"""
+Plain-dict serializers for store rows (kept out of the routers).
+
+A row is a `store.Row`: a dict with attribute access where a missing field reads
+as None, carrying the field names the ORM columns used to have. Datetime-valued
+fields are normally restored to datetimes by the store, but these serializers
+also accept an already-encoded string so a row that skipped that restoration
+still renders.
+"""
+from datetime import UTC, datetime
+
+from .settings import settings
 
 
 def _iso(dt):
-    return dt.isoformat() if dt else None
+    """ISO-8601 for a datetime; an already-encoded string passes through."""
+    if not dt:
+        return None
+    return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+
+
+def _datetime(value):
+    """A datetime from either a datetime or an ISO-8601 string (None if neither)."""
+    if value is None or isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _age_seconds(last_synced):
+    """Whole seconds since the cluster was last collected (None if never)."""
+    synced = _datetime(last_synced)
+    if synced is None:
+        return None
+    if synced.tzinfo is None:      # a store that dropped the offset means UTC
+        synced = synced.replace(tzinfo=UTC)
+    return int((datetime.now(UTC) - synced).total_seconds())
 
 
 def _pct(used, total):
@@ -36,6 +70,9 @@ def capacity_dict(c) -> dict:
 
 
 def cluster_summary(c) -> dict:
+    # A cluster that stopped being collected keeps answering from its (expiring)
+    # Redis keys, so say how old the answer is rather than implying it is live.
+    age = _age_seconds(c.last_synced)
     return {
         "name": c.name,
         "hub": c.hub_name,
@@ -68,6 +105,8 @@ def cluster_summary(c) -> dict:
         },
         "reachable": c.reachable,
         "last_synced": _iso(c.last_synced),
+        "age_seconds": age,
+        "stale": age is not None and age > 3 * settings.refresh_interval_seconds,
     }
 
 
@@ -227,7 +266,13 @@ def check_dict(h) -> dict:
     }
 
 
-def cluster_detail(c) -> dict:
+def cluster_detail(c, operators, nodes, namespaces, pod_issues, resource_status, health_checks) -> dict:
+    """The summary row plus the cluster's detail sections, as one document.
+
+    The sections are read separately (each is its own key in the store), so the
+    caller passes them in rather than the serializer reaching back for them.
+    """
+    applications = [n for n in namespaces if n.ns_class == "application"]
     d = cluster_summary(c)
     d.update({
         "cluster_id": c.cluster_id,
@@ -248,14 +293,15 @@ def cluster_detail(c) -> dict:
             "apps_domain": c.apps_domain,
         },
         "capacity": capacity_dict(c),
-        "operators": [operator_dict(o) for o in sorted(c.operators, key=lambda o: o.name)],
-        "nodes_detail": [node_dict(n) for n in sorted(c.nodes, key=lambda n: n.name)],
-        "namespaces_detail": [namespace_dict(n) for n in sorted(c.namespaces, key=lambda n: n.name)],
+        "operators": [operator_dict(o) for o in sorted(operators, key=lambda o: o.name)],
+        "nodes_detail": [node_dict(n) for n in sorted(nodes, key=lambda n: n.name)],
+        "namespaces_detail": [namespace_dict(n) for n in sorted(namespaces, key=lambda n: n.name)],
         "applications": [application_dict(n) for n in
-                         sorted(c.applications, key=lambda n: n.app_name or n.name)],
+                         sorted(applications, key=lambda n: n.app_name or n.name)],
         "pod_issues_detail": [pod_issue_dict(i) for i in
-                              sorted(c.pod_issues, key=lambda i: (i.ns_class, i.namespace, i.name))],
-        "resource_status": [resource_status_dict(s) for s in sorted(c.resource_status, key=lambda s: s.key)],
-        "health_checks": [check_dict(h) for h in c.health_checks],
+                              sorted(pod_issues, key=lambda i: (i.ns_class or "", i.namespace or "",
+                                                                i.name or ""))],
+        "resource_status": [resource_status_dict(s) for s in sorted(resource_status, key=lambda s: s.key)],
+        "health_checks": [check_dict(h) for h in health_checks],
     })
     return d

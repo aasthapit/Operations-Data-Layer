@@ -2,71 +2,74 @@
 Utilization endpoints - answered from the OCP API's own metrics
 (metrics.k8s.io NodeMetrics / PodMetrics, collected every sweep alongside
 inventory), never from Prometheus or any external system.
+
+Fleet-wide top-N comes from the usage sorted sets, so "the ten busiest
+namespaces" is a range read rather than a fleet scan.
 """
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
 
-from ..db import get_session
-from ..models import Cluster, HealthSnapshot, Namespace, Node
-from ..serialize import capacity_dict
+from ..serialize import _iso, capacity_dict
+from ..store import Store
+from .deps import get_store_dep
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
 
 @router.get("/health")
-def metrics_health(db: Session = Depends(get_session)):
-    total = db.query(Cluster).filter(Cluster.reachable.is_(True)).count()
-    with_metrics = db.query(Cluster).filter(Cluster.metrics_available.is_(True)).count()
+def metrics_health(store: Store = Depends(get_store_dep)):
+    clusters = store.clusters()
+    total = sum(1 for c in clusters if c.reachable)
+    with_metrics = sum(1 for c in clusters if c.metrics_available)
     return {"source": "metrics.k8s.io (via each cluster's API server)",
             "reachable": with_metrics > 0,
             "clusters_with_metrics": with_metrics, "clusters_total": total,
-            "without_metrics": [c.name for c in db.query(Cluster)
-                                .filter(Cluster.reachable.is_(True), Cluster.metrics_available.is_(False))
-                                .order_by(Cluster.name).all()]}
+            "without_metrics": [c.name for c in clusters
+                                if c.reachable and not c.metrics_available]}
 
 
 @router.get("/top-namespaces")
-def top_namespaces(db: Session = Depends(get_session),
+def top_namespaces(store: Store = Depends(get_store_dep),
                    by: str = Query("cpu", description="cpu|memory"), limit: int = 10,
                    ns_class: str | None = Query(None, alias="class", description="application|platform")):
-    col = Namespace.cpu_usage if by == "cpu" else Namespace.memory_usage
-    q = db.query(Namespace).filter(col.isnot(None))
+    field = "cpu_usage" if by == "cpu" else "memory_usage"
     if ns_class:
-        q = q.filter(Namespace.ns_class == ns_class)
-    rows = q.order_by(col.desc()).limit(limit).all()
+        # the usage sorted sets are not split by class, so a class-filtered
+        # top-N is ranked in process over that class's namespaces
+        rows = [n for n in store.namespaces(ns_class=ns_class) if n.get(field) is not None]
+        rows.sort(key=lambda n: (-n[field], n.cluster_name or "", n.name or ""))
+        rows = rows[:limit]
+    else:
+        rows = store.top_namespaces(by, limit)
     return {"by": by, "unit": "cores" if by == "cpu" else "bytes",
             "results": [{"namespace": n.name, "cluster": n.cluster_name, "class": n.ns_class,
                          "app": n.app_name, "team": n.team,
-                         "value": n.cpu_usage if by == "cpu" else n.memory_usage}
+                         "value": n.get(field)}
                         for n in rows]}
 
 
 @router.get("/top-nodes")
-def top_nodes(db: Session = Depends(get_session),
+def top_nodes(store: Store = Depends(get_store_dep),
               by: str = Query("cpu", description="cpu|memory"), limit: int = 10):
-    rows = []
-    for n in db.query(Node).all():
-        used, alloc = ((n.cpu_usage, n.cpu_allocatable) if by == "cpu"
-                       else (n.memory_usage, n.memory_allocatable))
-        if used is None or not alloc:
-            continue
-        rows.append({"node": n.name, "cluster": n.cluster_name, "roles": n.roles or [],
-                     "value": round(100.0 * used / alloc, 1)})
-    rows.sort(key=lambda r: -r["value"])
-    return {"by": by, "unit": "percent", "results": rows[:limit]}
+    return {"by": by, "unit": "percent",
+            "results": [{"node": n.name, "cluster": n.cluster_name, "roles": n.roles or [],
+                         "value": round(n.value, 1)}
+                        for n in store.top_nodes(by, limit)]}
 
 
 @router.get("/capacity")
-def capacity(db: Session = Depends(get_session),
+def capacity(store: Store = Depends(get_store_dep),
              group_by: str = Query("cluster", description="cluster|region|environment|datacenter")):
     key = group_by if group_by in ("region", "environment", "datacenter") else "cluster"
+    field = "name" if key == "cluster" else key
     groups = defaultdict(lambda: {"allocatable_cores": 0.0, "used_cores": 0.0, "requests_cores": 0.0,
                                   "allocatable_bytes": 0, "used_bytes": 0, "requests_bytes": 0,
                                   "clusters": 0, "with_metrics": 0})
-    for c in db.query(Cluster).filter(Cluster.reachable.is_(True)).all():
-        g = groups[getattr(c, "name" if key == "cluster" else key) or "unknown"]
+    for c in store.clusters():
+        if not c.reachable:
+            continue
+        g = groups[c.get(field) or "unknown"]
         g["clusters"] += 1
         g["with_metrics"] += bool(c.metrics_available)
         g["allocatable_cores"] += c.cpu_allocatable or 0
@@ -91,12 +94,13 @@ def capacity(db: Session = Depends(get_session),
 
 
 @router.get("/cluster/{name}/utilization")
-def cluster_utilization(name: str, db: Session = Depends(get_session)):
-    c = db.get(Cluster, name)
+def cluster_utilization(name: str, store: Store = Depends(get_store_dep)):
+    c = store.get_cluster(name)
     if not c:
         raise HTTPException(404, f"cluster {name} not found")
-    top = (db.query(Namespace).filter(Namespace.cluster_name == name, Namespace.cpu_usage.isnot(None))
-           .order_by(Namespace.cpu_usage.desc()).limit(5).all())
+    # one cluster's namespaces live in its own section; no need for the fleet index
+    rows = [n for n in store.section(name, "namespaces") if n.cpu_usage is not None]
+    top = sorted(rows, key=lambda n: (-n.cpu_usage, n.name or ""))[:5]
     return {"cluster": name, **capacity_dict(c),
             "top_namespaces": [{"namespace": n.name, "class": n.ns_class,
                                 "cpu_used_cores": n.cpu_usage, "memory_used_bytes": n.memory_usage}
@@ -104,12 +108,9 @@ def cluster_utilization(name: str, db: Session = Depends(get_session)):
 
 
 @router.get("/cluster/{name}/timeline")
-def cluster_timeline(name: str, limit: int = 100, db: Session = Depends(get_session)):
-    rows = (db.query(HealthSnapshot).filter_by(cluster_name=name)
-            .order_by(HealthSnapshot.snapshot_at.desc()).limit(limit).all())
-    rows.reverse()
+def cluster_timeline(name: str, limit: int = 100, store: Store = Depends(get_store_dep)):
     return {"cluster": name, "points": [{
-        "at": r.snapshot_at.isoformat() if r.snapshot_at else None,
+        "at": _iso(r.snapshot_at),
         "cpu_used_cores": r.cpu_usage, "cpu_allocatable_cores": r.cpu_allocatable,
         "cpu_percent": round(100 * r.cpu_usage / r.cpu_allocatable, 1)
         if r.cpu_usage is not None and r.cpu_allocatable else None,
@@ -117,4 +118,4 @@ def cluster_timeline(name: str, limit: int = 100, db: Session = Depends(get_sess
         "memory_percent": round(100 * r.memory_usage / r.memory_allocatable, 1)
         if r.memory_usage is not None and r.memory_allocatable else None,
         "pods_running": r.pods_running, "pod_issues": r.pod_issues,
-    } for r in rows]}
+    } for r in store.snapshots(name, limit)]}

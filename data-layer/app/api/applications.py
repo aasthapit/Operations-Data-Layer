@@ -4,15 +4,17 @@ Applications = application-class namespaces, viewed fleet-wide.
 An application is identified by its `app` label (or namespace name) and may
 run on many clusters; these endpoints group the per-cluster namespace rows
 into one entity per application with ownership, placement and health.
+
+The namespace rows come from the fleet namespace index, so nothing here walks
+the clusters; only the workload detail of one application reads sections.
 """
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
 
-from ..db import get_session
-from ..models import Cluster, Namespace, Workload
 from ..serialize import namespace_dict, workload_dict
+from ..store import Store
+from .deps import get_store_dep, order_key
 
 router = APIRouter(prefix="/api/applications", tags=["applications"])
 
@@ -23,6 +25,11 @@ def _rollup(statuses):
     if not statuses:
         return "unknown"
     return max(statuses, key=lambda s: _WORST.get(s, 1))
+
+
+def _by_placement(rows):
+    """Namespace rows in a stable order, so ownership fields resolve the same way twice."""
+    return sorted(rows, key=lambda n: order_key(n.cluster_name, n.name))
 
 
 def _group(rows, clusters_by_name):
@@ -72,7 +79,7 @@ def _group(rows, clusters_by_name):
 
 @router.get("")
 def list_applications(
-    db: Session = Depends(get_session),
+    store: Store = Depends(get_store_dep),
     team: str | None = None,
     tier: str | None = None,
     environment: str | None = None,
@@ -80,22 +87,20 @@ def list_applications(
     cluster: str | None = None,
     status: str | None = Query(None, description="healthy|warning|critical"),
 ):
-    q = db.query(Namespace).filter(Namespace.ns_class == "application")
-    if team:
-        q = q.filter(Namespace.team == team)
+    rows = store.namespaces(ns_class="application", team=team,
+                            clusters=[cluster] if cluster else None)
+    clusters = {c.name: c for c in store.clusters()}
     if tier:
-        q = q.filter(Namespace.tier == tier)
-    if cluster:
-        q = q.filter(Namespace.cluster_name == cluster)
-    clusters = {c.name: c for c in db.query(Cluster).all()}
-    rows = q.all()
+        rows = [n for n in rows if n.tier == tier]
+    # environment and region are cluster properties, so they are resolved
+    # through the cluster index rather than the namespace index
     if environment:
         rows = [n for n in rows if clusters.get(n.cluster_name) and
                 clusters[n.cluster_name].environment == environment]
     if region:
         rows = [n for n in rows if clusters.get(n.cluster_name) and
                 clusters[n.cluster_name].region == region]
-    apps = _group(rows, clusters)
+    apps = _group(_by_placement(rows), clusters)
     if status:
         apps = [a for a in apps if a["status"] == status]
     teams = sorted({a["team"] for a in apps if a["team"]})
@@ -103,21 +108,25 @@ def list_applications(
 
 
 @router.get("/{app}")
-def get_application(app: str, db: Session = Depends(get_session)):
-    rows = (db.query(Namespace)
-            .filter(Namespace.ns_class == "application", Namespace.app_name == app).all())
+def get_application(app: str, store: Store = Depends(get_store_dep)):
+    rows = store.namespaces(ns_class="application", app_name=app)
     if not rows:
-        rows = db.query(Namespace).filter(Namespace.ns_class == "application",
-                                          Namespace.name == app).all()
+        # an application whose namespaces carry no app label is known by its
+        # namespace name; that has no index of its own, hence the scan
+        rows = [n for n in store.namespaces(ns_class="application") if n.name == app]
     if not rows:
         raise HTTPException(404, f"application {app} not found")
-    clusters = {c.name: c for c in db.query(Cluster).all()}
+    rows = _by_placement(rows)
+    clusters = {c.name: c for c in store.clusters()}
     grouped = _group(rows, clusters)[0]
+
     ns_names = {n.name for n in rows}
-    cluster_names = {n.cluster_name for n in rows}
-    workloads = (db.query(Workload)
-                 .filter(Workload.cluster_name.in_(cluster_names), Workload.namespace.in_(ns_names))
-                 .order_by(Workload.cluster_name, Workload.kind, Workload.name).all())
+    cluster_names = sorted({n.cluster_name for n in rows})
+    sections = store.section_across("workloads", cluster_names)
+    workloads = [w for name in cluster_names for w in sections.get(name, [])
+                 if w.namespace in ns_names]
+    workloads.sort(key=lambda w: order_key(w.cluster_name, w.kind, w.name))
+
     grouped["namespaces"] = [namespace_dict(n) for n in sorted(rows, key=lambda n: n.cluster_name)]
     grouped["workloads_detail"] = [workload_dict(w, detail=True) for w in workloads]
     return grouped

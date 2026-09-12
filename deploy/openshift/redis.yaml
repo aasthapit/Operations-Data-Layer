@@ -1,0 +1,84 @@
+# Redis - the Operations Data Layer's store.
+#
+# One replica with a PVC: the data is a cache any collection sweep can rebuild,
+# but rebuilding it costs a full fleet sweep, so it is worth persisting across a
+# pod restart. `noeviction` is deliberate: silently dropping a cluster would
+# make blast-radius answers wrong. Per-cluster keys carry their own TTL
+# (REDIS_TTL_SECONDS on the API deployment) so stale clusters age out instead.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: odl-redis
+  labels: { app: odl, component: redis }
+data:
+  redis.conf: |
+    save 60 1
+    appendonly no
+    maxmemory-policy noeviction
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: odl-redis
+  labels: { app: odl, component: redis }
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: odl-redis
+  labels: { app: odl, component: redis }
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate           # one writer, one RWO volume
+  selector:
+    matchLabels: { app: odl, component: redis }
+  template:
+    metadata:
+      labels: { app: odl, component: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["/etc/redis/redis.conf"]
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/redis
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 6379 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { cpu: "1", memory: 2Gi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: odl-redis }
+        - name: config
+          configMap: { name: odl-redis }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: odl-redis
+  labels: { app: odl, component: redis }
+spec:
+  selector: { app: odl, component: redis }
+  ports:
+    - port: 6379
+      targetPort: 6379

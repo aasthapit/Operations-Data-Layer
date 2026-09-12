@@ -1,0 +1,655 @@
+<title>Redis as the Fleet State Store</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap');
+
+:root{
+  color-scheme: light;
+  --ground:#EEF2F1;
+  --surface:#FFFFFF;
+  --ink:#14201D;
+  --muted:#5B6B67;
+  --line:#C9D3D0;
+  --accent:#0F766E;
+  --accent-ink:#0B5A54;
+  --warn:#B45309;
+  --crit:#B91C1C;
+  --good:#15803D;
+  --shadow:rgba(20,32,29,.12);
+  --sans:"IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --display:"Newsreader", ui-serif, Georgia, "Times New Roman", Times, serif;
+  scroll-behavior: smooth;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#0D1413;
+    --surface:#142020;
+    --ink:#E4ECEA;
+    --muted:#94A6A1;
+    --line:#253431;
+    --accent:#3FB8A8;
+    --accent-ink:#7FD9CC;
+    --warn:#F59E0B;
+    --crit:#F87171;
+    --good:#4ADE80;
+    --shadow:rgba(0,0,0,.45);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#0D1413;
+  --surface:#142020;
+  --ink:#E4ECEA;
+  --muted:#94A6A1;
+  --line:#253431;
+  --accent:#3FB8A8;
+  --accent-ink:#7FD9CC;
+  --warn:#F59E0B;
+  --crit:#F87171;
+  --good:#4ADE80;
+  --shadow:rgba(0,0,0,.45);
+}
+
+body{
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.6;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+*, *::before, *::after{ box-sizing: border-box; }
+
+.page{ max-width: 1180px; margin: 0 auto; padding: clamp(22px, 4vw, 48px) clamp(16px, 4vw, 40px) 64px; }
+
+/* ---------- typography ---------- */
+.eyebrow{
+  font-family: var(--sans);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+h1{
+  font-family: var(--display);
+  font-optical-sizing: auto;
+  font-weight: 500;
+  font-size: clamp(32px, 5.4vw, 50px);
+  line-height: 1.06;
+  letter-spacing: -.015em;
+  text-wrap: balance;
+  margin: 0 0 14px;
+}
+h2{
+  font-family: var(--display);
+  font-optical-sizing: auto;
+  font-weight: 600;
+  font-size: clamp(22px, 3vw, 30px);
+  line-height: 1.18;
+  letter-spacing: -.01em;
+  text-wrap: balance;
+  margin: 0 0 14px;
+}
+h3{
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: .005em;
+  margin: 30px 0 10px;
+}
+p{ margin: 0 0 14px; }
+strong{ font-weight: 600; }
+a{ color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+a:hover{ color: var(--accent); }
+code, .mono{ font-family: var(--mono); font-size: .88em; color: var(--accent-ink); word-break: break-word; }
+
+.masthead{ border-bottom: 2px solid var(--ink); padding-bottom: 22px; margin-bottom: clamp(24px, 4vw, 40px); }
+.standfirst{
+  font-family: var(--display);
+  font-optical-sizing: auto;
+  font-weight: 500;
+  font-size: clamp(17px, 2.2vw, 21px);
+  line-height: 1.42;
+  color: var(--muted);
+  max-width: 62ch;
+  margin: 0;
+}
+
+/* ---------- layout ---------- */
+.layout{ display: grid; gap: clamp(26px, 4vw, 54px); grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 940px){
+  .layout{ grid-template-columns: 260px minmax(0, 1fr); }
+  .rail{ position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow-y: auto; }
+}
+.rail{ align-self: start; }
+.glance{ background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--accent); padding: 18px 18px 16px; }
+.pill{
+  display: inline-block;
+  font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--good); border: 1px solid currentColor; border-radius: 999px;
+  padding: 3px 10px; margin-bottom: 14px;
+}
+.meta{ margin: 0; font-size: 13.5px; }
+.meta dt{ font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 12px; }
+.meta dd{ margin: 2px 0 0; color: var(--ink); line-height: 1.45; }
+.meta dd .mono{ font-size: 12.5px; }
+.toc{ margin-top: 22px; border-top: 1px solid var(--line); padding-top: 14px; }
+.toc ol{ list-style: none; margin: 0; padding: 0; counter-reset: toc; }
+.toc li{ margin: 0; border-bottom: 1px solid var(--line); }
+.toc li:last-child{ border-bottom: 0; }
+.toc a{
+  display: block; padding: 7px 0; font-size: 13.5px; line-height: 1.35;
+  color: var(--ink); text-decoration: none;
+}
+.toc a:hover{ color: var(--accent); }
+
+.record > section{ margin-bottom: clamp(36px, 5vw, 56px); scroll-margin-top: 24px; }
+.record > section > p,
+.record > section > ul > li,
+.record > section > ol > li{ max-width: 68ch; }
+.record ul, .record ol{ margin: 0 0 14px; padding-left: 1.15em; }
+.record li{ margin-bottom: 8px; }
+.record ol{ padding-left: 1.3em; }
+.record ol li::marker{ font-family: var(--mono); font-size: .86em; color: var(--muted); }
+
+/* ---------- callout ---------- */
+.finding{
+  border-left: 3px solid var(--accent);
+  background: var(--surface);
+  padding: 18px 22px;
+  margin: 26px 0 0;
+}
+.finding p{
+  font-family: var(--display);
+  font-optical-sizing: auto;
+  font-weight: 500;
+  font-size: clamp(19px, 2.6vw, 24px);
+  line-height: 1.32;
+  margin: 0;
+  max-width: 44ch;
+}
+
+/* ---------- tables ---------- */
+.scroll{ overflow-x: auto; margin: 0 0 6px; -webkit-overflow-scrolling: touch; }
+table{
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14.5px;
+  line-height: 1.48;
+  font-variant-numeric: tabular-nums;
+}
+.scroll table{ min-width: 560px; }
+.scroll.wide table{ min-width: 720px; }
+caption{
+  caption-side: top; text-align: left;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); padding-bottom: 8px;
+}
+th{
+  text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); padding: 0 14px 8px 0; border-bottom: 2px solid var(--line); vertical-align: bottom;
+}
+td{ padding: 9px 14px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th:last-child, td:last-child{ padding-right: 0; }
+th.num, td.num{ text-align: right; font-family: var(--mono); white-space: nowrap; }
+td.key{ font-family: var(--mono); font-size: 12.5px; color: var(--accent-ink); white-space: nowrap; }
+td.tag{ font-family: var(--mono); font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+tr.is-chosen td{ background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+tr.is-chosen td:first-child{ box-shadow: inset 3px 0 0 var(--accent); padding-left: 10px; }
+.tnote{ font-size: 13px; color: var(--muted); margin: 10px 0 0; max-width: 68ch; }
+
+/* ---------- figures & charts ---------- */
+figure{ margin: 26px 0 0; background: var(--surface); border: 1px solid var(--line); padding: 18px clamp(14px, 2.4vw, 22px) 16px; position: relative; }
+figcaption{ margin-bottom: 14px; }
+figcaption .ftitle{ font-family: var(--sans); font-weight: 600; font-size: 16px; line-height: 1.3; margin: 0; }
+figcaption .fsub{ font-size: 13px; color: var(--muted); margin: 4px 0 0; max-width: 62ch; }
+.chart svg{ display: block; width: 100%; height: auto; }
+.chart .scroll svg{ min-width: 520px; }
+.bar{ fill: var(--accent); }
+.bar-alt{ fill: var(--muted); }
+.hit{ fill: transparent; stroke: transparent; stroke-width: 2; }
+.mark.is-hot{ stroke: var(--ink); stroke-width: 1.5; }
+.hit:focus-visible{ stroke: var(--ink); outline: none; }
+.axis{ stroke: var(--line); stroke-width: 1; }
+.grid{ stroke: var(--line); stroke-width: 1; }
+.refline{ stroke: var(--muted); stroke-width: 1; stroke-dasharray: 5 4; }
+.t-cat{ font-family: var(--sans); font-size: 12.5px; font-weight: 400; fill: var(--muted); }
+.t-val{ font-family: var(--mono); font-size: 12px; font-weight: 500; fill: var(--ink); font-variant-numeric: tabular-nums; }
+.t-tick{ font-family: var(--mono); font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.t-unit{ font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; fill: var(--muted); }
+.t-axis{ font-family: var(--sans); font-size: 12px; fill: var(--muted); }
+.tip{
+  position: absolute; z-index: 6; pointer-events: none;
+  background: var(--surface); border: 1px solid var(--line);
+  padding: 7px 11px; max-width: 260px;
+  box-shadow: 0 2px 12px var(--shadow);
+}
+.tip .tv{ display: block; font-family: var(--mono); font-weight: 500; font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.tip .tl{ display: block; font-size: 12px; line-height: 1.35; color: var(--muted); margin-top: 2px; }
+
+/* ---------- footer ---------- */
+.source{
+  margin-top: clamp(30px, 5vw, 48px);
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.source .mono{ color: var(--muted); }
+
+:where(a, button, [tabindex]):focus-visible{ outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce){
+  :root{ scroll-behavior: auto; }
+  *, *::before, *::after{ animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow">Architecture decision record &middot; ADR-0001</p>
+    <h1>Redis as the fleet state store</h1>
+    <p class="standfirst">A pull-fed read cache replaces Postgres for all collected OpenShift fleet state: compressed section blobs per cluster, purpose-built fleet indexes, and an explicit cache contract.</p>
+  </header>
+
+  <div class="layout">
+
+    <aside class="rail">
+      <div class="glance">
+        <p class="eyebrow">Decision at a glance</p>
+        <span class="pill">Accepted</span>
+        <dl class="meta">
+          <dt>Date</dt>
+          <dd>September 2026</dd>
+          <dt>Deciders</dt>
+          <dd>Platform engineering</dd>
+          <dt>Supersedes</dt>
+          <dd>Postgres persistence described in <span class="mono">docs/architecture.md</span> (data model section)</dd>
+          <dt>Related</dt>
+          <dd>ADR-0002 Natural-language fleet queries<br>ADR-0003 Fleet data layer at 900 clusters<br><span class="mono">docs/redis-keyspace.md</span></dd>
+          <dt>Compatibility floor</dt>
+          <dd>Plain Redis 7 core, no modules</dd>
+        </dl>
+        <nav class="toc" aria-label="Sections">
+          <p class="eyebrow">Contents</p>
+          <ol>
+            <li><a href="#context">Context</a></li>
+            <li><a href="#decision">Decision</a></li>
+            <li><a href="#options">Options considered</a></li>
+            <li><a href="#sizing">Sizing</a></li>
+            <li><a href="#keyspace">Keyspace at a glance</a></li>
+            <li><a href="#consequences">Consequences</a></li>
+            <li><a href="#verification">Verification</a></li>
+          </ol>
+        </nav>
+      </div>
+    </aside>
+
+    <main class="record">
+
+      <section id="context">
+        <p class="eyebrow">Section</p>
+        <h2>Context</h2>
+        <p>The data layer collects inventory, configuration and live utilization (<code>metrics.k8s.io</code>) from every OpenShift cluster's API server, computes health, and serves it through a REST API, a dashboard and an MCP server.</p>
+        <p>Until now the collected state lived in Postgres: current-state tables replaced wholesale per cluster on every sweep, plus an append-only health snapshot table. The hosting environment does not allow Postgres. Redis is the approved store, and the question was whether Redis, keyed as a pull/read cache of OCP metrics and inventory, can carry the whole product, and what changes when the fleet is 900 clusters with hundreds of applications each.</p>
+        <p>What the store has to serve, taken from the API read paths in <code>data-layer/app/api/</code>:</p>
+
+        <div class="scroll wide">
+          <table>
+            <caption>Read patterns the store must answer</caption>
+            <thead>
+              <tr><th scope="col">Read pattern</th><th scope="col">Examples</th><th scope="col">Postgres today</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Fleet rollups over one row per cluster</td><td>Overview, health by region, version spread, capacity by group</td><td>Full scan of <code>clusters</code>, aggregated in Python</td></tr>
+              <tr><td>Filtered cluster lists</td><td>Region, environment, status, version, team</td><td>Indexed <code>WHERE</code></td></tr>
+              <tr><td>One cluster, one section</td><td>Nodes, namespaces, workloads, pod issues, resources, timeline</td><td>Per-table <code>WHERE cluster_name = ?</code></td></tr>
+              <tr><td>Fleet-wide entity queries</td><td>Applications across clusters, expiring certificates, pod issues, quotas, OLM packages, MCPs, routes, events, images, config references</td><td>Indexed table scans plus Python grouping</td></tr>
+              <tr><td>Joins for impact</td><td>Blast radius: version / operator / OLM / image, to clusters, to application namespaces, to teams</td><td>Several queries joined in Python</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tnote">The write side is simple: one collector process assembles one plain-dict document per cluster and replaces that cluster's rows in a single transaction.</p>
+
+        <div class="finding">
+          <p class="eyebrow">Headline finding</p>
+          <p>5 GB at 900 clusters versus 21 GB for one key per object.</p>
+        </div>
+      </section>
+
+      <section id="decision">
+        <p class="eyebrow">Section</p>
+        <h2>Decision</h2>
+        <p>Redis becomes the only store for collected fleet state, designed as a <strong>pull-fed read cache</strong> with three kinds of keys. The full contract is <code>docs/redis-keyspace.md</code>.</p>
+        <ul>
+          <li><strong>Per-cluster keys</strong> under one hash tag <code>{c:&lt;name&gt;}</code>: a summary HASH (the former <code>clusters</code> row), ten <strong>compressed section blobs</strong> (operators, nodes, namespaces, workloads, images, refs, pod issues, resources, resource status, health checks), a snapshots ZSET for history, and a ledger.</li>
+          <li><strong>Fleet indexes</strong> under <code>{fleet}</code>: SETs per cluster dimension, per-operator HASHes, a namespace HASH with team / app / class SETs and usage ZSETs, per-kind resource HASHes with status SETs for the kinds that are queried fleet-wide, a certificate-expiry ZSET, image refcounts and usage SETs, and reference SETs.</li>
+          <li><strong>Runs</strong>: a LIST of sweeps and the last-run pointer.</li>
+        </ul>
+
+        <h3>Write protocol, one cluster</h3>
+        <p>The write protocol replaces one cluster atomically in a single <code>MULTI</code>/<code>EXEC</code>:</p>
+        <ol>
+          <li>Reverse the cluster's previous fleet contributions from its ledger.</li>
+          <li>Write summary, sections and snapshot.</li>
+          <li>Add the new fleet contributions.</li>
+          <li>Write the new ledger.</li>
+        </ol>
+        <p>The read side never scans every cluster's detail to answer a fleet question; the fleet indexes exist precisely for the questions the product asks.</p>
+
+        <h3>Cache semantics</h3>
+        <ul>
+          <li><strong>Pull, not push.</strong> The collector pulls on <code>REFRESH_INTERVAL_SECONDS</code> and on demand (<code>POST /api/refresh</code> for the fleet, <code>POST /api/clusters/{name}/refresh</code> for one cluster behind a single-flight lock).</li>
+          <li><strong>Freshness is visible.</strong> Every summary carries <code>last_synced</code>, <code>age_seconds</code> and <code>stale</code>; the API never hides that it is serving a cache.</li>
+          <li><strong>Expire, never evict.</strong> Per-cluster keys carry <code>REDIS_TTL_SECONDS</code> (default 24 h) so a cluster that is never collected again disappears. The Redis instance runs <code>maxmemory-policy noeviction</code>, because a cache that silently drops one cluster would answer blast-radius questions wrongly.</li>
+          <li><strong>Restart without a storm.</strong> RDB snapshots (or AOF) stay on, so an API restart serves the last picture immediately instead of forcing a full re-collection. The cache is rebuildable, but at 900 clusters rebuilding takes minutes and hammers the fleet.</li>
+        </ul>
+      </section>
+
+      <section id="options">
+        <p class="eyebrow">Section</p>
+        <h2>Options considered</h2>
+        <div class="scroll wide">
+          <table>
+            <caption>Four keyspace designs</caption>
+            <thead>
+              <tr><th scope="col">Option</th><th scope="col">Summary</th><th scope="col">Why not, or why</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="tag">A. One key per object</td>
+                <td>Mirror the ORM: every namespace, workload and resource as its own HASH; index SETs for every column that was indexed in Postgres.</td>
+                <td>About 20 GB at 900 clusters versus about 5 GB, from per-key overhead and member strings. Millions of keys, and a write of one cluster becomes tens of thousands of commands. No benefit: the API never reads one object by id.</td>
+              </tr>
+              <tr>
+                <td class="tag">B. RedisJSON + RediSearch</td>
+                <td>Redis Stack or Enterprise: documents as JSON, declarative secondary indexes, <code>FT.SEARCH</code> and <code>FT.AGGREGATE</code>.</td>
+                <td>Attractive: removes hand-built indexes and adds full-text search. Rejected as the baseline because the modules are not available on every managed Redis (AWS ElastiCache, classic Azure Cache for Redis, GCP Memorystore), it still cannot join, and memory grows about 1.5 to 2x. Kept as an optional accelerator.</td>
+              </tr>
+              <tr>
+                <td class="tag">C. One blob per cluster</td>
+                <td>One compressed blob per cluster, no fleet indexes. The simplest possible keyspace.</td>
+                <td>Every fleet question decompresses every cluster: 900 x about 1.3 MB per request. Fine at 10 clusters, unusable at 900.</td>
+              </tr>
+              <tr class="is-chosen">
+                <td class="tag">D. Sections + indexes <strong>(chosen)</strong></td>
+                <td>Per-cluster detail as compressed sections; fleet-wide questions from purpose-built indexes maintained through per-cluster ledgers.</td>
+                <td>Reads are one or two round trips; writes are one transaction per cluster; memory is dominated by compressed detail; works on plain Redis 7 (OSS, ElastiCache, Azure, Memorystore, Enterprise).</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tnote">Plain Redis 7 core with no modules is the compatibility floor. Nothing in the design needs Lua, modules or keyspace notifications.</p>
+      </section>
+
+      <section id="sizing">
+        <p class="eyebrow">Section</p>
+        <h2>Sizing</h2>
+        <p>Measured on the local kind fleet (5 clusters, tiny): a sweep takes about 450 ms, a cluster document is about 250 resources / 17 namespaces / 16 workloads, and the whole Postgres database was 13 MB.</p>
+        <p>The model below assumes a production cluster with 250 application namespaces (about 1,700 workloads, about 16,600 inventory objects, about 26,000 rows in total), a JSON row of about 450 B, and 8x zlib compression on the sections (measured 8 to 12x on this kind of JSON).</p>
+
+        <figure class="chart" id="fig-components">
+          <figcaption>
+            <p class="ftitle">Redis memory at 900 clusters, by component</p>
+            <p class="fsub">Logical size in megabytes, before fragmentation. One measure across components, so one hue; every value is labelled at the bar tip.</p>
+          </figcaption>
+          <div class="scroll">
+            <svg viewBox="0 0 700 340" role="img" aria-labelledby="fig1-title" preserveAspectRatio="xMinYMin meet">
+              <title id="fig1-title">Horizontal bar chart of Redis memory at 900 clusters by component, in megabytes: sections summaries and history 1290, fleet resource hashes 1181, config references 879, image usages 251, namespaces 209, certificates 186, pod issues 21, nodes 18, operator index 6.</title>
+              <line class="axis" x1="202" y1="14" x2="202" y2="320"></line>
+
+              <g class="marks">
+                <path class="bar mark" id="c1b0" d="M202,21 H618 A4,4 0 0 1 622,25 V37 A4,4 0 0 1 618,41 H202 Z"></path>
+                <path class="bar mark" id="c1b1" d="M202,55 H582.5 A4,4 0 0 1 586.5,59 V71 A4,4 0 0 1 582.5,75 H202 Z"></path>
+                <path class="bar mark" id="c1b2" d="M202,89 H484.2 A4,4 0 0 1 488.2,93 V105 A4,4 0 0 1 484.2,109 H202 Z"></path>
+                <path class="bar mark" id="c1b3" d="M202,123 H279.7 A4,4 0 0 1 283.7,127 V139 A4,4 0 0 1 279.7,143 H202 Z"></path>
+                <path class="bar mark" id="c1b4" d="M202,157 H266 A4,4 0 0 1 270,161 V173 A4,4 0 0 1 266,177 H202 Z"></path>
+                <path class="bar mark" id="c1b5" d="M202,191 H258.6 A4,4 0 0 1 262.6,195 V207 A4,4 0 0 1 258.6,211 H202 Z"></path>
+                <rect class="bar mark" id="c1b6" x="202" y="225" width="6.8" height="20"></rect>
+                <rect class="bar mark" id="c1b7" x="202" y="259" width="5.9" height="20"></rect>
+                <rect class="bar mark" id="c1b8" x="202" y="293" width="2" height="20"></rect>
+              </g>
+
+              <g>
+                <text class="t-cat" x="192" y="31" text-anchor="end">Sections, summaries, history</text>
+                <text class="t-cat" x="192" y="65" text-anchor="end">Fleet resource hashes</text>
+                <text class="t-cat" x="192" y="99" text-anchor="end">Config references</text>
+                <text class="t-cat" x="192" y="133" text-anchor="end">Image usages</text>
+                <text class="t-cat" x="192" y="167" text-anchor="end">Namespaces</text>
+                <text class="t-cat" x="192" y="201" text-anchor="end">Certificates</text>
+                <text class="t-cat" x="192" y="235" text-anchor="end">Pod issues</text>
+                <text class="t-cat" x="192" y="269" text-anchor="end">Nodes</text>
+                <text class="t-cat" x="192" y="303" text-anchor="end">Operator index</text>
+              </g>
+
+              <g>
+                <text class="t-val" x="630" y="31">1,290 MB</text>
+                <text class="t-val" x="594.5" y="65">1,181 MB</text>
+                <text class="t-val" x="496.2" y="99">879 MB</text>
+                <text class="t-val" x="291.7" y="133">251 MB</text>
+                <text class="t-val" x="278" y="167">209 MB</text>
+                <text class="t-val" x="270.6" y="201">186 MB</text>
+                <text class="t-val" x="216.8" y="235">21 MB</text>
+                <text class="t-val" x="215.9" y="269">18 MB</text>
+                <text class="t-val" x="212" y="303">6 MB</text>
+              </g>
+
+              <g class="hits">
+                <rect class="hit" x="0" y="14" width="700" height="34" tabindex="0" data-mark="c1b0" data-value="1,290 MB" data-label="Sections + summaries + history, per cluster detail"></rect>
+                <rect class="hit" x="0" y="48" width="700" height="34" tabindex="0" data-mark="c1b1" data-value="1,181 MB" data-label="Fleet resource hashes: routes, PVCs, PVs, quotas, events dominate"></rect>
+                <rect class="hit" x="0" y="82" width="700" height="34" tabindex="0" data-mark="c1b2" data-value="879 MB" data-label="Config references (optional index, REDIS_INDEX_REFS)"></rect>
+                <rect class="hit" x="0" y="116" width="700" height="34" tabindex="0" data-mark="c1b3" data-value="251 MB" data-label="Image usages and refcounts"></rect>
+                <rect class="hit" x="0" y="150" width="700" height="34" tabindex="0" data-mark="c1b4" data-value="209 MB" data-label="Namespace hash with team, app and class sets"></rect>
+                <rect class="hit" x="0" y="184" width="700" height="34" tabindex="0" data-mark="c1b5" data-value="186 MB" data-label="Certificates hash and expiry ZSET"></rect>
+                <rect class="hit" x="0" y="218" width="700" height="34" tabindex="0" data-mark="c1b6" data-value="21 MB" data-label="Pod issues per namespace class"></rect>
+                <rect class="hit" x="0" y="252" width="700" height="34" tabindex="0" data-mark="c1b7" data-value="18 MB" data-label="Fleet nodes hash and utilisation ZSETs"></rect>
+                <rect class="hit" x="0" y="286" width="700" height="34" tabindex="0" data-mark="c1b8" data-value="6 MB" data-label="Operator index: per-operator hashes and refcounts"></rect>
+              </g>
+            </svg>
+          </div>
+          <div class="tip" hidden></div>
+        </figure>
+
+        <figure class="chart" id="fig-compare">
+          <figcaption>
+            <p class="ftitle">Total at 900 clusters: chosen design against the rejected alternative</p>
+            <p class="fsub">Gigabytes including 25 percent fragmentation. The chosen design carries the accent; the rejected alternative is held back in neutral.</p>
+          </figcaption>
+          <div class="scroll">
+            <svg viewBox="0 0 700 112" role="img" aria-labelledby="fig2-title" preserveAspectRatio="xMinYMin meet">
+              <title id="fig2-title">Two horizontal bars comparing total Redis memory at 900 clusters: chosen section-blob design 5.1 gigabytes, one key per object 21 gigabytes.</title>
+              <line class="axis" x1="202" y1="14" x2="202" y2="98"></line>
+              <path class="bar mark" id="c2b0" d="M202,24 H300 A4,4 0 0 1 304,28 V42 A4,4 0 0 1 300,46 H202 Z"></path>
+              <path class="bar-alt mark" id="c2b1" d="M202,66 H618 A4,4 0 0 1 622,70 V84 A4,4 0 0 1 618,88 H202 Z"></path>
+              <text class="t-cat" x="192" y="35" text-anchor="end">Sections + indexes (chosen)</text>
+              <text class="t-cat" x="192" y="77" text-anchor="end">One key per object</text>
+              <text class="t-val" x="312" y="35">5.1 GB</text>
+              <text class="t-val" x="630" y="77">21 GB</text>
+              <rect class="hit" x="0" y="14" width="700" height="42" tabindex="0" data-mark="c2b0" data-value="5.1 GB" data-label="Chosen: compressed section blobs plus fleet indexes, with 25 percent fragmentation"></rect>
+              <rect class="hit" x="0" y="56" width="700" height="42" tabindex="0" data-mark="c2b1" data-value="21 GB" data-label="Option A: one key per object, with 25 percent fragmentation"></rect>
+            </svg>
+          </div>
+          <div class="tip" hidden></div>
+        </figure>
+
+        <div class="scroll" style="margin-top:26px">
+          <table>
+            <caption>Sizing model at 10, 100 and 900 clusters</caption>
+            <thead>
+              <tr>
+                <th scope="col">Clusters</th>
+                <th scope="col" class="num">Sections + summaries + history</th>
+                <th scope="col" class="num">Fleet indexes</th>
+                <th scope="col" class="num">Total (logical)</th>
+                <th scope="col" class="num">With 25% fragmentation</th>
+                <th scope="col" class="num">One key per object</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td class="key">10</td><td class="num">14 MB</td><td class="num">31 MB</td><td class="num">45 MB</td><td class="num">0.06 GB</td><td class="num">0.23 GB</td></tr>
+              <tr><td class="key">100</td><td class="num">0.14 GB</td><td class="num">0.31 GB</td><td class="num">0.45 GB</td><td class="num">0.56 GB</td><td class="num">2.4 GB</td></tr>
+              <tr><td class="key">900</td><td class="num">1.29 GB</td><td class="num">2.75 GB</td><td class="num">4.0 GB</td><td class="num"><strong>5.1 GB</strong></td><td class="num">21 GB</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p style="margin-top:18px">Where the fleet indexes go at 900 clusters: resource hashes for fleet-queried kinds 1.2 GB (routes, PVCs, PVs, quotas and events dominate), config references 0.9 GB, image usages 0.25 GB, namespaces 0.21 GB, certificates 0.19 GB, everything else under 50 MB.</p>
+        <p>Two knobs keep this honest: the reference index is optional (<code>REDIS_INDEX_REFS</code>, falling back to per-cluster sections when a cluster filter is given), and the large fleet hashes must be read with <code>HSCAN</code> and paginated endpoints rather than <code>HGETALL</code> (ADR-0003).</p>
+        <p><strong>Measured afterwards</strong> on a synthetic 900-cluster load (ADR-0003, <code>docs/adr/synthetic-load-900.md</code>): 4.79 GB used memory, 54,508 keys, 1.31 MB per cluster, sections compressing 12.8x, fleet indexes 3.77 GB (certificates three times the estimate because of the <code>kube-root-ca.crt</code> ConfigMap injected into every namespace), ledgers 0.17 GB. The headline holds; the composition shifted from detail to indexes.</p>
+        <p>Per-cluster keys are about 1.3 to 1.4 MB each, so a single cluster's detail is one round trip of a few hundred KB per section. A single Redis primary with 8 to 16 GB and one replica is enough at 900 clusters; Redis Cluster is not needed for capacity, but the hash-tag layout keeps it possible.</p>
+      </section>
+
+      <section id="keyspace">
+        <p class="eyebrow">Section</p>
+        <h2>Keyspace at a glance</h2>
+        <p>All keys start with the prefix <code>odl</code> (<code>REDIS_PREFIX</code>). Encoded values are JSON; sections and ledgers are zlib-compressed JSON, with a <code>z:</code> prefix byte marking compression.</p>
+
+        <div class="scroll wide">
+          <table>
+            <caption>Per-cluster keys, hash tag <span class="mono">{c:&lt;name&gt;}</span></caption>
+            <thead>
+              <tr><th scope="col">Key</th><th scope="col">Type</th><th scope="col">Content</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="key">odl:{c:&lt;name&gt;}:summary</td><td class="tag">HASH</td><td>Every field of the former <code>clusters</code> row: placement, version, capacity, rollups, health, <code>last_synced</code>, <code>collect_ms</code>, <code>reachable</code>, <code>last_error</code>, <code>hub_name</code>. Scalars as strings, lists and dicts as JSON.</td></tr>
+              <tr><td class="key">odl:{c:&lt;name&gt;}:sec:&lt;section&gt;</td><td class="tag">STRING</td><td>Compressed JSON list of rows for one section. Ten sections: operators, nodes, namespaces, workloads, workload_images, workload_refs, pod_issues, resources, resource_status, health_checks.</td></tr>
+              <tr><td class="key">odl:{c:&lt;name&gt;}:snapshots</td><td class="tag">ZSET</td><td>Health and utilization history. Score is epoch seconds, member is a JSON snapshot. Trimmed to <code>SNAPSHOT_RETENTION</code>.</td></tr>
+              <tr><td class="key">odl:{c:&lt;name&gt;}:ledger</td><td class="tag">STRING</td><td>Compressed JSON list of <code>[op, key, member]</code> for every fleet-index member this cluster contributed on its last write. Read and reversed before the next write.</td></tr>
+              <tr><td class="key">odl:{c:&lt;name&gt;}:lock</td><td class="tag">STRING</td><td><code>SET NX PX</code> single-flight lock for on-demand refresh of one cluster.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tnote">Sections are independent keys, so <code>/api/clusters/{name}/nodes</code> never decompresses the resources section.</p>
+
+        <div class="scroll wide" style="margin-top:26px">
+          <table>
+            <caption>Fleet keys, hash tag <span class="mono">{fleet}</span></caption>
+            <thead>
+              <tr><th scope="col">Key</th><th scope="col">Type</th><th scope="col">Content</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="key">odl:{fleet}:clusters</td><td class="tag">SET</td><td>Names of known clusters.</td></tr>
+              <tr><td class="key">odl:{fleet}:hubs</td><td class="tag">HASH</td><td>Hub name to JSON hub row.</td></tr>
+              <tr><td class="key">odl:{fleet}:idx:cluster:&lt;dim&gt;:&lt;value&gt;</td><td class="tag">SET</td><td>Cluster names by dimension: region, datacenter, environment, hub, version, status. List filters are <code>SINTER</code> over these.</td></tr>
+              <tr><td class="key">odl:{fleet}:idx:op:&lt;operator&gt;</td><td class="tag">HASH</td><td>Cluster name to JSON <code>{version, available, progressing, degraded, critical, message}</code>. One <code>HGETALL</code> answers who runs operator X at version Y or degraded.</td></tr>
+              <tr><td class="key">odl:{fleet}:idx:ops</td><td class="tag">HASH</td><td>Operator name to refcount. Cleaned of zero counts at sweep end.</td></tr>
+              <tr><td class="key">odl:{fleet}:ns</td><td class="tag">HASH</td><td><code>&lt;cluster&gt;|&lt;namespace&gt;</code> to JSON namespace row, both classes. Feeds applications, blast radius and top-N.</td></tr>
+              <tr><td class="key">odl:{fleet}:idx:ns:app:&lt;app&gt;</td><td class="tag">SET</td><td>Namespace members for one application.</td></tr>
+              <tr><td class="key">odl:{fleet}:idx:ns:team:&lt;team&gt;</td><td class="tag">SET</td><td>Namespace members for one team.</td></tr>
+              <tr><td class="key">odl:{fleet}:idx:ns:class:&lt;class&gt;</td><td class="tag">SET</td><td>Namespace members per class: application, platform.</td></tr>
+              <tr><td class="key">odl:{fleet}:idx:ns:cpu / :mem</td><td class="tag">ZSET</td><td>Score is live usage, member is <code>&lt;cluster&gt;|&lt;namespace&gt;</code>. Top-N namespaces is <code>ZREVRANGE</code>.</td></tr>
+              <tr><td class="key">odl:{fleet}:nodes</td><td class="tag">HASH</td><td><code>&lt;cluster&gt;|&lt;node&gt;</code> to JSON node row.</td></tr>
+              <tr><td class="key">odl:{fleet}:idx:node:cpu_pct / :mem_pct</td><td class="tag">ZSET</td><td>Score is utilisation percent, member is <code>&lt;cluster&gt;|&lt;node&gt;</code>.</td></tr>
+              <tr><td class="key">odl:{fleet}:podissues:&lt;class&gt;</td><td class="tag">HASH</td><td><code>&lt;cluster&gt;|&lt;namespace&gt;|&lt;pod&gt;</code> to JSON pod issue row, per namespace class. <code>HLEN</code> gives the summary counters.</td></tr>
+              <tr><td class="key">odl:{fleet}:res:&lt;key&gt;</td><td class="tag">HASH</td><td><code>&lt;cluster&gt;|&lt;namespace&gt;|&lt;name&gt;</code> to JSON resource row, for the fleet-indexed kinds only.</td></tr>
+              <tr><td class="key">odl:{fleet}:res:&lt;key&gt;:status:&lt;status&gt;</td><td class="tag">SET</td><td>Members of the hash above with that status. <code>SCARD</code> gives counters; status filters are <code>SMEMBERS</code> plus <code>HMGET</code>.</td></tr>
+              <tr><td class="key">odl:{fleet}:certs</td><td class="tag">HASH</td><td>JSON resource row for every certificate-bearing Secret or ConfigMap.</td></tr>
+              <tr><td class="key">odl:{fleet}:idx:cert:expires</td><td class="tag">ZSET</td><td>Score is expiry epoch. Expiring-soon is <code>ZRANGEBYSCORE</code>, counters are <code>ZCOUNT</code>.</td></tr>
+              <tr><td class="key">odl:{fleet}:idx:images</td><td class="tag">HASH</td><td>Image string to fleet-wide refcount. Substring search is <code>HSCAN MATCH *needle*</code>. Zero counts cleaned at sweep end.</td></tr>
+              <tr><td class="key">odl:{fleet}:idx:image:&lt;sha1&gt;</td><td class="tag">SET</td><td><code>&lt;cluster&gt;|&lt;namespace&gt;|&lt;kind&gt;|&lt;workload&gt;|&lt;container&gt;</code> usages of one image.</td></tr>
+              <tr><td class="key">odl:{fleet}:idx:ref:&lt;kind&gt;:&lt;name&gt;</td><td class="tag">SET</td><td>Workloads referencing a Secret, ConfigMap, PVC or ServiceAccount of that name.</td></tr>
+              <tr><td class="key">odl:{fleet}:runs</td><td class="tag">LIST</td><td>Newest-first JSON collection runs, trimmed to 200.</td></tr>
+              <tr><td class="key">odl:{fleet}:run:last</td><td class="tag">STRING</td><td>JSON of the last run summary: <code>at</code>, <code>ok</code>, <code>trigger</code>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tnote">Fleet-indexed resource kinds: <code>resourcequotas</code>, <code>machineconfigpools</code>, <code>clusterserviceversions</code>, <code>subscriptions</code>, <code>persistentvolumeclaims</code>, <code>persistentvolumes</code>, <code>storageclasses</code>, <code>routes</code>, <code>events</code>, <code>clusterrolebindings</code>. Every other kind is large, rarely queried fleet-wide, and is read only from the per-cluster resources section.</p>
+      </section>
+
+      <section id="consequences">
+        <p class="eyebrow">Section</p>
+        <h2>Consequences</h2>
+
+        <h3>Positive</h3>
+        <ul>
+          <li>No relational database anywhere in the data layer; the deployment is API pods plus Redis.</li>
+          <li>Reads that used to be full-table scans are one pipelined round trip; per-cluster detail is one <code>GET</code> per section.</li>
+          <li>Writes are atomic per cluster and independent across clusters, which is exactly what sharded collectors need (ADR-0003).</li>
+          <li>The cache framing is explicit: TTLs, <code>stale</code> flags and on-demand refresh are first-class instead of implied.</li>
+          <li>The design is portable across managed Redis offerings.</li>
+        </ul>
+
+        <h3>Negative, and the mitigations</h3>
+        <ul>
+          <li><strong>Ad-hoc queries are not free.</strong> Redis answers the questions we indexed; a new fleet-wide question needs either a new index or a scan. ADR-0002 provides the general-purpose query surface, SQL over an embedded snapshot, so that indexes stay small and purpose-built.</li>
+          <li><strong>Hand-maintained indexes are a correctness burden.</strong> The ledger makes removal exact, the store tests assert that stale members disappear, and <code>finalize_sweep</code> cleans refcounts. If RediSearch becomes available, the fleet resource hashes and the image and namespace lookups can move to declared indexes with no API change.</li>
+          <li><strong>Filtering happens in process for section reads.</strong> A cluster with 16k resources decompresses about 0.5 MB and filters in Python in a few milliseconds. That is acceptable per request and bounded by cluster size, not fleet size.</li>
+          <li><strong>History is capped.</strong> <code>SNAPSHOT_RETENTION</code> per cluster (default 500 sweeps) in a ZSET. Longer retention or per-namespace history belongs in the metrics plane or an object-store export, not in Redis.</li>
+          <li><strong>The patching system of record still uses Postgres.</strong> It is a separate service with an audit log; moving it needs its own decision, since it is a system of record and not a cache: Redis Streams for the append-only audit, HASHes for jobs, AOF persistence.</li>
+        </ul>
+      </section>
+
+      <section id="verification">
+        <p class="eyebrow">Section</p>
+        <h2>Verification</h2>
+        <ul>
+          <li>Unit tests with <code>fakeredis</code> cover persist, read, re-persist, prune, TTL and retention for every index.</li>
+          <li>End-to-end against the kind fleet: the worktree stack collects the same clusters as the Postgres stack, and the dashboard endpoints return the same structures and counts.</li>
+          <li>A synthetic load test (<code>scripts/synth_load.py</code>) persists 900 generated cluster documents and reports Redis memory, key counts, write throughput and read latency for the fleet endpoints. Its measurements are recorded in ADR-0003.</li>
+        </ul>
+      </section>
+
+      <p class="source">Source: <span class="mono">docs/adr/0001-redis-as-fleet-state-store.md</span></p>
+
+    </main>
+  </div>
+</div>
+
+<script>
+(function () {
+  var figs = document.querySelectorAll('.chart');
+  Array.prototype.forEach.call(figs, function (fig) {
+    var tip = fig.querySelector('.tip');
+    if (!tip) return;
+    var hot = null;
+
+    function place(rect) {
+      var box = fig.getBoundingClientRect();
+      var x = rect.left - box.left + rect.width / 2 - tip.offsetWidth / 2;
+      var y = rect.top - box.top - tip.offsetHeight - 10;
+      if (y < 4) y = rect.top - box.top + rect.height + 10;
+      if (x < 4) x = 4;
+      if (x + tip.offsetWidth > box.width - 4) x = Math.max(4, box.width - tip.offsetWidth - 4);
+      tip.style.left = x + 'px';
+      tip.style.top = y + 'px';
+    }
+
+    function show(el) {
+      var v = document.createElement('span');
+      v.className = 'tv';
+      v.textContent = el.getAttribute('data-value') || '';
+      var l = document.createElement('span');
+      l.className = 'tl';
+      l.textContent = el.getAttribute('data-label') || '';
+      tip.textContent = '';
+      tip.appendChild(v);
+      tip.appendChild(l);
+      tip.hidden = false;
+      place(el.getBoundingClientRect());
+      if (hot) hot.classList.remove('is-hot');
+      hot = fig.querySelector('#' + el.getAttribute('data-mark'));
+      if (hot) hot.classList.add('is-hot');
+    }
+
+    function hide() {
+      tip.hidden = true;
+      if (hot) { hot.classList.remove('is-hot'); hot = null; }
+    }
+
+    Array.prototype.forEach.call(fig.querySelectorAll('.hit'), function (el) {
+      el.addEventListener('pointerenter', function () { show(el); });
+      el.addEventListener('pointermove', function () { show(el); });
+      el.addEventListener('pointerleave', hide);
+      el.addEventListener('focus', function () { show(el); });
+      el.addEventListener('blur', hide);
+    });
+    fig.addEventListener('pointerleave', hide);
+  });
+})();
+</script>

@@ -1,0 +1,669 @@
+<title>Fleet Data Layer at 900 Clusters</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap');
+
+:root{
+  color-scheme: light;
+  --ground:#EEF2F1;
+  --surface:#FFFFFF;
+  --ink:#14201D;
+  --muted:#5B6B67;
+  --line:#C9D3D0;
+  --accent:#0F766E;
+  --accent-ink:#0B5A54;
+  --warn:#B45309;
+  --crit:#B91C1C;
+  --good:#15803D;
+  --shadow:rgba(20,32,29,.12);
+  --sans:"IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --display:"Newsreader", ui-serif, Georgia, "Times New Roman", Times, serif;
+  scroll-behavior: smooth;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#0D1413;
+    --surface:#142020;
+    --ink:#E4ECEA;
+    --muted:#94A6A1;
+    --line:#253431;
+    --accent:#3FB8A8;
+    --accent-ink:#7FD9CC;
+    --warn:#F59E0B;
+    --crit:#F87171;
+    --good:#4ADE80;
+    --shadow:rgba(0,0,0,.45);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#0D1413;
+  --surface:#142020;
+  --ink:#E4ECEA;
+  --muted:#94A6A1;
+  --line:#253431;
+  --accent:#3FB8A8;
+  --accent-ink:#7FD9CC;
+  --warn:#F59E0B;
+  --crit:#F87171;
+  --good:#4ADE80;
+  --shadow:rgba(0,0,0,.45);
+}
+
+body{
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.6;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+*, *::before, *::after{ box-sizing: border-box; }
+
+.page{ max-width: 1180px; margin: 0 auto; padding: clamp(22px, 4vw, 48px) clamp(16px, 4vw, 40px) 64px; }
+
+.eyebrow{
+  font-family: var(--sans);
+  font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 6px;
+}
+h1{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 500;
+  font-size: clamp(32px, 5.4vw, 50px); line-height: 1.06; letter-spacing: -.015em;
+  text-wrap: balance; margin: 0 0 14px;
+}
+h2{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 600;
+  font-size: clamp(22px, 3vw, 30px); line-height: 1.18; letter-spacing: -.01em;
+  text-wrap: balance; margin: 0 0 14px;
+}
+h3{ font-family: var(--sans); font-weight: 600; font-size: 16px; margin: 30px 0 10px; }
+p{ margin: 0 0 14px; }
+strong{ font-weight: 600; }
+a{ color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+a:hover{ color: var(--accent); }
+code, .mono{ font-family: var(--mono); font-size: .88em; color: var(--accent-ink); word-break: break-word; }
+
+.masthead{ border-bottom: 2px solid var(--ink); padding-bottom: 22px; margin-bottom: clamp(24px, 4vw, 40px); }
+.standfirst{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 500;
+  font-size: clamp(17px, 2.2vw, 21px); line-height: 1.42; color: var(--muted);
+  max-width: 62ch; margin: 0;
+}
+
+.layout{ display: grid; gap: clamp(26px, 4vw, 54px); grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 940px){
+  .layout{ grid-template-columns: 260px minmax(0, 1fr); }
+  .rail{ position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow-y: auto; }
+}
+.rail{ align-self: start; }
+.glance{ background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--accent); padding: 18px 18px 16px; }
+.pill{
+  display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--good); border: 1px solid currentColor; border-radius: 999px; padding: 3px 10px; margin-bottom: 14px;
+}
+.meta{ margin: 0; font-size: 13.5px; }
+.meta dt{ font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 12px; }
+.meta dd{ margin: 2px 0 0; color: var(--ink); line-height: 1.45; }
+.meta dd .mono{ font-size: 12.5px; }
+.toc{ margin-top: 22px; border-top: 1px solid var(--line); padding-top: 14px; }
+.toc ol{ list-style: none; margin: 0; padding: 0; }
+.toc li{ margin: 0; border-bottom: 1px solid var(--line); }
+.toc li:last-child{ border-bottom: 0; }
+.toc a{ display: block; padding: 7px 0; font-size: 13.5px; line-height: 1.35; color: var(--ink); text-decoration: none; }
+.toc a:hover{ color: var(--accent); }
+
+.record > section{ margin-bottom: clamp(36px, 5vw, 56px); scroll-margin-top: 24px; }
+.record > section > p,
+.record > section > ul > li,
+.record > section > ol > li{ max-width: 68ch; }
+.record ul, .record ol{ margin: 0 0 14px; padding-left: 1.15em; }
+.record li{ margin-bottom: 8px; }
+.record ol{ padding-left: 1.3em; }
+.record ol li::marker{ font-family: var(--mono); font-size: .86em; color: var(--muted); }
+
+.finding{ border-left: 3px solid var(--accent); background: var(--surface); padding: 18px 22px; margin: 26px 0 0; }
+.finding p{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 500;
+  font-size: clamp(19px, 2.6vw, 24px); line-height: 1.32; margin: 0; max-width: 44ch;
+}
+
+.scroll{ overflow-x: auto; margin: 0 0 6px; -webkit-overflow-scrolling: touch; }
+table{ width: 100%; border-collapse: collapse; font-size: 14.5px; line-height: 1.48; font-variant-numeric: tabular-nums; }
+.scroll table{ min-width: 560px; }
+.scroll.wide table{ min-width: 720px; }
+caption{
+  caption-side: top; text-align: left; font-size: 11.5px; font-weight: 600; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); padding-bottom: 8px;
+}
+th{
+  text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); padding: 0 14px 8px 0; border-bottom: 2px solid var(--line); vertical-align: bottom;
+}
+td{ padding: 9px 14px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th:last-child, td:last-child{ padding-right: 0; }
+th.num, td.num{ text-align: right; font-family: var(--mono); white-space: nowrap; }
+td.key{ font-family: var(--mono); font-size: 12.5px; color: var(--accent-ink); white-space: nowrap; }
+td.tag{ font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+td.pending{ font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+.tnote{ font-size: 13px; color: var(--muted); margin: 10px 0 0; max-width: 68ch; }
+
+figure{ margin: 26px 0 0; background: var(--surface); border: 1px solid var(--line); padding: 18px clamp(14px, 2.4vw, 22px) 16px; position: relative; }
+figcaption{ margin-bottom: 14px; }
+figcaption .ftitle{ font-family: var(--sans); font-weight: 600; font-size: 16px; line-height: 1.3; margin: 0; }
+figcaption .fsub{ font-size: 13px; color: var(--muted); margin: 4px 0 0; max-width: 62ch; }
+.chart svg{ display: block; width: 100%; height: auto; }
+.chart .scroll svg{ min-width: 520px; }
+.bar{ fill: var(--accent); }
+.mark.is-hot{ stroke: var(--ink); stroke-width: 1.5; }
+.hit{ fill: transparent; stroke: transparent; stroke-width: 2; }
+.hit:focus-visible{ stroke: var(--ink); outline: none; }
+.axis{ stroke: var(--line); stroke-width: 1; }
+.grid{ stroke: var(--line); stroke-width: 1; }
+.refline{ stroke: var(--muted); stroke-width: 1; stroke-dasharray: 5 4; }
+.t-cat{ font-family: var(--sans); font-size: 12.5px; fill: var(--muted); }
+.t-val{ font-family: var(--mono); font-size: 12px; font-weight: 500; fill: var(--ink); font-variant-numeric: tabular-nums; }
+.t-tick{ font-family: var(--mono); font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.t-unit{ font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; fill: var(--muted); }
+.t-axis{ font-family: var(--sans); font-size: 12px; fill: var(--muted); }
+.t-ref{ font-family: var(--sans); font-size: 11.5px; fill: var(--muted); }
+.tip{
+  position: absolute; z-index: 6; pointer-events: none;
+  background: var(--surface); border: 1px solid var(--line);
+  padding: 7px 11px; max-width: 260px; box-shadow: 0 2px 12px var(--shadow);
+}
+.tip .tv{ display: block; font-family: var(--mono); font-weight: 500; font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.tip .tl{ display: block; font-size: 12px; line-height: 1.35; color: var(--muted); margin-top: 2px; }
+
+/* ---------- mermaid, themed from the tokens ---------- */
+pre.mermaid{ margin: 0; background: transparent; font-family: var(--sans); text-align: left; min-width: 580px; }
+pre.mermaid svg{ max-width: 100%; height: auto; }
+.mermaid .node rect,
+.mermaid .node polygon,
+.mermaid .node circle,
+.mermaid .node ellipse,
+.mermaid .node path,
+.mermaid .cluster rect{
+  fill: var(--surface) !important;
+  stroke: var(--line) !important;
+  stroke-width: 1.25px !important;
+}
+.mermaid .nodeLabel,
+.mermaid .nodeLabel p,
+.mermaid .label,
+.mermaid .label text,
+.mermaid text.nodeLabel,
+.mermaid span.nodeLabel{
+  color: var(--ink) !important;
+  fill: var(--ink) !important;
+  font-family: var(--sans) !important;
+  font-size: 13px !important;
+  line-height: 1.35 !important;
+}
+.mermaid .edgeLabel,
+.mermaid .edgeLabel p,
+.mermaid .edgeLabel rect,
+.mermaid .edgeLabel foreignObject div,
+.mermaid .edgeLabel span{
+  color: var(--muted) !important;
+  fill: var(--muted) !important;
+  background: var(--surface) !important;
+  background-color: var(--surface) !important;
+  font-family: var(--sans) !important;
+  font-size: 12px !important;
+}
+.mermaid .edgePath .path,
+.mermaid .flowchart-link,
+.mermaid path.path{ stroke: var(--accent) !important; stroke-width: 1.5px !important; }
+.mermaid .arrowheadPath,
+.mermaid marker path,
+.mermaid defs marker path{ fill: var(--accent) !important; stroke: var(--accent) !important; }
+
+.source{ margin-top: clamp(30px, 5vw, 48px); border-top: 1px solid var(--line); padding-top: 14px; font-size: 13px; color: var(--muted); }
+.source .mono{ color: var(--muted); }
+
+:where(a, button, [tabindex]):focus-visible{ outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce){
+  :root{ scroll-behavior: auto; }
+  *, *::before, *::after{ animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow">Architecture decision record &middot; ADR-0003</p>
+    <h1>Operating at enterprise scale</h1>
+    <p class="standfirst">900 OpenShift clusters under many ACM hubs, each with hundreds of application namespaces. What changes, in order of what actually limits the system.</p>
+  </header>
+
+  <div class="layout">
+
+    <aside class="rail">
+      <div class="glance">
+        <p class="eyebrow">Decision at a glance</p>
+        <span class="pill">Accepted</span>
+        <dl class="meta">
+          <dt>Date</dt>
+          <dd>September 2026</dd>
+          <dt>Target</dt>
+          <dd>900 clusters, 200 to 300 application namespaces each, hundreds of users and agents</dd>
+          <dt>Related</dt>
+          <dd>ADR-0001 Redis as the fleet state store<br>ADR-0002 Natural-language fleet queries</dd>
+          <dt>Order of limits</dt>
+          <dd>Collector, then coordination, then fleet-wide reads</dd>
+        </dl>
+        <nav class="toc" aria-label="Sections">
+          <p class="eyebrow">Contents</p>
+          <ol>
+            <li><a href="#context">Context</a></li>
+            <li><a href="#bottleneck">Finding 1: the collector is the bottleneck</a></li>
+            <li><a href="#sharding">Finding 2: sharded and coordinated</a></li>
+            <li><a href="#reads">Finding 3: pagination and rollups</a></li>
+            <li><a href="#enterprise">Finding 4: what enterprise adds</a></li>
+            <li><a href="#measured">Measured on a synthetic load</a></li>
+            <li><a href="#rollout">Rollout plan</a></li>
+            <li><a href="#consequences">Consequences</a></li>
+          </ol>
+        </nav>
+      </div>
+    </aside>
+
+    <main class="record">
+
+      <section id="context">
+        <p class="eyebrow">Section</p>
+        <h2>Context</h2>
+        <p>The local design is one collector process, one Redis, one API, ten kind clusters. The target is 900 OpenShift clusters under many ACM hubs, each with 200 to 300 application namespaces, tens of thousands of inventory objects, and hundreds of users and agents asking questions.</p>
+        <p>This record states what changes, in the order of what actually limits the system.</p>
+
+        <div class="finding">
+          <p class="eyebrow">Headline finding</p>
+          <p>The collector is the bottleneck, not Redis: 109 GB of raw JSON per full sweep.</p>
+        </div>
+      </section>
+
+      <section id="bottleneck">
+        <p class="eyebrow">Finding 1</p>
+        <h2>The collector, not Redis, is the bottleneck</h2>
+        <p>Redis at 900 clusters is about 5 GB (ADR-0001). The collection side, extrapolated from the same per-cluster assumptions (6k Secrets, 5k ConfigMaps, 8k Pods, 1.7k workloads, plus everything else the manifest enables), pulls about <strong>120 MB of raw Kubernetes JSON per cluster per sweep</strong>, because Secrets and ConfigMaps are fetched whole and scrubbed in the collector.</p>
+
+        <div class="scroll">
+          <table>
+            <caption>Aggregate cost of a full sweep across 900 clusters</caption>
+            <thead>
+              <tr>
+                <th scope="col">Sweep interval</th>
+                <th scope="col" class="num">Aggregate pull</th>
+                <th scope="col" class="num">Sustained network</th>
+                <th scope="col" class="num">Parse CPU (Python, ~50 MB/s per core)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td class="key">2 min (today's default)</td><td class="num">109 GB</td><td class="num">~7.3 Gbit/s</td><td class="num">~18 cores</td></tr>
+              <tr><td class="key">5 min</td><td class="num">109 GB</td><td class="num">~2.9 Gbit/s</td><td class="num">~7 cores</td></tr>
+              <tr><td class="key">15 min</td><td class="num">109 GB</td><td class="num">~1.0 Gbit/s</td><td class="num">~2.4 cores</td></tr>
+              <tr><td class="key">60 min</td><td class="num">109 GB</td><td class="num">~0.24 Gbit/s</td><td class="num">~0.6 cores</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tnote">Parse CPU is continuous, not peak: the cores have to be there for the whole interval.</p>
+
+        <figure class="chart" id="fig-bandwidth">
+          <figcaption>
+            <p class="ftitle">Sustained pull bandwidth against sweep interval, 900 clusters</p>
+            <p class="fsub">Gigabits per second, linear scale. The dashed rule marks a 1 Gbit/s sustained budget; only a 15-minute sweep or slower fits under it.</p>
+          </figcaption>
+          <div class="scroll">
+            <svg viewBox="0 0 660 310" role="img" aria-labelledby="fig3-title" preserveAspectRatio="xMinYMin meet">
+              <title id="fig3-title">Column chart of sustained pull bandwidth for 900 clusters by sweep interval: 2 minutes 7.3 gigabits per second, 5 minutes 2.9, 15 minutes 1.0, 60 minutes 0.24, against a dashed 1 gigabit per second reference line.</title>
+
+              <text class="t-unit" x="52" y="17">Gbit/s</text>
+
+              <line class="grid" x1="52" y1="30" x2="560" y2="30"></line>
+              <line class="grid" x1="52" y1="103.33" x2="560" y2="103.33"></line>
+              <line class="grid" x1="52" y1="176.67" x2="560" y2="176.67"></line>
+              <line class="axis" x1="52" y1="250" x2="560" y2="250"></line>
+
+              <text class="t-tick" x="44" y="34" text-anchor="end">9</text>
+              <text class="t-tick" x="44" y="107.33" text-anchor="end">6</text>
+              <text class="t-tick" x="44" y="180.67" text-anchor="end">3</text>
+              <text class="t-tick" x="44" y="254" text-anchor="end">0</text>
+
+              <g class="marks">
+                <path class="bar mark" id="c3b0" d="M103.5,250 V75.56 A4,4 0 0 1 107.5,71.56 H123.5 A4,4 0 0 1 127.5,75.56 V250 Z"></path>
+                <path class="bar mark" id="c3b1" d="M230.5,250 V183.11 A4,4 0 0 1 234.5,179.11 H250.5 A4,4 0 0 1 254.5,183.11 V250 Z"></path>
+                <path class="bar mark" id="c3b2" d="M357.5,250 V229.56 A4,4 0 0 1 361.5,225.56 H377.5 A4,4 0 0 1 381.5,229.56 V250 Z"></path>
+                <path class="bar mark" id="c3b3" d="M484.5,250 V247.03 A2.9,2.9 0 0 1 487.4,244.13 H505.6 A2.9,2.9 0 0 1 508.5,247.03 V250 Z"></path>
+              </g>
+
+              <line class="refline" x1="52" y1="225.56" x2="560" y2="225.56"></line>
+              <text class="t-ref" x="566" y="229.5">1 Gbit/s</text>
+
+              <g>
+                <text class="t-val" x="115.5" y="63.6" text-anchor="middle">7.3</text>
+                <text class="t-val" x="242.5" y="171.1" text-anchor="middle">2.9</text>
+                <text class="t-val" x="369.5" y="217.6" text-anchor="middle">1.0</text>
+                <text class="t-val" x="496.5" y="240" text-anchor="middle">0.24</text>
+              </g>
+
+              <g>
+                <text class="t-cat" x="115.5" y="270" text-anchor="middle">2 min</text>
+                <text class="t-cat" x="242.5" y="270" text-anchor="middle">5 min</text>
+                <text class="t-cat" x="369.5" y="270" text-anchor="middle">15 min</text>
+                <text class="t-cat" x="496.5" y="270" text-anchor="middle">60 min</text>
+              </g>
+              <text class="t-axis" x="306" y="294" text-anchor="middle">Sweep interval</text>
+
+              <g class="hits">
+                <rect class="hit" x="52" y="24" width="127" height="246" tabindex="0" data-mark="c3b0" data-value="7.3 Gbit/s" data-label="2 min sweep, today's default. 109 GB per sweep, about 18 parse cores continuously."></rect>
+                <rect class="hit" x="179" y="24" width="127" height="246" tabindex="0" data-mark="c3b1" data-value="2.9 Gbit/s" data-label="5 min sweep. 109 GB per sweep, about 7 parse cores."></rect>
+                <rect class="hit" x="306" y="24" width="127" height="246" tabindex="0" data-mark="c3b2" data-value="1.0 Gbit/s" data-label="15 min sweep. 109 GB per sweep, about 2.4 parse cores."></rect>
+                <rect class="hit" x="433" y="24" width="127" height="246" tabindex="0" data-mark="c3b3" data-value="0.24 Gbit/s" data-label="60 min sweep. 109 GB per sweep, about 0.6 parse cores."></rect>
+              </g>
+            </svg>
+          </div>
+          <div class="tip" hidden></div>
+        </figure>
+
+        <figure class="chart" id="fig-cpu">
+          <figcaption>
+            <p class="ftitle">Parse CPU held continuously, 900 clusters</p>
+            <p class="fsub">Python cores at about 50 MB/s each, on its own scale. Shown separately rather than on a second axis so the two measures are never read against one another.</p>
+          </figcaption>
+          <div class="scroll">
+            <svg viewBox="0 0 660 164" role="img" aria-labelledby="fig4-title" preserveAspectRatio="xMinYMin meet">
+              <title id="fig4-title">Horizontal bar chart of continuous parse CPU by sweep interval: 2 minutes 18 cores, 5 minutes 7 cores, 15 minutes 2.4 cores, 60 minutes 0.6 cores.</title>
+              <line class="axis" x1="106" y1="12" x2="106" y2="148"></line>
+
+              <g class="marks">
+                <path class="bar mark" id="c4b0" d="M106,19 H542 A4,4 0 0 1 546,23 V35 A4,4 0 0 1 542,39 H106 Z"></path>
+                <path class="bar mark" id="c4b1" d="M106,53 H273.11 A4,4 0 0 1 277.11,57 V69 A4,4 0 0 1 273.11,73 H106 Z"></path>
+                <path class="bar mark" id="c4b2" d="M106,87 H160.67 A4,4 0 0 1 164.67,91 V103 A4,4 0 0 1 160.67,107 H106 Z"></path>
+                <path class="bar mark" id="c4b3" d="M106,121 H116.67 A4,4 0 0 1 120.67,125 V137 A4,4 0 0 1 116.67,141 H106 Z"></path>
+              </g>
+
+              <g>
+                <text class="t-cat" x="96" y="29" text-anchor="end">2 min</text>
+                <text class="t-cat" x="96" y="63" text-anchor="end">5 min</text>
+                <text class="t-cat" x="96" y="97" text-anchor="end">15 min</text>
+                <text class="t-cat" x="96" y="131" text-anchor="end">60 min</text>
+              </g>
+
+              <g>
+                <text class="t-val" x="554" y="29">18 cores</text>
+                <text class="t-val" x="285.11" y="63">7 cores</text>
+                <text class="t-val" x="172.67" y="97">2.4 cores</text>
+                <text class="t-val" x="128.67" y="131">0.6 cores</text>
+              </g>
+
+              <g class="hits">
+                <rect class="hit" x="0" y="12" width="660" height="34" tabindex="0" data-mark="c4b0" data-value="18 cores" data-label="2 min sweep: parse CPU held continuously"></rect>
+                <rect class="hit" x="0" y="46" width="660" height="34" tabindex="0" data-mark="c4b1" data-value="7 cores" data-label="5 min sweep: parse CPU held continuously"></rect>
+                <rect class="hit" x="0" y="80" width="660" height="34" tabindex="0" data-mark="c4b2" data-value="2.4 cores" data-label="15 min sweep: parse CPU held continuously"></rect>
+                <rect class="hit" x="0" y="114" width="660" height="34" tabindex="0" data-mark="c4b3" data-value="0.6 cores" data-label="60 min sweep: parse CPU held continuously"></rect>
+              </g>
+            </svg>
+          </div>
+          <div class="tip" hidden></div>
+        </figure>
+
+        <p style="margin-top:22px">A single 2-minute full sweep is not viable at 900 clusters. The fix is not a bigger collector; it is collecting less, less often, and only what changed.</p>
+
+        <h3>Decision</h3>
+        <ol>
+          <li><strong>Tiered refresh intervals per manifest resource.</strong> Platform state (ClusterVersion, ClusterOperators, nodes, node metrics, MCPs, pod issues) every 2 to 5 min; inventory kinds (workloads, services, routes, PVCs, quotas, OLM) every 15 to 30 min; heavy scrub-only kinds (Secrets, ConfigMaps for certificate facts) every 1 to 6 h. The manifest gets an <code>interval</code> per resource, the collector keeps per-cluster and per-kind due times, and a cluster write merges the freshly collected sections with the cached ones, since sections are already independent keys.</li>
+          <li><strong>Watch instead of poll for churny kinds.</strong> Pods and Events change constantly but mostly incrementally. A <code>LIST</code> plus <code>WATCH</code> (resourceVersion) informer per cluster for those kinds turns 56 MB of pod JSON per sweep into a stream of deltas. This is the standard Kubernetes pattern and is what ACM Search does.</li>
+          <li><strong>Metadata-only lists where values are not needed.</strong> For kinds where only names, labels and counts matter, request <code>PartialObjectMetadata</code> (<code>application/json;as=PartialObjectMetadata;v=v1;g=meta.k8s.io</code>) and cut per-object size by 5 to 10x. Secrets that carry certificates still need the data field to read the certificate facts; the tiered interval covers them.</li>
+          <li><strong>Per-cluster QPS budget.</strong> Bound requests per cluster, since kube-apiserver priority and fairness will throttle otherwise, and keep <code>LIST_PAGE_SIZE</code> at 500.</li>
+        </ol>
+      </section>
+
+      <section id="sharding">
+        <p class="eyebrow">Finding 2</p>
+        <h2>Collection must be sharded and coordinated, and Redis is the right coordinator</h2>
+        <p>One process cannot hold about 100 concurrent cluster collections with informers. The decision is <strong>collector shards per hub, or per group of hubs, coordinated through Redis</strong>.</p>
+
+        <figure class="diagram">
+          <figcaption>
+            <p class="ftitle">Sharded collector topology</p>
+            <p class="fsub">A leader-elected scheduler enqueues tiered jobs; a consumer group hands each job to exactly one worker; each shard writes only its own clusters' keys.</p>
+          </figcaption>
+          <div class="scroll">
+<pre class="mermaid">
+flowchart LR
+  sched["Scheduler pod&lt;br/&gt;elected by SET NX PX lease"] -->|"tiered due times"| stream[("Redis Stream&lt;br/&gt;collect jobs")]
+  stream -->|"consumer group &middot; XAUTOCLAIM"| sa["Shard A&lt;br/&gt;hubs 1-6 &middot; 16 workers"]
+  stream --> sb["Shard B&lt;br/&gt;hubs 7-12 &middot; 16 workers"]
+  stream --> sc["Shard C&lt;br/&gt;hubs 13-18 &middot; 16 workers"]
+  stream --> sd["Shard D&lt;br/&gt;hubs 19-24 &middot; 16 workers"]
+  sa -->|"MULTI per cluster"| redis[("Redis&lt;br/&gt;per-cluster keys &middot; fleet indexes")]
+  sb --> redis
+  sc --> redis
+  sd --> redis
+  redis --> api["API pods&lt;br/&gt;paginated reads &middot; precomputed rollups"]
+  api --> out["Dashboard &middot; MCP &middot; NL SQL"]
+</pre>
+          </div>
+        </figure>
+
+        <ul style="margin-top:22px">
+          <li>A Redis Stream <code>odl:{fleet}:collect</code> holds collection jobs (<code>cluster</code>, <code>kinds</code>, <code>due</code>). A consumer group with one consumer per collector pod hands each job to exactly one worker, with pending-entry claims (<code>XAUTOCLAIM</code>) for crashed workers.</li>
+          <li>A scheduler, any pod elected by a <code>SET NX PX</code> lease, enqueues jobs from the manifest's tiered schedule and from on-demand refresh requests.</li>
+          <li>Each shard writes only its clusters' keys. Fleet indexes are shared and only touched through per-cluster ledgers, so shards never conflict (ADR-0001).</li>
+          <li>Credentials stay per hub: a shard mounts only the kubeconfigs and service accounts of the hubs it serves, so the blast radius of a compromised shard is its hubs.</li>
+        </ul>
+        <p><strong>Capacity math:</strong> at about 15 s per full cluster collection and 4 shards times 16 workers, a full inventory pass over 900 clusters takes about 4 min. With tiered intervals and watches, the steady-state load is a small fraction of that.</p>
+      </section>
+
+      <section id="reads">
+        <p class="eyebrow">Finding 3</p>
+        <h2>Fleet-wide reads need pagination and precomputed rollups</h2>
+        <p>At 900 clusters the fleet hashes reach 10<sup>5</sup> to 10<sup>6</sup> entries: routes about 720k, PVCs about 540k, namespaces about 290k.</p>
+        <ul>
+          <li>Every fleet-wide list endpoint gains <code>limit</code> and <code>cursor</code> (an HSCAN cursor) and returns <code>total</code> from <code>HLEN</code>, <code>SCARD</code> or <code>ZCOUNT</code>; the dashboard pages.</li>
+          <li>Rollups that every screen shows (health by dimension, version spread, insights counters, capacity by group) are computed once at the end of each scheduler tick into <code>odl:{fleet}:rollup:*</code> keys, not per request.</li>
+          <li>Top-N questions come from ZSETs, as is already the case for namespaces and nodes.</li>
+          <li><code>HGETALL</code> on a fleet hash is forbidden in the API. <code>HSCAN</code> with a bounded page, or <code>HMGET</code> from an index set, are the only patterns.</li>
+        </ul>
+      </section>
+
+      <section id="enterprise">
+        <p class="eyebrow">Finding 4</p>
+        <h2>What "enterprise" adds around the core</h2>
+        <div class="scroll wide">
+          <table>
+            <caption>Requirements around the data layer, and the decision for each</caption>
+            <thead>
+              <tr><th scope="col">Area</th><th scope="col">Requirement</th><th scope="col">Decision</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="tag">Identity and access</td>
+                <td>Every request attributable; teams see their applications; platform teams see everything.</td>
+                <td>OIDC through the corporate IdP in front of the API and the MCP server. A scope resolver maps identity to allowed teams, environments and regions; the API applies the scope as a filter on <code>namespaces</code> and <code>clusters</code>, and as a wrapping view for NL SQL (ADR-0002). No anonymous access.</td>
+              </tr>
+              <tr>
+                <td class="tag">Secrets in the cache</td>
+                <td>Nothing sensitive may sit in Redis.</td>
+                <td>Already true by construction: values, certificate material and env values never leave the parser. Enforced by tests (<code>test_scrub.py</code>) and by the manifest's closed annotation allow-list.</td>
+              </tr>
+              <tr>
+                <td class="tag">Transport and Redis security</td>
+                <td>Encryption in transit, least privilege.</td>
+                <td>TLS to Redis (<code>rediss://</code>) and Redis ACL users: <code>collector</code> (write), <code>api</code> (read-only commands), <code>scheduler</code> (streams and leases). No <code>FLUSHALL</code>, <code>KEYS</code> or <code>CONFIG</code> for any app user.</td>
+              </tr>
+              <tr>
+                <td class="tag">Availability</td>
+                <td>The dashboard must survive a Redis or collector failure.</td>
+                <td>Redis primary plus replica with automatic failover (Sentinel or managed HA); RDB every 5 min so a restart serves the last picture; API pods stateless and horizontally scaled; the query snapshot (ADR-0002) rebuilt from Redis on start.</td>
+              </tr>
+              <tr>
+                <td class="tag">Disaster recovery</td>
+                <td>Lose Redis entirely.</td>
+                <td>The cache is rebuildable from the fleet; a full rebuild is throttled by tiered intervals and takes about 10 to 15 min for platform state at 900 clusters. RDB backups to object storage give instant restore instead.</td>
+              </tr>
+              <tr>
+                <td class="tag">Observability of the data layer</td>
+                <td>Know when the picture is stale before users do.</td>
+                <td>Metrics: sweep lag per cluster (<code>now - last_synced</code>), jobs pending / claimed / failed per shard, per-kind collection duration and error rates, Redis memory and fragmentation, API p95 per endpoint, snapshot build time. SLOs: 95% of clusters fresher than 2x their tier interval, API p95 under 300 ms for fleet endpoints. Alerts on staleness, on <code>noeviction</code> OOM, and on stream backlog.</td>
+              </tr>
+              <tr>
+                <td class="tag">Audit</td>
+                <td>Who asked what.</td>
+                <td>Structured request logs with identity, endpoint and filters, and for NL queries the question and the SQL. Shipped to the platform log store.</td>
+              </tr>
+              <tr>
+                <td class="tag">Multi-region</td>
+                <td>Hubs in several regions, one view.</td>
+                <td>One Redis per region fed by regional shards, plus a thin global API that fans out (<code>SINTER</code> results merged in the API), or a single central Redis if latency and data-residency rules allow. Data residency decides, not performance.</td>
+              </tr>
+              <tr>
+                <td class="tag">Retention and history</td>
+                <td>Trend questions beyond 500 sweeps.</td>
+                <td>Per-cluster ZSETs stay bounded. Export health snapshots and fleet rollups per hour to Parquet in object storage; that export is the warehouse feed for ADR-0002 option 4.</td>
+              </tr>
+              <tr>
+                <td class="tag">Change management</td>
+                <td>Manifest and schema evolve.</td>
+                <td>The manifest is config, versioned. Adding a resource adds a parser, a section field, a snapshot column and a semantic-layer line in one change. RBAC for the collector is generated from the manifest (<code>make rbac</code>).</td>
+              </tr>
+              <tr>
+                <td class="tag">Capacity planning for the cache</td>
+                <td>Predictable growth.</td>
+                <td>Memory per cluster is about 1.4 MB of detail plus about 3 MB of fleet-index share (ADR-0001). Alert at 70% of <code>maxmemory</code>; the reference index and the events kind are the first to demote to per-cluster-only if memory is tight.</td>
+              </tr>
+              <tr>
+                <td class="tag">Testing at scale</td>
+                <td>Prove numbers, not estimates.</td>
+                <td><code>scripts/synth_load.py</code> generates N realistic cluster documents and persists them; run at 900 in CI-lite to track memory, write throughput and read latency per release.</td>
+              </tr>
+              <tr>
+                <td class="tag">Cost</td>
+                <td>Order of magnitude.</td>
+                <td>Redis 16 GB HA pair; 4 to 6 collector pods at 2 vCPU and 4 GB each; 3 API pods; object storage for exports. The LLM cost of NL queries is per question with a cached schema prompt, typically cents.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="measured">
+        <p class="eyebrow">Section</p>
+        <h2>Measured on a synthetic 900-cluster load</h2>
+        <p>Numbers below come from <code>scripts/synth_load.py</code>, which generates and persists 900 realistic cluster documents and then exercises the fleet endpoints. They are recorded here, per release, so the estimates above can be checked against reality.</p>
+        <!-- MEASURED -->
+        <p>The Redis numbers above were a model. <code>data-layer/scripts/synth_load.py</code> replaced them with measurements: 900 documents in the exact shape the collector produces (250 application and 70 platform namespaces, about 1,700 workloads and 16,600 inventory objects per cluster, 24.1 M rows in total), persisted through the real store into a throwaway Redis 7. Full report: <code>docs/adr/synthetic-load-900.md</code>.</p>
+        <div class="scroll">
+          <table>
+            <caption>Synthetic load test, 900 clusters (measured)</caption>
+            <thead>
+              <tr><th scope="col">Measurement</th><th scope="col" class="num">Result</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Redis used memory</td><td class="num">4.79 GB (RSS 4.78 GB, fragmentation 1.0)</td></tr>
+              <tr><td>Keys</td><td class="num">54,508</td></tr>
+              <tr><td>Per-cluster footprint</td><td class="num">1.31 MB (1.02 MB sections, 0.19 MB ledger)</td></tr>
+              <tr><td>Section compression</td><td class="num">12.8x (12.97 MB raw JSON per cluster)</td></tr>
+              <tr><td>Write throughput, one process, 4 threads</td><td class="num">1.52 clusters/s (593.7 s for 900), flat to the end</td></tr>
+              <tr><td>One cluster write</td><td class="num">1 MULTI/EXEC, 18,158 index contributions, 1.92 s CPU</td></tr>
+              <tr><td>Read p95: cluster detail / counters / top-N / certificates</td><td class="num">5.3 / 0.3 / 2.0 / 7.6 ms</td></tr>
+              <tr><td>Read p95: all 900 summaries / rejected routes (17,870 rows)</td><td class="num">126 / 250 ms</td></tr>
+              <tr><td>Read p95: all application namespaces (225,000 rows)</td><td class="num">5.4 s</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Where the memory went: fleet resource hashes 1.83 GB (37%), per-cluster sections 0.96 GB (19%), certificate and node, namespace and pod-issue indexes 0.77 GB (16%), config reference sets 0.62 GB (12%), the namespace index hash 0.40 GB (8%), image usage sets 0.23 GB (5%), ledgers 0.17 GB (3%).</p>
+        <ul>
+          <li><strong>The 5 GB headline holds</strong> (4.79 GB measured), with a different split: sections compressed 12.8x rather than 8x, and the fleet indexes came to 3.77 GB rather than 2.75 GB.</li>
+          <li><strong>Certificates are three times the estimate</strong> (600 k rows, 0.58 GB): OpenShift injects <code>kube-root-ca.crt</code> into every namespace, so all 320 namespaces contribute a certificate row. Excluding the injected service CA from the certificate index halves that and is a manifest-level change.</li>
+          <li><strong>The ledger is a real cost</strong> (0.19 MB per cluster) that the model omitted; it is the price of exact index removal and belongs in the capacity plan.</li>
+          <li><strong>Fragmentation did not occur</strong> on a write-once load (ratio 1.0); the 25% allowance covers steady-state rewrites and stays.</li>
+          <li><strong>The applications listing must paginate</strong>, as Finding 3 predicts: reads filtered by team or application take about 22 ms, the unfiltered fleet-wide read takes seconds. <code>limit</code> plus cursor on <code>/api/applications</code> is the first item of the next phase.</li>
+          <li><strong>Write cost is about 2 s of CPU per cluster</strong> in the persisting process, which confirms the sharded-collector decision: 4 shards with 4 threads each bring a full rewrite of 900 clusters to about 2 minutes.</li>
+        </ul>
+      </section>
+
+      <section id="rollout">
+        <p class="eyebrow">Section</p>
+        <h2>Rollout plan</h2>
+        <ol>
+          <li><strong>Now, this branch:</strong> Redis store, atomic per-cluster writes, fleet indexes, on-demand refresh, <code>stale</code> flags, NL query over the snapshot, unit and end-to-end tests, synthetic load numbers.</li>
+          <li><strong>Next:</strong> <code>limit</code> and <code>cursor</code> on <code>/api/applications</code> and the other fleet endpoints (the one measured slow read), exclude the injected service CA from the certificate index, tiered intervals in the manifest, precomputed rollups, OIDC plus scopes, Redis ACL and TLS, metrics and SLO alerts.</li>
+          <li><strong>Then:</strong> collector shards with the Redis Stream work queue, informers for pods and events, <code>PartialObjectMetadata</code> lists, Parquet exports, and the incremental snapshot for NL queries.</li>
+          <li><strong>Later, if needed:</strong> RediSearch where the managed Redis offers it; a warehouse over the Parquet exports for long history and cost analytics.</li>
+        </ol>
+      </section>
+
+      <section id="consequences">
+        <p class="eyebrow">Section</p>
+        <h2>Consequences</h2>
+        <ul>
+          <li>The architecture separates concerns cleanly: pull (collector shards), cache (Redis, atomic per cluster), serve (API with indexes and rollups), ask (NL over a snapshot).</li>
+          <li>The biggest engineering investment at scale is in the collector - tiering, watches, sharding - not in storage.</li>
+          <li>Every fleet-wide API surface must be designed as paginated from now on. Unpaginated <code>HGETALL</code> reads are a defect, not a shortcut.</li>
+        </ul>
+      </section>
+
+      <p class="source">Source: <span class="mono">docs/adr/0003-enterprise-scale.md</span></p>
+
+    </main>
+  </div>
+</div>
+
+<script>
+(function () {
+  var figs = document.querySelectorAll('.chart');
+  Array.prototype.forEach.call(figs, function (fig) {
+    var tip = fig.querySelector('.tip');
+    if (!tip) return;
+    var hot = null;
+
+    function place(rect) {
+      var box = fig.getBoundingClientRect();
+      var x = rect.left - box.left + rect.width / 2 - tip.offsetWidth / 2;
+      var y = rect.top - box.top - tip.offsetHeight - 10;
+      if (y < 4) y = rect.top - box.top + rect.height + 10;
+      if (x < 4) x = 4;
+      if (x + tip.offsetWidth > box.width - 4) x = Math.max(4, box.width - tip.offsetWidth - 4);
+      tip.style.left = x + 'px';
+      tip.style.top = y + 'px';
+    }
+
+    function show(el) {
+      var v = document.createElement('span');
+      v.className = 'tv';
+      v.textContent = el.getAttribute('data-value') || '';
+      var l = document.createElement('span');
+      l.className = 'tl';
+      l.textContent = el.getAttribute('data-label') || '';
+      tip.textContent = '';
+      tip.appendChild(v);
+      tip.appendChild(l);
+      tip.hidden = false;
+      place(el.getBoundingClientRect());
+      if (hot) hot.classList.remove('is-hot');
+      hot = fig.querySelector('#' + el.getAttribute('data-mark'));
+      if (hot) hot.classList.add('is-hot');
+    }
+
+    function hide() {
+      tip.hidden = true;
+      if (hot) { hot.classList.remove('is-hot'); hot = null; }
+    }
+
+    Array.prototype.forEach.call(fig.querySelectorAll('.hit'), function (el) {
+      el.addEventListener('pointerenter', function () { show(el); });
+      el.addEventListener('pointermove', function () { show(el); });
+      el.addEventListener('pointerleave', hide);
+      el.addEventListener('focus', function () { show(el); });
+      el.addEventListener('blur', hide);
+    });
+    fig.addEventListener('pointerleave', hide);
+  });
+})();
+</script>

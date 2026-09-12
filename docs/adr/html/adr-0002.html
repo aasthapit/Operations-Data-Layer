@@ -1,0 +1,404 @@
+<title>Natural-Language Fleet Queries</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap');
+
+:root{
+  color-scheme: light;
+  --ground:#EEF2F1;
+  --surface:#FFFFFF;
+  --ink:#14201D;
+  --muted:#5B6B67;
+  --line:#C9D3D0;
+  --accent:#0F766E;
+  --accent-ink:#0B5A54;
+  --warn:#B45309;
+  --crit:#B91C1C;
+  --good:#15803D;
+  --shadow:rgba(20,32,29,.12);
+  --sans:"IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --display:"Newsreader", ui-serif, Georgia, "Times New Roman", Times, serif;
+  scroll-behavior: smooth;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#0D1413;
+    --surface:#142020;
+    --ink:#E4ECEA;
+    --muted:#94A6A1;
+    --line:#253431;
+    --accent:#3FB8A8;
+    --accent-ink:#7FD9CC;
+    --warn:#F59E0B;
+    --crit:#F87171;
+    --good:#4ADE80;
+    --shadow:rgba(0,0,0,.45);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#0D1413;
+  --surface:#142020;
+  --ink:#E4ECEA;
+  --muted:#94A6A1;
+  --line:#253431;
+  --accent:#3FB8A8;
+  --accent-ink:#7FD9CC;
+  --warn:#F59E0B;
+  --crit:#F87171;
+  --good:#4ADE80;
+  --shadow:rgba(0,0,0,.45);
+}
+
+body{
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.6;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+*, *::before, *::after{ box-sizing: border-box; }
+
+.page{ max-width: 1180px; margin: 0 auto; padding: clamp(22px, 4vw, 48px) clamp(16px, 4vw, 40px) 64px; }
+
+.eyebrow{
+  font-family: var(--sans);
+  font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 6px;
+}
+h1{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 500;
+  font-size: clamp(32px, 5.4vw, 50px); line-height: 1.06; letter-spacing: -.015em;
+  text-wrap: balance; margin: 0 0 14px;
+}
+h2{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 600;
+  font-size: clamp(22px, 3vw, 30px); line-height: 1.18; letter-spacing: -.01em;
+  text-wrap: balance; margin: 0 0 14px;
+}
+h3{ font-family: var(--sans); font-weight: 600; font-size: 16px; margin: 30px 0 10px; }
+p{ margin: 0 0 14px; }
+strong{ font-weight: 600; }
+a{ color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+a:hover{ color: var(--accent); }
+code, .mono{ font-family: var(--mono); font-size: .88em; color: var(--accent-ink); word-break: break-word; }
+
+.masthead{ border-bottom: 2px solid var(--ink); padding-bottom: 22px; margin-bottom: clamp(24px, 4vw, 40px); }
+.standfirst{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 500;
+  font-size: clamp(17px, 2.2vw, 21px); line-height: 1.42; color: var(--muted);
+  max-width: 62ch; margin: 0;
+}
+
+.layout{ display: grid; gap: clamp(26px, 4vw, 54px); grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 940px){
+  .layout{ grid-template-columns: 260px minmax(0, 1fr); }
+  .rail{ position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow-y: auto; }
+}
+.rail{ align-self: start; }
+.glance{ background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--accent); padding: 18px 18px 16px; }
+.pill{
+  display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--good); border: 1px solid currentColor; border-radius: 999px; padding: 3px 10px; margin-bottom: 14px;
+}
+.meta{ margin: 0; font-size: 13.5px; }
+.meta dt{ font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 12px; }
+.meta dd{ margin: 2px 0 0; color: var(--ink); line-height: 1.45; }
+.meta dd .mono{ font-size: 12.5px; }
+.toc{ margin-top: 22px; border-top: 1px solid var(--line); padding-top: 14px; }
+.toc ol{ list-style: none; margin: 0; padding: 0; }
+.toc li{ margin: 0; border-bottom: 1px solid var(--line); }
+.toc li:last-child{ border-bottom: 0; }
+.toc a{ display: block; padding: 7px 0; font-size: 13.5px; line-height: 1.35; color: var(--ink); text-decoration: none; }
+.toc a:hover{ color: var(--accent); }
+
+.record > section{ margin-bottom: clamp(36px, 5vw, 56px); scroll-margin-top: 24px; }
+.record > section > p,
+.record > section > ul > li,
+.record > section > ol > li{ max-width: 68ch; }
+.record ul, .record ol{ margin: 0 0 14px; padding-left: 1.15em; }
+.record li{ margin-bottom: 8px; }
+.record ol{ padding-left: 1.3em; }
+.record ol li::marker{ font-family: var(--mono); font-size: .86em; color: var(--muted); }
+
+.finding{ border-left: 3px solid var(--accent); background: var(--surface); padding: 18px 22px; margin: 26px 0 0; }
+.finding p{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 500;
+  font-size: clamp(19px, 2.6vw, 24px); line-height: 1.32; margin: 0; max-width: 44ch;
+}
+
+.scroll{ overflow-x: auto; margin: 0 0 6px; -webkit-overflow-scrolling: touch; }
+table{ width: 100%; border-collapse: collapse; font-size: 14.5px; line-height: 1.48; font-variant-numeric: tabular-nums; }
+.scroll table{ min-width: 560px; }
+.scroll.wide table{ min-width: 720px; }
+caption{
+  caption-side: top; text-align: left; font-size: 11.5px; font-weight: 600; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); padding-bottom: 8px;
+}
+th{
+  text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); padding: 0 14px 8px 0; border-bottom: 2px solid var(--line); vertical-align: bottom;
+}
+td{ padding: 9px 14px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th:last-child, td:last-child{ padding-right: 0; }
+th.num, td.num{ text-align: right; font-family: var(--mono); white-space: nowrap; }
+td.key{ font-family: var(--mono); font-size: 12.5px; color: var(--accent-ink); white-space: nowrap; }
+td.tag{ font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+tr.is-chosen td{ background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+tr.is-chosen td:first-child{ box-shadow: inset 3px 0 0 var(--accent); padding-left: 10px; }
+.tnote{ font-size: 13px; color: var(--muted); margin: 10px 0 0; max-width: 68ch; }
+
+figure{ margin: 26px 0 0; background: var(--surface); border: 1px solid var(--line); padding: 18px clamp(14px, 2.4vw, 22px) 16px; position: relative; }
+figcaption{ margin-bottom: 14px; }
+figcaption .ftitle{ font-family: var(--sans); font-weight: 600; font-size: 16px; line-height: 1.3; margin: 0; }
+figcaption .fsub{ font-size: 13px; color: var(--muted); margin: 4px 0 0; max-width: 62ch; }
+
+/* ---------- mermaid, themed from the tokens ---------- */
+.diagram .scroll{ padding-bottom: 4px; }
+pre.mermaid{
+  margin: 0; background: transparent; font-family: var(--sans); text-align: left;
+  min-width: 560px;
+}
+pre.mermaid svg{ max-width: 100%; height: auto; }
+.mermaid .node rect,
+.mermaid .node polygon,
+.mermaid .node circle,
+.mermaid .node ellipse,
+.mermaid .node path,
+.mermaid .cluster rect{
+  fill: var(--surface) !important;
+  stroke: var(--line) !important;
+  stroke-width: 1.25px !important;
+}
+.mermaid .nodeLabel,
+.mermaid .nodeLabel p,
+.mermaid .label,
+.mermaid .label text,
+.mermaid text.nodeLabel,
+.mermaid span.nodeLabel{
+  color: var(--ink) !important;
+  fill: var(--ink) !important;
+  font-family: var(--sans) !important;
+  font-size: 13px !important;
+  line-height: 1.35 !important;
+}
+.mermaid .edgeLabel,
+.mermaid .edgeLabel p,
+.mermaid .edgeLabel rect,
+.mermaid .edgeLabel foreignObject div,
+.mermaid .edgeLabel span{
+  color: var(--muted) !important;
+  fill: var(--muted) !important;
+  background: var(--surface) !important;
+  background-color: var(--surface) !important;
+  font-family: var(--sans) !important;
+  font-size: 12px !important;
+}
+.mermaid .edgePath .path,
+.mermaid .flowchart-link,
+.mermaid path.path{
+  stroke: var(--accent) !important;
+  stroke-width: 1.5px !important;
+}
+.mermaid .arrowheadPath,
+.mermaid marker path,
+.mermaid defs marker path{
+  fill: var(--accent) !important;
+  stroke: var(--accent) !important;
+}
+
+.source{ margin-top: clamp(30px, 5vw, 48px); border-top: 1px solid var(--line); padding-top: 14px; font-size: 13px; color: var(--muted); }
+.source .mono{ color: var(--muted); }
+
+:where(a, button, [tabindex]):focus-visible{ outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce){
+  :root{ scroll-behavior: auto; }
+  *, *::before, *::after{ animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow">Architecture decision record &middot; ADR-0002</p>
+    <h1>Natural-language questions over the fleet</h1>
+    <p class="standfirst">Text-to-SQL without a database server: the LLM writes DuckDB SQL against a generated semantic layer, a hard guard validates it, and an in-process snapshot of the Redis state executes it.</p>
+  </header>
+
+  <div class="layout">
+
+    <aside class="rail">
+      <div class="glance">
+        <p class="eyebrow">Decision at a glance</p>
+        <span class="pill">Accepted</span>
+        <dl class="meta">
+          <dt>Date</dt>
+          <dd>September 2026</dd>
+          <dt>Chosen option</dt>
+          <dd>Option 3: NL to SQL over an embedded analytical engine fed from Redis</dd>
+          <dt>Related</dt>
+          <dd>ADR-0001 Redis as the fleet state store<br>ADR-0003 Fleet data layer at 900 clusters<br><span class="mono">docs/nl-query.md</span></dd>
+          <dt>New dependencies</dt>
+          <dd><span class="mono">duckdb</span>, <span class="mono">pyarrow</span>, <span class="mono">sqlglot</span>, <span class="mono">anthropic</span></dd>
+        </dl>
+        <nav class="toc" aria-label="Sections">
+          <p class="eyebrow">Contents</p>
+          <ol>
+            <li><a href="#context">Context</a></li>
+            <li><a href="#options">Options considered</a></li>
+            <li><a href="#decision">Decision</a></li>
+            <li><a href="#why">Why this fits the constraint</a></li>
+            <li><a href="#enterprise">Enterprise concerns</a></li>
+            <li><a href="#consequences">Consequences</a></li>
+          </ol>
+        </nav>
+      </div>
+    </aside>
+
+    <main class="record">
+
+      <section id="context">
+        <p class="eyebrow">Section</p>
+        <h2>Context</h2>
+        <p>Operators and application teams want to ask questions the product did not anticipate. Which prod clusters in us-east run an nginx image older than 1.25, and which teams own those namespaces. How many certificates expire in the next 14 days per region. Which OLM packages drift across more than three versions.</p>
+        <p>Today an agent can answer many questions through the MCP tools (<code>blast_radius</code>, <code>expiring_certificates</code>, <code>inventory</code> and the rest), but each tool answers one shaped question; combining, aggregating and filtering across them is done by the agent in prose, which is slow, expensive and error prone.</p>
+        <p>The requirement is text-to-SQL: let a person or an agent ask in natural language and get a tabular answer with the query that produced it. The store is Redis (ADR-0001), which has no SQL engine, and Postgres is not allowed.</p>
+
+        <div class="finding">
+          <p class="eyebrow">Headline finding</p>
+          <p>Real SQL without a database server: DuckDB is a library, and the schema is the one we already document.</p>
+        </div>
+      </section>
+
+      <section id="options">
+        <p class="eyebrow">Section</p>
+        <h2>Options considered</h2>
+        <div class="scroll wide">
+          <table>
+            <caption>Five ways to answer an unanticipated question</caption>
+            <thead>
+              <tr><th scope="col">Option</th><th scope="col">How</th><th scope="col">Assessment</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="tag">1. NL to existing REST / MCP tools only</td>
+                <td>The agent picks tools; no new query surface.</td>
+                <td>Safe and bounded, and it stays the right path for known questions. It cannot express joins or aggregations the API did not ship; every new question is a code change.</td>
+              </tr>
+              <tr>
+                <td class="tag">2. NL to RediSearch query</td>
+                <td>Index the documents in Redis Stack; the LLM writes <code>FT.SEARCH</code> and <code>FT.AGGREGATE</code> pipelines.</td>
+                <td>Requires Redis modules, which are not universally available. RediSearch has no joins, so blast-radius style questions are impossible in one query. LLMs write this dialect poorly and there is no ecosystem for validating it.</td>
+              </tr>
+              <tr class="is-chosen">
+                <td class="tag">3. NL to SQL over an embedded engine <strong>(chosen)</strong></td>
+                <td>After every sweep, build a relational snapshot (the former Postgres schema) in DuckDB, an in-process library. The LLM writes DuckDB SQL against a documented semantic layer; a hard guard validates and executes it.</td>
+                <td>Real SQL with joins, aggregations and window functions. The schema is the one already documented. DuckDB is a library, not a database service, so the deployment stays Redis-only. SQL is the dialect LLMs are best at and the one with mature validators (sqlglot).</td>
+              </tr>
+              <tr>
+                <td class="tag">4. NL to SQL over a warehouse</td>
+                <td>Export to Parquet in object storage, query with Trino, BigQuery or Athena.</td>
+                <td>The best long-term analytical answer for history and cost, but it adds a platform dependency the constraint forbids today. The snapshot format chosen here (per-table Arrow / Parquet) is the same one such a warehouse would ingest, so this stays an upgrade path, not a rewrite.</td>
+              </tr>
+              <tr>
+                <td class="tag">5. NL to graph query</td>
+                <td>Model cluster to namespace to workload to image as a graph, queried with Cypher or Gremlin.</td>
+                <td>The impact questions are graph-shaped, but they are two-hop joins that SQL handles. A graph database is a new dependency and a dialect LLMs handle worse than SQL.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="decision">
+        <p class="eyebrow">Section</p>
+        <h2>Decision</h2>
+        <p>Provide natural-language querying as <strong>NL to SQL over a DuckDB snapshot of the Redis state</strong>, with a semantic layer, a hard guard, transparency and an evaluation set, and keep the MCP tools as the first resort for known questions.</p>
+
+        <figure class="diagram">
+          <figcaption>
+            <p class="ftitle">Question to answer: the path a query takes</p>
+            <p class="fsub">Known questions route to the shaped tools. Everything else goes through the model, the guard, and the snapshot, and comes back with its SQL attached.</p>
+          </figcaption>
+          <div class="scroll">
+<pre class="mermaid">
+flowchart LR
+  redis[("Redis&lt;br/&gt;per-cluster sections")] -->|"after each sweep"| snap["Snapshot builder&lt;br/&gt;Arrow tables to DuckDB (in-process)"]
+  q["Question"] --> route{"Known question?"}
+  route -->|"yes"| tools["Existing REST / MCP tools"]
+  route -->|"no"| llm["Claude&lt;br/&gt;schema + notes + examples to SqlPlan"]
+  llm --> guard["Guard&lt;br/&gt;single SELECT &middot; allowlisted tables &middot; LIMIT &middot; timeout"]
+  guard -->|"reject + reason"| llm
+  guard --> snap
+  snap --> res["Result: rows + the SQL + explanation + assumptions"]
+</pre>
+          </div>
+        </figure>
+
+        <h3>The seven parts</h3>
+        <ol>
+          <li><strong>Snapshot.</strong> The relational shape is the former Postgres schema: <code>hubs</code>, <code>clusters</code>, <code>cluster_operators</code>, <code>nodes</code>, <code>namespaces</code>, <code>workloads</code>, <code>workload_images</code>, <code>workload_refs</code>, <code>pod_issues</code>, <code>resources</code> with a JSON <code>summary</code>, <code>resource_status</code>, <code>health_checks</code>, <code>health_snapshots</code>, <code>collection_runs</code>. It is rebuilt from the Redis sections after each sweep, lazily on first query, and cached until the next sweep invalidates it. DuckDB runs in the API process, with per-request cursors and one build lock.</li>
+          <li><strong>Semantic layer.</strong> The prompt the model sees is generated, not hand-written: DDL from the snapshot, a one-line description per column, domain notes (applications are <code>namespaces</code> rows with <code>ns_class = 'application'</code>; certificates are <code>resources</code> rows with <code>expires_at</code>; how to extract from the JSON <code>summary</code>; status vocabularies), live enumerations sampled from the data (regions, environments, versions, resource keys), and a dozen worked examples. This is the contract to maintain when the schema changes.</li>
+          <li><strong>Guard (security-critical).</strong> Exactly one statement, <code>SELECT</code> or <code>WITH ... SELECT</code> only, every table in the allowlist, no table functions and no file or system functions (<code>read_csv</code>, <code>read_parquet</code>, <code>glob</code>, <code>getenv</code>, catalog functions), <code>LIMIT</code> enforced and capped, a wall-clock timeout that interrupts the query, and a row cap. The engine is an in-memory, read-only snapshot, so the worst outcome of a bad query is a wrong or slow <code>SELECT</code>, never a write, a file read or a network call.</li>
+          <li><strong>Generation.</strong> Claude (<code>claude-opus-5</code> by default, <code>ODL_QUERY_MODEL</code>) through the official SDK with structured output (<code>sql</code>, <code>explanation</code>, <code>assumptions</code>, <code>confidence</code>). The stable schema prompt is cached as a prefix, so each question costs only its own tokens; medium effort. A self-correction loop feeds a guard rejection or an execution error back once.</li>
+          <li><strong>Transparency.</strong> Every answer returns the SQL that ran, the explanation, the assumptions and the snapshot generation; the dashboard and the MCP tools show the SQL. <code>POST /api/query/sql</code> lets a person run their own guarded SQL directly.</li>
+          <li><strong>Routing.</strong> The MCP tool descriptions steer the agent: existing tools for shaped questions, <code>ask_fleet</code> for ad-hoc joins and aggregations.</li>
+          <li><strong>Evaluation.</strong> <code>tests/golden_questions.yaml</code> holds question, reference SQL and expected result. The reference SQL runs in CI against a fixture snapshot with no LLM, and <code>scripts/eval_ask.py</code> runs the questions through the live model and scores result equality. Prompt changes are judged by this score, not by taste.</li>
+        </ol>
+      </section>
+
+      <section id="why">
+        <p class="eyebrow">Section</p>
+        <h2>Why this is the best approach for the constraint</h2>
+        <ul>
+          <li>It gives real SQL without a database server, which is the only way to satisfy "Redis only" and "text-to-SQL" at the same time.</li>
+          <li>The relational schema is already the documented mental model of the product (the ER diagram in <code>docs/architecture.md</code>), so the model and the humans share one vocabulary.</li>
+          <li>Safety is structural, a read-only snapshot plus a guard, not prompt-based.</li>
+          <li>The same snapshot tables are what a future warehouse would ingest (option 4), so adopting one later is additive.</li>
+        </ul>
+      </section>
+
+      <section id="enterprise">
+        <p class="eyebrow">Section</p>
+        <h2>Enterprise concerns</h2>
+        <div class="scroll wide">
+          <table>
+            <caption>What the query surface has to answer for</caption>
+            <thead>
+              <tr><th scope="col">Concern</th><th scope="col">Approach</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="tag">Prompt injection through data</td><td>Namespace names, labels and messages are untrusted text inside the schema enumerations and results. They are presented as data, the guard bounds what a manipulated query can do, and enumerations are length-capped and escaped.</td></tr>
+              <tr><td class="tag">Multi-tenancy</td><td>Row-level restriction is applied by the API, not by the model. When a caller is scoped by team, region or environment, the service wraps the generated SQL in a view that filters <code>clusters</code> and <code>namespaces</code> before execution.</td></tr>
+              <tr><td class="tag">Cost and latency</td><td>Schema prompt about 6 to 10k tokens, cached; a question is a few hundred output tokens; typical latency 2 to 6 s at medium effort. The snapshot build is the only CPU cost and happens once per sweep.</td></tr>
+              <tr><td class="tag">Freshness</td><td>Answers are as fresh as the last sweep; the response carries the snapshot generation and build time.</td></tr>
+              <tr><td class="tag">Auditability</td><td>Every question, generated SQL, guard verdict and row count is logged. The SQL is the audit record.</td></tr>
+              <tr><td class="tag">Availability without the model</td><td>The SQL endpoint, the schema endpoint and the MCP <code>run_fleet_sql</code> tool work without any LLM credentials; <code>ask</code> returns 503 with a clear reason.</td></tr>
+              <tr><td class="tag">Scale (900 clusters)</td><td>About 25 M rows. DuckDB handles this in process, in a few GB. Build the snapshot incrementally per cluster into Arrow / Parquet partitions keyed by <code>cluster_name</code> (re-encoding only clusters that changed), keep them on local disk or object storage, and let DuckDB read Parquet lazily with partition pruning. The API pods that serve <code>/api/query/*</code> can be a separate deployment from the dashboard API so the snapshot memory is isolated.</td></tr>
+              <tr><td class="tag">Determinism</td><td>The model is asked for one SQL statement with an explanation; temperature is not exposed; results are reproducible because the SQL is returned and can be re-run.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="consequences">
+        <p class="eyebrow">Section</p>
+        <h2>Consequences</h2>
+        <ul>
+          <li>A new dependency set in the API image: <code>duckdb</code>, <code>pyarrow</code>, <code>sqlglot</code>, <code>anthropic</code>.</li>
+          <li>The Postgres schema lives on as the query schema and must be versioned with the collector document: a column added to a section is a column added to the snapshot and to the semantic layer.</li>
+          <li>The golden question set becomes a maintained artifact; adding a product insight should add a golden question.</li>
+          <li>Text-to-SQL does not replace the shaped endpoints, it complements them. Dashboard views keep using the REST API, which reads Redis indexes directly.</li>
+        </ul>
+      </section>
+
+      <p class="source">Source: <span class="mono">docs/adr/0002-natural-language-queries.md</span></p>
+
+    </main>
+  </div>
+</div>

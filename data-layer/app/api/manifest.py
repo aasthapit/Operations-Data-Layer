@@ -2,11 +2,10 @@
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
 
-from ..db import get_session
 from ..manifest import get_manifest
-from ..models import Cluster, ResourceStatus
+from ..store import Store
+from .deps import get_store_dep
 
 router = APIRouter(prefix="/api/manifest", tags=["manifest"])
 
@@ -19,20 +18,25 @@ def manifest():
 
 
 @router.get("/availability")
-def availability(db: Session = Depends(get_session)):
+def availability(store: Store = Depends(get_store_dep)):
     """Per cluster, per resource: collected / unavailable / forbidden / error /
     disabled - i.e. what each cluster can actually answer."""
-    clusters = db.query(Cluster).order_by(Cluster.name).all()
-    rows = db.query(ResourceStatus).all()
-    by_cluster = defaultdict(dict)
+    clusters = store.clusters()
+    names = [c.name for c in clusters]
+    # One round trip for every cluster's per-resource outcome.
+    sections = store.section_across("resource_status", names) if names else {}
     totals = defaultdict(lambda: defaultdict(int))
-    for r in rows:
-        by_cluster[r.cluster_name][r.key] = {
-            "status": r.status, "count": r.count, "duration_ms": r.duration_ms, "error": r.error}
-        totals[r.key][r.status] += 1
+    rows = []
+    for c in clusters:
+        resources = {}
+        for r in sections.get(c.name, []):
+            resources[r.key] = {"status": r.status, "count": r.count,
+                                "duration_ms": r.duration_ms, "error": r.error}
+            totals[r.key][r.status] += 1
+        rows.append({"name": c.name, "reachable": c.reachable, "status": c.overall_status,
+                     "resources": resources})
     return {
         "resources": [r["key"] for r in get_manifest().describe()["resources"]],
-        "clusters": [{"name": c.name, "reachable": c.reachable, "status": c.overall_status,
-                      "resources": by_cluster.get(c.name, {})} for c in clusters],
+        "clusters": rows,
         "totals": {k: dict(v) for k, v in totals.items()},
     }

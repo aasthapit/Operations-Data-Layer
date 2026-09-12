@@ -7,7 +7,11 @@
 #
 # Everything the data layer knows comes from the clusters' own API servers
 # (inventory, configuration, and utilization via metrics.k8s.io). There is no
-# Prometheus / Thanos dependency.
+# Prometheus / Thanos dependency. The collected state lives in Redis, a pull
+# cache the collector replaces one cluster at a time (docs/redis-keyspace.md).
+#
+# Host ports are parametrised so a second stack (a worktree, a review build) can
+# run beside this one: ODL_API_PORT=18001 docker compose up -d redis api
 
 networks:
   kind:
@@ -16,10 +20,30 @@ networks:
     driver: bridge
 
 volumes:
+  redisdata:
   pgdata:
   n8ndata:
 
 services:
+  redis:
+    image: redis:7-alpine
+    # noeviction: a cache that silently dropped a cluster would answer
+    # blast-radius questions wrongly. Per-cluster keys carry their own TTL
+    # (REDIS_TTL_SECONDS) instead. Snapshotting is enough durability for a
+    # cache that any sweep can rebuild, so the AOF stays off.
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no",
+              "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    networks: [odl]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Postgres is only the patching system of record below; the data layer itself
+  # no longer uses it and porting the patching service is out of scope here.
   db:
     image: postgres:16-alpine
     environment:
@@ -38,7 +62,7 @@ services:
   api:
     build: ./data-layer
     environment:
-      DATABASE_URL: postgresql+psycopg2://odl:odl@db:5432/odl
+      REDIS_URL: redis://redis:6379/0
       HUBS_CONFIG: /app/config/hubs.yaml
       # What is collected from every cluster (see docs/ocp-api-manifest.md).
       ODL_MANIFEST: /app/config/ocp-api-manifest.yaml
@@ -51,9 +75,9 @@ services:
       - ./data-layer/config:/app/config:ro      # generated hub list + the OCP API manifest
     networks: [odl, kind]
     ports:
-      - "18000:8000"     # host 8000/8001 often taken; API is reached internally as api:8000
+      - "${ODL_API_PORT:-18000}:8000"   # host 8000/8001 often taken; internally api:8000
     depends_on:
-      db:
+      redis:
         condition: service_healthy
 
   # Patching system of record (its own `patching` database in the same Postgres).
@@ -67,7 +91,7 @@ services:
       PG_DB: patching
     networks: [odl]
     ports:
-      - "18010:8000"     # http://localhost:18010/docs
+      - "${ODL_PATCHING_PORT:-18010}:8000"     # http://localhost:18010/docs
     depends_on:
       db:
         condition: service_healthy
@@ -76,7 +100,7 @@ services:
     build: ./dashboard
     networks: [odl]
     ports:
-      - "8080:80"
+      - "${ODL_DASHBOARD_PORT:-8080}:80"
     depends_on:
       - api
       - patching
@@ -91,7 +115,7 @@ services:
       MCP_TRANSPORT: streamable-http
     networks: [odl]
     ports:
-      - "18080:8000"     # MCP endpoint at http://localhost:18080/mcp
+      - "${ODL_MCP_PORT:-18080}:8000"   # MCP endpoint at http://localhost:18080/mcp
     depends_on:
       - api
 
@@ -112,6 +136,6 @@ services:
       - ./patching:/workflows:ro
     networks: [odl]
     ports:
-      - "5678:5678"
+      - "${ODL_N8N_PORT:-5678}:5678"
     depends_on:
       - api

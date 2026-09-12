@@ -1,7 +1,9 @@
 # Architecture
 
 The Operations Data Layer is a read-only data plane over an OpenShift estate.
-It collects cluster state on a schedule, computes health, persists everything to Postgres, and serves it through a REST API, a web dashboard, and an MCP server.
+It collects cluster state on a schedule, computes health, and keeps the collected fleet state in Redis - a pull-fed read cache, not a system of record.
+After every sweep an in-process DuckDB snapshot of that state is rebuilt so natural-language questions can be answered in SQL.
+It serves all of this through a REST API, a web dashboard, and an MCP server.
 This document describes the moving parts and the main flows.
 
 All diagrams are Mermaid and render on GitHub.
@@ -9,7 +11,8 @@ All diagrams are Mermaid and render on GitHub.
 ## Component architecture
 
 The collector is the only component that talks to clusters.
-Everything else reads from Postgres, so the cluster API load is bounded by the collection interval and reads are always fast.
+Everything else reads from Redis, so the cluster API load is bounded by the collection interval and reads are always fast.
+Natural-language questions are the one exception: the API also calls Claude to turn a question into SQL, which runs against an in-process DuckDB snapshot of the same Redis state (see [Natural-language queries](#natural-language-queries)).
 
 ```mermaid
 flowchart TB
@@ -29,17 +32,23 @@ flowchart TB
     scrub["Scrub + normalise<br/>(values never stored)"]
     checks["Precondition<br/>health checks"]
     api["REST API"]
+    snap["Query snapshot<br/>DuckDB, in-process"]
     manifest --> collector
     collector --> scrub --> checks
   end
 
-  db[("Postgres")]
+  redis[("Redis<br/>pull-fed read cache")]
   dash["Dashboard<br/>React + nginx"]
   mcp["MCP server"]
+  claude["Claude<br/>writes SQL for /api/query/ask"]
 
   fleet -->|"discover + read CRs"| collector
-  checks --> db
-  api --> db
+  checks --> redis
+  api --> redis
+  redis -->|"after each sweep"| snap
+  api --> snap
+  api -->|"NL question"| claude
+  claude -->|"SQL"| api
   dash -->|"/api"| api
   mcp -->|"REST"| api
   agent --> mcp
@@ -63,7 +72,7 @@ sequenceDiagram
   participant C as Collector
   participant H as ACM Hub
   participant K as OCP Cluster
-  participant DB as Postgres
+  participant R as Redis
   S->>C: run_collection()
   C->>H: list ManagedClusters
   H-->>C: clusters + kubeconfig secrets
@@ -74,10 +83,13 @@ sequenceDiagram
     end
     C->>C: scrub + assemble: pods & metrics → namespaces/nodes, workloads → images/refs
     C->>C: run precondition health checks
-    C->>DB: replace current state + append health/utilization snapshot
+    C->>R: atomic per-cluster write: summary, sections, fleet index contributions, snapshot
   end
-  C->>DB: record collection run
+  C->>R: record collection run
+  C->>C: invalidate the query snapshot (rebuilt on the next question)
 ```
+
+A single cluster can also be pulled on demand, outside this sweep, via `POST /api/clusters/{name}/refresh`; it runs the same gather-and-write step for one cluster behind a single-flight lock, without touching any other cluster.
 
 In direct mode the first two steps are replaced by "for each configured endpoint, authenticate and connect"; the per-cluster loop is identical.
 
@@ -127,10 +139,21 @@ The rollup rule:
 A health score (0-100) and a per-cluster history snapshot are recorded on every sweep, which powers the timeline.
 Health is always **computed** from collected state - never read from a field on the cluster - so it behaves identically against the kind fixtures and real OCP.
 
-## Data model
+## Storage model
 
-Current-state tables are replaced on every sweep; `health_snapshot` is append-only for history (health and utilization).
-Typed tables hold what has rollups (nodes, namespaces, workloads, pod issues); everything else is a scrubbed row in `resource` with a kind-specific `status` and, for certificate-bearing kinds, `expires_at`.
+Collected fleet state lives in Redis, not a relational database.
+The collector writes one cluster at a time, atomically (MULTI/EXEC): a summary hash, ten compressed section blobs (operators, nodes, namespaces, workloads, images, refs, pod issues, resources, resource status, health checks), a snapshot appended to that cluster's history, and its contribution to a set of fleet-wide indexes (by region, version, operator, namespace, image, certificate expiry, and more).
+A per-cluster ledger records exactly what a cluster contributed to those fleet indexes, so the next write can remove exactly that before adding the new contributions - a reader never sees a stale or half-written cluster.
+Fleet-wide questions are answered from those indexes, never by scanning every cluster's detail.
+Per-cluster keys carry a TTL (`REDIS_TTL_SECONDS`, default 24h) and the Redis instance runs `maxmemory-policy noeviction`, so a cluster that stops being collected ages out cleanly instead of being silently evicted.
+
+The full keyspace - every key, its type, who writes it and who reads it - is documented in [docs/redis-keyspace.md](redis-keyspace.md); the store implementation lives in `data-layer/app/store/`.
+
+### Relational view used by natural-language queries
+
+The tables below are not a database - they are the schema of the in-process DuckDB snapshot that natural-language queries run against (see [Natural-language queries](#natural-language-queries)).
+They are the same shape the data layer's Postgres schema used to be, kept verbatim so this document, the API's field names, and the SQL an agent writes all describe the same thing.
+The only difference is that the surrogate `id` columns are gone; a row is identified by `cluster_name` plus `name` or `namespace`.
 
 ```mermaid
 erDiagram
@@ -222,6 +245,13 @@ erDiagram
   }
 ```
 
+## Natural-language queries
+
+Some questions are not one the API was built to answer directly - an arbitrary join or aggregation across clusters, applications, operators, images or certificates.
+For those, a question in English becomes SQL against the DuckDB snapshot above: Claude writes the SQL, a guard checks that it is a single read-only `SELECT` over the allowlisted tables before anything runs, and the query executes in-process against the snapshot rebuilt from Redis after every sweep.
+Every answer comes back with the SQL that produced it, an explanation, and the assumptions made, so a number is never handed back without a way to check it.
+See [docs/nl-query.md](nl-query.md) for the full mechanics (the guard's rules, the semantic layer, the settings) and [ADR-0002](adr/0002-natural-language-queries.md) for why this shape was chosen over the alternatives.
+
 ## Blast radius
 
 Because operators, versions, OLM operators, images and applications are all persisted and indexed, a single query turns "X is bad" into a concrete impact list.
@@ -238,10 +268,15 @@ The same graph answers dependency questions directly: `/api/insights/references`
 
 ## Refresh & caching strategy
 
-- The collector polls on `REFRESH_INTERVAL_SECONDS` (default 120s) and on demand via `POST /api/refresh`.
-- Reads never touch a cluster - the API serves the last persisted snapshot, so the dashboard and API stay fast and cluster API load is bounded.
-- A single in-process lock prevents overlapping sweeps; tokens are cached for 30 minutes to keep credential exchanges rare.
-- Every sweep is recorded as a `collection_run` for observability of the data layer itself (`GET /api/runs`).
+Redis is a pull-fed cache, not a system of record: the collector decides when a cluster's picture changes, and the API only ever reads what the last write left behind.
+
+- The collector pulls the whole fleet on `REFRESH_INTERVAL_SECONDS` (default 120s) and on demand via `POST /api/refresh`; one cluster can be pulled on demand via `POST /api/clusters/{name}/refresh`, without waiting for the next sweep or touching any other cluster.
+- A single-flight lock in Redis (`SET NX PX`) prevents two refreshes of the same cluster from racing; a separate in-process lock prevents overlapping full sweeps. Tokens are cached for 30 minutes to keep credential exchanges rare.
+- Reads never touch a cluster - the API serves the last write from Redis, so the dashboard and API stay fast and cluster API load is bounded by the poll interval.
+- Freshness is visible, not implied: every cluster summary carries `last_synced`, `age_seconds`, and `stale` (age beyond three times `REFRESH_INTERVAL_SECONDS`).
+- Per-cluster keys carry a TTL (`REDIS_TTL_SECONDS`, default 24h) and the Redis instance runs `maxmemory-policy noeviction`, so a cluster that is never collected again ages out explicitly instead of being evicted to make room for another.
+- Redis persists to disk (RDB snapshots) so an API restart serves the last picture immediately instead of forcing a full re-collection; the cache is still fully rebuildable from the fleet either way.
+- Every sweep is recorded as a run for observability of the data layer itself (`GET /api/runs`).
 
 ## Deployment topology
 
@@ -250,13 +285,13 @@ Local stack (docker-compose), with the API joined to the kind network so the col
 ```mermaid
 flowchart TB
   subgraph compose["docker-compose (odl network)"]
-    db[("Postgres")]
+    redis[("Redis")]
     api["api<br/>localhost:18000"]
     dash["dashboard<br/>localhost:8080"]
     mcp["mcp<br/>localhost:18080"]
     dash --> api
     mcp --> api
-    api --> db
+    api --> redis
   end
 
   subgraph kindnet["kind network"]
@@ -268,5 +303,20 @@ flowchart TB
   api -->|"collector"| hubs
 ```
 
+The patching service keeps its own Postgres database (the `db` service in `docker-compose.yml`) for its job / approval / audit system of record.
+That is a separate service with its own persistence guarantees; moving it off Postgres is out of scope here (see ADR-0001, Consequences).
+
 On OpenShift, the same images run as `Deployment`s with the API and dashboard exposed through `Route`s; see [`deploy/openshift/`](../deploy/openshift/).
 The only real-world change versus local is supplying per-hub or per-cluster credentials instead of kind kubeconfigs.
+
+## Architecture decisions
+
+- [ADR-0001](adr/0001-redis-as-fleet-state-store.md) - Redis as the fleet state store: a pull-fed read cache with per-cluster section blobs and fleet indexes, not a system of record.
+- [ADR-0002](adr/0002-natural-language-queries.md) - natural-language queries: text-to-SQL over an in-process DuckDB snapshot of Redis, validated by a guard, written by Claude.
+- [ADR-0003](adr/0003-enterprise-scale.md) - operating at 900 clusters: what changes in the collector, the coordination model, and the read path to get there.
+
+## Scale
+
+At 900 clusters, Redis itself is not what limits the system - it is modeled at roughly 5 GB including fragmentation (ADR-0001).
+The collector is the bottleneck: pulling everything on today's 2-minute interval means about 109 GB of raw Kubernetes JSON per sweep across the fleet, which is not viable at that scale.
+[ADR-0003](adr/0003-enterprise-scale.md) covers the fix - tiered refresh intervals per resource, watches instead of polling for churny kinds, metadata-only lists where values are not needed, and collector shards coordinated through Redis.

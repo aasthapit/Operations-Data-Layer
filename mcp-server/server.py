@@ -7,6 +7,10 @@ natural language. Everything the data layer knows was read from the clusters'
 own API servers; ConfigMap / Secret values, certificates and env values are
 never collected, so nothing here can leak them.
 
+Most tools answer one known question. The last three (`ask_fleet`,
+`run_fleet_sql`, `fleet_schema`) answer the questions nobody anticipated, by
+running SQL over a snapshot of the same data - see docs/nl-query.md.
+
 Transport is selectable via MCP_TRANSPORT (stdio | sse | streamable-http).
 stdio is the default and is what Claude Code / Claude Desktop use locally.
 
@@ -48,6 +52,23 @@ def _post(path: str):
         r = _client.post(path)
         r.raise_for_status()
         return r.json()
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}
+
+
+def _post_json(path: str, body: dict):
+    """POST a JSON body. The API's 4xx bodies explain themselves, so they are
+    returned as the error rather than swallowed."""
+    try:
+        r = _client.post(path, json=body)
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPStatusError as e:
+        try:
+            detail = e.response.json().get("detail")
+        except Exception:  # noqa: BLE001
+            detail = e.response.text
+        return {"error": detail or f"{e.response.status_code}", "status": e.response.status_code}
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}
 
@@ -375,11 +396,69 @@ def capacity_headroom(group_by: str = "cluster") -> dict:
     return _get("/api/metrics/capacity", {"group_by": group_by})
 
 
+# --------------------------------------------------------------------------- #
+# ad-hoc questions (SQL over a snapshot of the fleet state)
+# --------------------------------------------------------------------------- #
+@mcp.tool()
+def ask_fleet(question: str) -> dict:
+    """Answer an ad-hoc question by writing and running SQL over the whole
+    fleet. Use this when no tool above fits: arbitrary joins, aggregations,
+    groupings and correlations ("which teams run an image on clusters still on
+    4.15 in eu-west?", "how many application namespaces per team per
+    environment?", "which clusters have both a degraded operator and a
+    certificate expiring this month?"). Prefer the purpose-built tools above
+    for the questions they already answer - they are cheaper and their shapes
+    are stable. Returns the SQL that ran, a one-sentence explanation, the
+    assumptions made, and the rows. ALWAYS show the user the SQL along with the
+    answer so they can check it."""
+    return _post_json("/api/query/ask", {"question": question})
+
+
+@mcp.tool()
+def run_fleet_sql(sql: str, limit: int = 200) -> dict:
+    """Run one read-only SELECT yourself against the fleet snapshot (DuckDB
+    SQL). Use this when you already know the query - to re-run or refine what
+    ask_fleet produced, or when you want exact control over the joins and
+    columns. Call fleet_schema() first for the tables, columns and semantics.
+    Only a single SELECT (or WITH ... SELECT) over the listed tables is
+    allowed; anything that writes, reads files or calls catalog functions is
+    rejected, and every query is capped and time limited. Show the user the SQL
+    with the answer."""
+    return _post_json("/api/query/sql", {"sql": sql, "limit": limit})
+
+
+@mcp.tool()
+def fleet_schema() -> dict:
+    """The relational schema behind ask_fleet / run_fleet_sql: every table and
+    column with a description, the notes that give them meaning (what an
+    application is, how to join across clusters, what lives inside the JSON
+    summary column), worked example queries, and what the current snapshot
+    holds (row counts, when it was built). Read this before writing SQL."""
+    return _get("/api/query/schema")
+
+
 @mcp.tool()
 def refresh_data() -> dict:
     """Trigger an on-demand collection sweep of the fleet (runs in the
     background). Use when you want the freshest data before answering."""
     return _post("/api/refresh")
+
+
+@mcp.tool()
+def refresh_cluster(name: str) -> dict:
+    """Re-collect ONE cluster right now and wait for it (typically well under a
+    second on a small cluster; seconds on a large one). The data layer is a
+    pull cache, so this is how to get a fresh picture of a single cluster
+    before answering about it without sweeping the whole fleet. Returns 404 if
+    the cluster is not discovered, 409 if a refresh of it is already running."""
+    try:
+        r = _client.post(f"/api/clusters/{name}/refresh")
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"{e.response.status_code} {e.response.text}"}
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":

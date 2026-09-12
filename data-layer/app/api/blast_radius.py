@@ -4,14 +4,17 @@ Blast radius: given something bad - an OCP version, a cluster operator
 find which clusters carry it and which applications (namespaces, teams) ride
 on top. This is the payoff of a rich data layer: one query turns "X is buggy"
 into an impact list.
+
+Every lookup here is a fleet index: the version dimension set, the per-operator
+hash, the CSV resource hash, the image refcount hash and its per-image usage
+set. Nothing walks the clusters.
 """
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
 
-from ..db import get_session
-from ..models import Cluster, ClusterOperator, Namespace, Resource, WorkloadImage
+from ..store import Store
+from .deps import get_store_dep
 
 router = APIRouter(prefix="/api/blast-radius", tags=["blast-radius"])
 
@@ -23,7 +26,7 @@ def join_reasons(reasons: dict[str, int]) -> str:
 
 @router.get("")
 def blast_radius(
-    db: Session = Depends(get_session),
+    store: Store = Depends(get_store_dep),
     operator: str | None = Query(None, description="cluster operator name"),
     operator_version: str | None = Query(None, description="pin operator to a version"),
     ocp_version: str | None = Query(None, description="OCP/ClusterVersion"),
@@ -35,59 +38,66 @@ def blast_radius(
     if not any((operator, ocp_version, olm_operator, image)):
         raise HTTPException(400, "supply at least one of: operator, ocp_version, olm_operator, image")
 
-    matched: dict[str, dict] = {}
+    # cluster name -> why it matched -> how often. Insertion order is the order
+    # the matches were found, which the environment/region rollups follow.
+    reasons: dict[str, dict[str, int]] = {}
     workloads: list[dict] = []
 
-    def add(c, reason):
-        if not c:
-            return
-        entry = matched.setdefault(c.name, {"cluster": c, "reasons": {}})
-        entry["reasons"][reason] = entry["reasons"].get(reason, 0) + 1
+    def add(cluster_name, reason):
+        entry = reasons.setdefault(cluster_name, {})
+        entry[reason] = entry.get(reason, 0) + 1
 
     if ocp_version:
-        for c in db.query(Cluster).filter(Cluster.ocp_version == ocp_version).all():
-            add(c, f"OCP {ocp_version}")
+        for c in store.clusters(version=ocp_version):
+            add(c.name, f"OCP {ocp_version}")
 
     if operator:
-        oq = db.query(ClusterOperator).filter(ClusterOperator.name == operator)
-        if operator_version:
-            oq = oq.filter(ClusterOperator.version == operator_version)
-        if degraded_only:
-            oq = oq.filter(ClusterOperator.degraded.is_(True))
-        for o in oq.all():
-            if ocp_version and o.cluster_name not in matched:
+        for cluster_name, o in sorted(store.operator_index(operator).items()):
+            if operator_version and o.version != operator_version:
+                continue
+            if degraded_only and not o.degraded:
+                continue
+            if ocp_version and cluster_name not in reasons:
                 continue   # intersect when both supplied
-            add(db.get(Cluster, o.cluster_name),
-                f"{operator} {o.version}" + (" (degraded)" if o.degraded else ""))
+            add(cluster_name, f"{operator} {o.version}" + (" (degraded)" if o.degraded else ""))
 
     if olm_operator:
-        for r in db.query(Resource).filter(Resource.key == "clusterserviceversions").all():
+        for r in sorted(store.fleet_resources("clusterserviceversions"),
+                        key=lambda r: (r.cluster_name or "", r.namespace or "", r.name or "")):
             s = r.summary or {}
             if (s.get("package") or "") != olm_operator:
                 continue
             if olm_version and s.get("version") != olm_version:
                 continue
-            if ocp_version and r.cluster_name not in matched:
+            if ocp_version and r.cluster_name not in reasons:
                 continue
-            add(db.get(Cluster, r.cluster_name),
-                f"{olm_operator} {s.get('version')} ({s.get('phase')})")
+            add(r.cluster_name, f"{olm_operator} {s.get('version')} ({s.get('phase')})")
 
     if image:
-        for w in db.query(WorkloadImage).filter(WorkloadImage.image.ilike(f"%{image}%")).all():
-            if ocp_version and w.cluster_name not in matched:
-                continue
-            add(db.get(Cluster, w.cluster_name), f"image {w.image}")
-            workloads.append({"cluster": w.cluster_name, "namespace": w.namespace,
-                              "kind": w.workload_kind, "name": w.workload_name,
-                              "container": w.container, "image": w.image})
+        for hit in sorted(store.images(image)):
+            for w in sorted(store.image_usages(hit),
+                            key=lambda w: (w.cluster_name or "", w.namespace or "",
+                                           w.workload_name or "", w.container or "")):
+                if ocp_version and w.cluster_name not in reasons:
+                    continue
+                add(w.cluster_name, f"image {w.image}")
+                workloads.append({"cluster": w.cluster_name, "namespace": w.namespace,
+                                  "kind": w.workload_kind, "name": w.workload_name,
+                                  "container": w.container, "image": w.image})
 
-    clusters = [m["cluster"] for m in matched.values()]
+    # An index member whose cluster has aged out of Redis is not an impact.
+    known = {c.name: c for c in store.clusters(names=list(reasons))} if reasons else {}
+    clusters = [known[n] for n in reasons if n in known]
     hit_ns = {(w["cluster"], w["namespace"]) for w in workloads}
 
     # impacted applications (application namespaces), de-duplicated across clusters
+    by_cluster = defaultdict(list)
+    if clusters:
+        for n in store.namespaces(ns_class="application", clusters=[c.name for c in clusters]):
+            by_cluster[n.cluster_name].append(n)
     apps = defaultdict(lambda: {"clusters": [], "team": None, "tier": None, "namespace": None})
     for c in clusters:
-        for n in c.applications:
+        for n in sorted(by_cluster.get(c.name, []), key=lambda n: n.name):
             if image and not (olm_operator or operator or ocp_version) and (c.name, n.name) not in hit_ns:
                 continue   # an image only impacts the namespaces that run it
             entry = apps[n.app_name or n.name]
@@ -104,10 +114,15 @@ def blast_radius(
          for name, info in apps.items()),
         key=lambda a: (a["tier"] != "critical", -a["cluster_count"], a["app"]))
 
-    # platform namespaces on impacted clusters (for image / OLM queries these matter too)
-    platform_hit = sorted({w["namespace"] for w in workloads
-                           if db.query(Namespace).filter_by(cluster_name=w["cluster"], name=w["namespace"],
-                                                            ns_class="platform").first()})
+    # platform namespaces on impacted clusters (for image / OLM queries these matter too).
+    # One index read for the platform namespaces of the hit clusters, then a
+    # membership test - not a lookup per workload.
+    platform_hit: list[str] = []
+    if workloads:
+        platform = {(n.cluster_name, n.name) for n in store.namespaces(
+            ns_class="platform", clusters=sorted({w["cluster"] for w in workloads}))}
+        platform_hit = sorted({w["namespace"] for w in workloads
+                               if (w["cluster"], w["namespace"]) in platform})
 
     by_env = defaultdict(int)
     by_region = defaultdict(int)
@@ -133,7 +148,7 @@ def blast_radius(
         "clusters": sorted(({
             "name": c.name, "region": c.region, "datacenter": c.datacenter,
             "environment": c.environment, "ocp_version": c.ocp_version,
-            "status": c.overall_status, "reason": join_reasons(matched[c.name]["reasons"]),
+            "status": c.overall_status, "reason": join_reasons(reasons[c.name]),
         } for c in clusters), key=lambda c: c["name"]),
         "applications": impacted_apps,
         "workloads": sorted(workloads, key=lambda w: (w["cluster"], w["namespace"], w["name"])),

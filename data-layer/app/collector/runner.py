@@ -10,7 +10,8 @@ Flow (identical to what you'd run against real ACM):
     persist (sequentially, one transaction per cluster):
         run health checks, replace current state, append a snapshot
 
-Reads never touch a cluster - the API serves whatever the last sweep wrote.
+Reads never touch a cluster - the API serves whatever the last sweep wrote into
+the store (see app/store/base.py and docs/redis-keyspace.md).
 """
 import concurrent.futures
 import logging
@@ -23,26 +24,10 @@ from datetime import UTC, datetime
 from .. import kube
 from ..clusterauth import resolve_bearer_token
 from ..config_loader import load_config
-from ..db import SessionLocal
 from ..manifest import get_manifest
-from ..models import (
-    CHILD_TABLES,
-    Cluster,
-    ClusterOperator,
-    CollectionRun,
-    HealthCheck,
-    HealthSnapshot,
-    Hub,
-    Namespace,
-    Node,
-    PodIssue,
-    Resource,
-    ResourceStatus,
-    Workload,
-    WorkloadImage,
-    WorkloadRef,
-)
+from ..query import invalidate as invalidate_query_snapshot
 from ..settings import settings
+from ..store import Store, get_store
 from .collect import collect_managed_cluster, unreachable
 from .healthchecks import run_health_checks
 from .parsers import normalize_managedcluster
@@ -50,6 +35,10 @@ from .parsers import normalize_managedcluster
 log = logging.getLogger("odl.runner")
 _lock = threading.Lock()
 _last_run = {"at": None, "ok": False, "trigger": None}
+
+# How long a single-cluster refresh may hold its lock before another caller may
+# assume the holder died.
+REFRESH_LOCK_MS = 120_000
 
 
 def utcnow():
@@ -66,38 +55,21 @@ class Target:
 # --------------------------------------------------------------------------- #
 # discovery
 # --------------------------------------------------------------------------- #
-def _ensure_hub(db, name, region=None, datacenter=None):
-    hub = db.get(Hub, name)
-    if hub is None:
-        hub = Hub(name=name)
-        db.add(hub)
-    if region:
-        hub.region = region
-    if datacenter:
-        hub.datacenter = datacenter
-    return hub
-
-
-def _discover_via_hubs(db, hubs) -> list[Target]:
+def _discover_via_hubs(store: Store, hubs) -> list[Target]:
     """ACM mode: discover ManagedClusters on each hub."""
     targets = []
     for hub in hubs:
-        hub_row = _ensure_hub(db, hub.name, hub.region, hub.datacenter)
+        placement = {k: v for k, v in (("region", hub.region),
+                                       ("datacenter", hub.datacenter)) if v}
         try:
             hb = kube.bundle_from_file(hub.kubeconfig)
             managed = kube.list_managedclusters(hb)
-            hub_row.reachable = True
-            hub_row.last_error = None
-            hub_row.managed_count = len(managed)
         except Exception as e:  # noqa: BLE001
-            hub_row.reachable = False
-            hub_row.last_error = str(e)
-            hub_row.managed_count = 0
-            hub_row.last_synced = utcnow()
-            db.commit()
+            store.upsert_hub(hub.name, **placement, reachable=False, last_error=str(e),
+                             managed_count=0, last_synced=utcnow())
             continue
-        hub_row.last_synced = utcnow()
-        db.commit()   # hub must exist before its clusters reference it (FK)
+        store.upsert_hub(hub.name, **placement, reachable=True, last_error=None,
+                         managed_count=len(managed), last_synced=utcnow())
 
         for mc in managed:
             meta = normalize_managedcluster(mc)
@@ -110,7 +82,7 @@ def _discover_via_hubs(db, hubs) -> list[Target]:
     return targets
 
 
-def _discover_direct(db, clusters) -> list[Target]:
+def _discover_direct(store: Store, clusters) -> list[Target]:
     """Direct mode: a flat list of live OCP endpoints behind shared credentials."""
     targets = []
     counts: dict[str, int] = {}
@@ -129,12 +101,23 @@ def _discover_direct(db, clusters) -> list[Target]:
 
         targets.append(Target(c.hub, meta, connect))
     for hub_name, n in counts.items():
-        hub = _ensure_hub(db, hub_name)
-        hub.reachable = True
-        hub.managed_count = n
-        hub.last_synced = utcnow()
-    db.commit()
+        store.upsert_hub(hub_name, reachable=True, last_error=None,
+                         managed_count=n, last_synced=utcnow())
     return targets
+
+
+def _discover(store: Store) -> tuple[list[Target], int]:
+    """Every cluster this data layer is responsible for, and the hub count."""
+    cfg = load_config()
+    targets: list[Target] = []
+    hubs_total = 0
+    if cfg.hubs:
+        targets += _discover_via_hubs(store, cfg.hubs)
+        hubs_total += len(cfg.hubs)
+    if cfg.clusters:
+        targets += _discover_direct(store, cfg.clusters)
+        hubs_total += len({c.hub for c in cfg.clusters})
+    return targets, hubs_total
 
 
 # --------------------------------------------------------------------------- #
@@ -156,130 +139,28 @@ def _gather(target: Target, manifest) -> tuple[Target, dict, bool]:
 # --------------------------------------------------------------------------- #
 # persistence
 # --------------------------------------------------------------------------- #
-def _persist_cluster(db, hub_name, collected, checks, overall, score, counts):
-    name = collected["name"]
-    cluster = db.get(Cluster, name)
-    is_new = cluster is None
-    if is_new:
-        cluster = Cluster(name=name)
-    cap = collected.get("capacity") or {}
-    cluster.hub_name = hub_name
-    cluster.display_name = name
-    for field in ("region", "datacenter", "environment", "cloud", "vendor", "platform",
-                  "cluster_id", "infrastructure_name", "api_url", "control_plane_topology",
-                  "infrastructure_topology", "network_type", "cluster_network",
-                  "service_network", "apps_domain", "desired_version", "channel",
-                  "upgrade_percent", "kube_version"):
-        setattr(cluster, field, collected.get(field))
-    cluster.ocp_version = collected.get("version") or collected.get("label_version")
-    cluster.upgrading = bool(collected.get("upgrading"))
-    cluster.available_updates = collected.get("available_updates") or []
-    cluster.nodes_total = collected.get("nodes_total", 0)
-    cluster.nodes_ready = collected.get("nodes_ready", 0)
-    for field in ("cpu_capacity", "cpu_allocatable", "cpu_requests", "cpu_limits", "cpu_usage",
-                  "memory_capacity", "memory_allocatable", "memory_requests", "memory_limits",
-                  "memory_usage", "pods_capacity"):
-        setattr(cluster, field, cap.get(field))
-    cluster.pods_total = cap.get("pods_total", 0) or 0
-    cluster.pods_running = cap.get("pods_running", 0) or 0
-    cluster.metrics_available = bool(cap.get("metrics_available"))
-    cluster.namespaces_application = collected.get("namespaces_application", 0) or 0
-    cluster.namespaces_platform = collected.get("namespaces_platform", 0) or 0
-    cluster.workloads_total = collected.get("workloads_total", 0) or 0
-    cluster.pod_issues_total = collected.get("pod_issues_total", 0) or 0
-    cluster.certs_expiring_total = collected.get("certs_expiring_total", 0) or 0
-    cluster.managed_available = bool(collected.get("managed_available", True))
-    cluster.overall_status = overall
-    cluster.health_score = score
-    cluster.checks_passed = counts["passed"]
-    cluster.checks_warned = counts["warned"]
-    cluster.checks_failed = counts["failed"]
-    cluster.reachable = collected.get("reachable", True)
-    cluster.last_error = collected.get("error")
-    cluster.collect_ms = collected.get("collect_ms")
-    cluster.last_synced = utcnow()
-    if is_new:
-        db.add(cluster)
-        db.flush()
-
-    # replace children wholesale
-    for table in CHILD_TABLES:
-        db.query(table).filter_by(cluster_name=name).delete(synchronize_session=False)
-
-    def rows(items, allowed):
-        return [{"cluster_name": name, **{k: v for k, v in it.items() if k in allowed}}
-                for it in items]
-
-    db.bulk_insert_mappings(ClusterOperator, rows(collected.get("operators", []), _COLS[ClusterOperator]))
-    db.bulk_insert_mappings(Node, rows(collected.get("nodes", []), _COLS[Node]))
-    db.bulk_insert_mappings(Namespace, rows(collected.get("namespaces", []), _COLS[Namespace]))
-    db.bulk_insert_mappings(Workload, rows(collected.get("workloads", []), _COLS[Workload]))
-    db.bulk_insert_mappings(WorkloadImage, rows(collected.get("workload_images", []), _COLS[WorkloadImage]))
-    db.bulk_insert_mappings(WorkloadRef, rows(collected.get("workload_refs", []), _COLS[WorkloadRef]))
-    db.bulk_insert_mappings(PodIssue, rows(collected.get("pod_issues", []), _COLS[PodIssue]))
-    db.bulk_insert_mappings(Resource, rows(collected.get("resources", []), _COLS[Resource]))
-    db.bulk_insert_mappings(ResourceStatus, [
-        {"cluster_name": name, "key": key, **{k: v for k, v in st.items() if k in _COLS[ResourceStatus]}}
-        for key, st in (collected.get("resource_status") or {}).items()])
-    db.bulk_insert_mappings(HealthCheck, rows(checks, _COLS[HealthCheck]))
-
-    db.add(HealthSnapshot(
-        cluster_name=name, overall_status=overall, health_score=score,
-        checks_passed=counts["passed"], checks_warned=counts["warned"],
-        checks_failed=counts["failed"], ocp_version=cluster.ocp_version,
-        upgrading=cluster.upgrading,
-        cpu_usage=cap.get("cpu_usage"), cpu_allocatable=cap.get("cpu_allocatable"),
-        memory_usage=cap.get("memory_usage"), memory_allocatable=cap.get("memory_allocatable"),
-        pods_running=cluster.pods_running, pod_issues=cluster.pod_issues_total,
-        snapshot_at=utcnow()))
-
-
-_COLS = {m: {c.name for c in m.__table__.columns if c.name not in ("id", "cluster_name")}
-         for m in (ClusterOperator, Node, Namespace, Workload, WorkloadImage, WorkloadRef,
-                   PodIssue, Resource, ResourceStatus, HealthCheck)}
-
-
-def _prune_snapshots(db, name):
-    keep = settings.snapshot_retention
-    ids = [r.id for r in db.query(HealthSnapshot.id)
-           .filter_by(cluster_name=name)
-           .order_by(HealthSnapshot.snapshot_at.desc())
-           .offset(keep).all()]
-    if ids:
-        db.query(HealthSnapshot).filter(HealthSnapshot.id.in_(ids)).delete(
-            synchronize_session=False)
-
-
-def _persist(db, target: Target, collected: dict, manifest):
+def _persist(store: Store, target: Target, collected: dict, manifest):
+    """Health-check the document and replace the cluster in one transaction."""
     thresholds = manifest.describe()["thresholds"]
     checks, overall, score, counts = run_health_checks(
         collected, settings.supported_floor, thresholds)
-    _persist_cluster(db, target.hub, collected, checks, overall, score, counts)
-    _prune_snapshots(db, collected["name"])
-    db.commit()
+    store.persist_cluster(target.hub, collected, checks, overall, score, counts)
 
 
-def _prune_vanished(db, targets: list[Target]):
+def _prune_vanished(store: Store, targets: list[Target]):
     """Drop clusters that are no longer discovered on a hub we could reach.
 
     A cluster removed from ACM (or from the direct list) must not linger as a
     stale row forever. Clusters under an unreachable hub are kept as-is: we
-    cannot tell whether they are gone or the hub is merely down.
+    cannot tell whether they are gone or the hub is merely down, so only hubs
+    that answered this sweep get an entry in `seen`.
     """
-    seen: dict[str, set] = {}
+    reachable = {h.name for h in store.hubs() if h.reachable}
+    seen: dict[str, set[str]] = {name: set() for name in reachable}
     for t in targets:
-        seen.setdefault(t.hub, set()).add(t.meta["name"])
-    for hub in db.query(Hub).all():
-        if not hub.reachable:
-            continue
-        names = seen.get(hub.name, set())
-        stale = [c for c in db.query(Cluster).filter(Cluster.hub_name == hub.name).all()
-                 if c.name not in names]
-        for c in stale:
-            log.info("pruning cluster %s: no longer discovered on hub %s", c.name, hub.name)
-            db.query(HealthSnapshot).filter_by(cluster_name=c.name).delete(synchronize_session=False)
-            db.delete(c)
-    db.commit()
+        if t.hub in seen:
+            seen[t.hub].add(t.meta["name"])
+    store.prune_vanished(seen)
 
 
 # --------------------------------------------------------------------------- #
@@ -291,24 +172,14 @@ def run_collection(trigger="manual") -> dict:
         return {"skipped": True, "reason": "a collection is already running"}
 
     started = time.time()
-    db = SessionLocal()
-    run = CollectionRun(trigger=trigger, started_at=utcnow())
-    db.add(run)
-    db.commit()
+    store = get_store()
+    run_id = store.begin_run(trigger)
 
     try:
-        cfg = load_config()
         manifest = get_manifest()
-        targets: list[Target] = []
-        hubs_total = 0
-        if cfg.hubs:
-            targets += _discover_via_hubs(db, cfg.hubs)
-            hubs_total += len(cfg.hubs)
-        if cfg.clusters:
-            targets += _discover_direct(db, cfg.clusters)
-            hubs_total += len({c.hub for c in cfg.clusters})
+        targets, hubs_total = _discover(store)
 
-        _prune_vanished(db, targets)
+        _prune_vanished(store, targets)
 
         ok_count = failed = 0
         workers = max(1, min(settings.collect_workers, len(targets) or 1))
@@ -317,42 +188,63 @@ def run_collection(trigger="manual") -> dict:
             for fut in concurrent.futures.as_completed(futures):
                 target, collected, ok = fut.result()
                 try:
-                    _persist(db, target, collected, manifest)
+                    _persist(store, target, collected, manifest)
                 except Exception:  # noqa: BLE001
-                    db.rollback()
                     log.exception("persist %s failed", collected.get("name"))
                     ok = False
                 ok_count += ok
                 failed += (not ok)
 
-        run.finished_at = utcnow()
-        run.duration_ms = int((time.time() - started) * 1000)
-        run.hubs_total = hubs_total
-        run.clusters_total = len(targets)
-        run.clusters_ok = ok_count
-        run.clusters_failed = failed
-        db.add(run)
-        db.commit()
+        store.finalize_sweep()
+        invalidate_query_snapshot()   # the SQL snapshot must not outlive the sweep it was built from
+        duration_ms = int((time.time() - started) * 1000)
+        store.finish_run(run_id, finished_at=utcnow(), duration_ms=duration_ms,
+                         hubs_total=hubs_total, clusters_total=len(targets),
+                         clusters_ok=ok_count, clusters_failed=failed)
         _last_run.update({"at": utcnow(), "ok": True, "trigger": trigger})
         log.info("sweep %s: %d clusters (%d ok, %d failed) in %dms",
-                 trigger, len(targets), ok_count, failed, run.duration_ms)
+                 trigger, len(targets), ok_count, failed, duration_ms)
         return {
-            "ok": True, "trigger": trigger, "duration_ms": run.duration_ms,
+            "ok": True, "trigger": trigger, "duration_ms": duration_ms,
             "hubs": hubs_total, "clusters": len(targets),
             "clusters_ok": ok_count, "clusters_failed": failed,
         }
     except Exception as e:  # noqa: BLE001
         log.exception("sweep failed")
-        db.rollback()
-        run.error = str(e)
-        run.finished_at = utcnow()
-        db.add(run)
-        db.commit()
+        store.finish_run(run_id, finished_at=utcnow(),
+                         duration_ms=int((time.time() - started) * 1000), error=str(e))
         _last_run.update({"at": utcnow(), "ok": False, "trigger": trigger})
         return {"ok": False, "error": str(e)}
     finally:
-        db.close()
         _lock.release()
+
+
+def refresh_cluster(name: str) -> dict:
+    """Collect and persist a single cluster on demand.
+
+    Single-flight per cluster rather than per process: a full sweep and a
+    refresh of another cluster may run at the same time, since each cluster is
+    written independently.
+    """
+    store = get_store()
+    manifest = get_manifest()
+    targets, _ = _discover(store)
+    target = next((t for t in targets if t.meta.get("name") == name), None)
+    if target is None:
+        return {"ok": False, "error": "unknown cluster"}
+    if not store.try_lock(name, REFRESH_LOCK_MS):
+        return {"ok": False, "skipped": True, "reason": "refresh already running"}
+
+    started = time.time()
+    try:
+        _, collected, _ok = _gather(target, manifest)
+        _persist(store, target, collected, manifest)
+    finally:
+        store.unlock(name)
+    invalidate_query_snapshot()
+    duration_ms = int((time.time() - started) * 1000)
+    log.info("refresh %s in %dms", name, duration_ms)
+    return {"ok": True, "cluster": name, "collect_ms": duration_ms}
 
 
 def last_run():

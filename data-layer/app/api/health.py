@@ -1,22 +1,24 @@
+"""Fleet health: the overview tiles and the roll-up by placement dimension."""
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
 
-from ..collector.runner import last_run
-from ..db import get_session
-from ..models import Cluster, CollectionRun, Hub
+from ..collector import runner
+from ..serialize import _iso
+from ..store import Store
+from .deps import get_store_dep
 
 router = APIRouter(prefix="/api/health", tags=["health"])
 
 _STATUSES = ["healthy", "warning", "critical", "unknown"]
 
+# group_by value -> the summary-row field it groups on
 _GROUP_FIELDS = {
-    "region": Cluster.region,
-    "datacenter": Cluster.datacenter,
-    "environment": Cluster.environment,
-    "hub": Cluster.hub_name,
-    "version": Cluster.ocp_version,
+    "region": "region",
+    "datacenter": "datacenter",
+    "environment": "environment",
+    "hub": "hub_name",
+    "version": "ocp_version",
 }
 
 
@@ -26,13 +28,13 @@ def _empty_counts():
 
 @router.get("/summary")
 def summary(group_by: str = Query("region", description="region|datacenter|environment|hub|version"),
-            db: Session = Depends(get_session)):
+            store: Store = Depends(get_store_dep)):
     if group_by not in _GROUP_FIELDS:
         group_by = "region"
     field = _GROUP_FIELDS[group_by]
     groups = defaultdict(_empty_counts)
-    for c in db.query(Cluster).all():
-        key = getattr(c, field.key) or "unknown"
+    for c in store.clusters():
+        key = c.get(field) or "unknown"
         status = c.overall_status if c.overall_status in _STATUSES else "unknown"
         groups[key][status] += 1
 
@@ -49,20 +51,20 @@ def summary(group_by: str = Query("region", description="region|datacenter|envir
 
 
 @router.get("/overview")
-def overview(db: Session = Depends(get_session)):
+def overview(store: Store = Depends(get_store_dep)):
     counts = _empty_counts()
     total = 0
     upgrading = 0
-    for c in db.query(Cluster).all():
+    for c in store.clusters():
         total += 1
         status = c.overall_status if c.overall_status in _STATUSES else "unknown"
         counts[status] += 1
         if c.upgrading:
             upgrading += 1
 
-    hubs = db.query(Hub).all()
-    recent = (db.query(CollectionRun)
-              .order_by(CollectionRun.started_at.desc()).first())
+    last = runner.last_run()
+    recent_runs = store.runs(1)
+    recent = recent_runs[0] if recent_runs else None
     return {
         "clusters_total": total,
         "counts": counts,
@@ -70,17 +72,19 @@ def overview(db: Session = Depends(get_session)):
         "hubs": [{"name": h.name, "region": h.region,
                   "datacenter": h.datacenter, "reachable": h.reachable,
                   "managed_count": h.managed_count,
-                  "last_synced": h.last_synced.isoformat() if h.last_synced else None}
-                 for h in hubs],
-        "last_run": last_run() and {
-            "at": last_run()["at"].isoformat() if last_run()["at"] else None,
-            "ok": last_run()["ok"],
-            "trigger": last_run()["trigger"],
+                  "last_synced": _iso(h.last_synced)}
+                 # the hub hash has no order of its own; name order keeps the
+                 # overview stable between refreshes
+                 for h in sorted(store.hubs(), key=lambda h: h.name or "")],
+        "last_run": last and {
+            "at": _iso(last["at"]),
+            "ok": last["ok"],
+            "trigger": last["trigger"],
         },
         "last_collection": recent and {
             "duration_ms": recent.duration_ms,
             "clusters_ok": recent.clusters_ok,
             "clusters_failed": recent.clusters_failed,
-            "finished_at": recent.finished_at.isoformat() if recent.finished_at else None,
+            "finished_at": _iso(recent.finished_at),
         },
     }

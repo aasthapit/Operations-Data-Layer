@@ -19,7 +19,7 @@ help:
 	@echo "  make acm-status    show ACM topology state"
 	@echo "  make acm-down      delete the ACM topology clusters"
 	@echo ""
-	@echo "  make up            build + start the data layer stack (db, api, dashboard)"
+	@echo "  make up            build + start the data layer stack (redis, api, dashboard)"
 	@echo "  make down          stop the stack"
 	@echo "  make logs          tail api logs"
 	@echo "  make reset         down + fleet-down (full teardown)"
@@ -30,6 +30,7 @@ help:
 	@echo "  make rbac          regenerate deploy/rbac from the OCP API manifest"
 	@echo ""
 	@echo "  Dashboard:  http://localhost:8080      API docs: http://localhost:18000/docs"
+	@echo "  (ODL_API_PORT / ODL_DASHBOARD_PORT move the host ports so a second stack can run)"
 
 fleet-venv:
 	python3 -m venv fleet/.venv && fleet/.venv/bin/pip install -q --upgrade pip pyyaml cryptography

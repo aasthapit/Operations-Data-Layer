@@ -18,9 +18,20 @@ operator at 4.15.18 is buggy?"*, *"what OCP versions are we running?"*.
 | `blast_radius(operator / ocp_version / olm_operator / image)` | clusters, apps, teams, workloads impacted |
 | `expiring_certificates` · `pod_issues` · `quota_pressure` · `machine_config_pools` · `storage_summary` · `find_routes` · `warning_events` · `image_usage` · `config_references` · `cluster_admins` | the insights |
 | `top_namespaces_by_usage` · `top_nodes_by_usage` · `cluster_utilization` · `capacity_headroom` | utilization from `metrics.k8s.io` |
-| `refresh_data` | trigger a fresh collection sweep |
+| `refresh_data` | trigger a fresh collection sweep of the whole fleet |
+| `refresh_cluster(name)` | re-collect one cluster now and wait for it, without sweeping the fleet (404 unknown cluster, 409 already refreshing) |
+| `ask_fleet(question)` · `run_fleet_sql(sql, limit)` · `fleet_schema()` | ad-hoc questions answered in SQL over a snapshot of the fleet state |
 
 Nothing an agent can retrieve contains ConfigMap / Secret values, certificate material or env values - those are scrubbed before storage.
+
+### SQL vs the shaped tools
+
+Every tool above `refresh_cluster` answers one known question, and is cheaper and more stable than SQL: prefer it whenever the question fits.
+`ask_fleet`, `run_fleet_sql` and `fleet_schema` exist for the rest - an arbitrary join or aggregation no shaped tool covers, such as "which teams run an image on clusters still on 4.15 in eu-west?" or "which clusters have both a degraded operator and a certificate expiring this month?".
+Call `fleet_schema()` first to see the tables and columns, then `ask_fleet` to let the model write the SQL, or `run_fleet_sql` directly if you already know the query (to re-run or refine what `ask_fleet` produced, or when you want exact control over the joins and columns).
+Both `ask_fleet` and `run_fleet_sql` return the SQL that ran along with the rows - always show it to the user next to the answer so they can check it.
+Only a single read-only `SELECT` (or `WITH ... SELECT`) over the allowlisted tables is accepted; anything that writes, reads files or reaches outside the snapshot is rejected, and every query is row-capped and time-limited.
+See [docs/nl-query.md](../docs/nl-query.md) and [ADR-0002](../docs/adr/0002-natural-language-queries.md) for the full design.
 
 ## Run it locally over stdio (recommended for Claude Code)
 

@@ -3,9 +3,15 @@ import os
 
 
 class Settings:
-    database_url: str = os.environ.get(
-        "DATABASE_URL", "postgresql+psycopg2://odl:odl@localhost:5432/odl"
-    )
+    # Redis is the store: a pull cache of OCP inventory and utilization, never
+    # a system of record. The keyspace is documented in docs/redis-keyspace.md.
+    redis_url: str = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    # Key prefix, so one Redis can hold several environments side by side.
+    redis_prefix: str = os.environ.get("REDIS_PREFIX", "odl")
+    # Per-cluster keys expire, so a cluster that is never collected again ages
+    # out instead of lingering forever (the server runs with `noeviction`, which
+    # never drops keys on its own). 0 disables expiry.
+    redis_ttl_seconds: int = int(os.environ.get("REDIS_TTL_SECONDS", "86400"))
     # The fleet config. May contain `hubs:` (ACM discovery), `clusters:` (a
     # direct list of OCP endpoints), and `defaults:` (shared auth/TLS).
     # ODL_CONFIG is the preferred name; HUBS_CONFIG is kept as an alias.
@@ -19,7 +25,7 @@ class Settings:
     )
 
     # How often the collector polls the fleet (seconds). Reads are always served
-    # from Postgres; this only controls how fresh that cache is.
+    # from Redis; this only controls how fresh that cache is.
     refresh_interval_seconds: int = int(
         os.environ.get("REFRESH_INTERVAL_SECONDS", "120")
     )

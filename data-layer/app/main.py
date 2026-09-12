@@ -2,8 +2,8 @@
 Operations Data Layer - API + collector entrypoint.
 
 Serves the REST API over the collected fleet state, runs the periodic collector,
-and serves the static dashboard. Reads are always from Postgres; the collector
-keeps Postgres fresh in the background.
+and serves the static dashboard. Reads are always from Redis; the collector
+keeps Redis fresh in the background.
 """
 import logging
 import os
@@ -23,40 +23,40 @@ from .api import (
     insights,
     manifest,
     metrics,
+    query,
     versions,
 )
 from .collector.runner import run_collection
-from .db import engine, init_db
 from .manifest import get_manifest
 from .scheduler import start_scheduler, stop_scheduler
 from .settings import settings
+from .store import get_store
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("odl")
 
 
-def _wait_for_db(retries=30, delay=2):
+def _wait_for_redis(retries=30, delay=2):
+    """Every read is served from Redis, so refuse to come up without it."""
     import time
 
-    from sqlalchemy import text
+    store = get_store()
     for i in range(retries):
         try:
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
+            store.ping()
             return
         except Exception as e:  # noqa: BLE001
-            log.info("waiting for database (%d/%d): %s", i + 1, retries, e)
+            log.info("waiting for redis (%d/%d): %s", i + 1, retries, e)
             time.sleep(delay)
-    raise RuntimeError("database never became reachable")
+    raise RuntimeError("redis never became reachable")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     m = get_manifest()      # fail fast on a bad manifest
     log.info("manifest %s: %d resources enabled", m.source, len(m.enabled_keys()))
-    _wait_for_db()
-    init_db()
+    _wait_for_redis()
     if settings.refresh_on_startup:
         threading.Thread(target=run_collection, args=("startup",),
                          daemon=True).start()
@@ -86,6 +86,7 @@ app.include_router(insights.router)
 app.include_router(metrics.router)
 app.include_router(manifest.router)
 app.include_router(admin.router)
+app.include_router(query.router)
 
 
 @app.get("/healthz", tags=["meta"])

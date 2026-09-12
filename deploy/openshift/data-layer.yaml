@@ -40,8 +40,11 @@ spec:
         - name: api
           image: image-registry.openshift-image-registry.svc:5000/ops-data-layer/odl-api:latest
           env:
-            - name: DATABASE_URL
-              value: postgresql+psycopg2://odl:odl@odl-db:5432/odl
+            - name: REDIS_URL
+              value: redis://odl-redis:6379/0
+            # Per-cluster keys age out if a cluster stops being collected.
+            - name: REDIS_TTL_SECONDS
+              value: "86400"
             - name: HUBS_CONFIG
               value: /etc/odl/hubs.yaml
             # The OCP API manifest ships in the image; mount a ConfigMap over

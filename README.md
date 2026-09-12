@@ -39,13 +39,15 @@ are never collected (see **[docs/ocp-api-manifest.md](docs/ocp-api-manifest.md)*
 │   └ applications (namespaces) └ applications                 │
 └──────────────────┬──────────────────────────────────────────┘
                    │  collector polls hubs → managed clusters
-┌──────────────────▼─ Data Layer (FastAPI + Postgres) ────────┐
+┌──────────────────▼─ Data Layer (FastAPI + Redis) ───────────┐
 │  Collector (APScheduler): discover via ACM → pull CRs →     │
 │    run precondition health checks → upsert + snapshot        │
-│  Postgres: hubs, clusters, operators, applications,          │
-│    health_checks, health_snapshots (time-series)             │
+│  Redis: one cluster replaced per transaction - summary,      │
+│    compressed detail sections, snapshots, fleet indexes      │
+│  Query snapshot: DuckDB rebuilt from Redis after each sweep, │
+│    Claude writes SQL for natural-language questions.         │
 │  Cache/refresh: periodic poll + POST /api/refresh.           │
-│                 Reads are always served from Postgres.       │
+│                 Reads are always served from Redis.          │
 └──────────────────┬──────────────────────────────────────────┘
                    │  REST
 ┌──────────────────▼─ Dashboard (React + nginx) ──────────────┐
@@ -81,7 +83,7 @@ and ~6-10 GB of memory available to Docker for the fleet.
 ```sh
 make fleet-venv      # one-time: python venv for the fleet tooling
 make fleet-up        # create + seed 2 hubs and 8 managed clusters (a few minutes)
-make up              # build + start db, api, dashboard
+make up              # build + start redis, api, dashboard
 
 # Dashboard:  http://localhost:8080      (Overview · Clusters · Applications · Versions · Utilization · Insights · Blast radius · Patching · Collected)
 # API + docs: http://localhost:18000/docs   (mapped off 8000 to avoid conflicts)
@@ -91,8 +93,12 @@ make up              # build + start db, api, dashboard
 ```
 
 Inventory, configuration and utilization all come from one source - each
-cluster's API server - and are served from Postgres. Run `make dl-venv` once,
+cluster's API server - and are served from Redis. Run `make dl-venv` once,
 then `make test` and `make lint` for the data layer.
+
+Natural-language questions (`POST /api/query/ask`) need `ANTHROPIC_API_KEY` set in the `api` service's environment.
+Everything else - the whole REST API, the dashboard, the MCP server, and `POST /api/query/sql` for running your own SQL - works without it; `/ask` just answers 503 until a key is set.
+To run a second stack alongside this one without port clashes (a worktree, a review build), set `ODL_API_PORT`, `ODL_DASHBOARD_PORT`, `ODL_PATCHING_PORT`, `ODL_MCP_PORT` and `ODL_N8N_PORT` before `make up`, e.g. `ODL_API_PORT=18001 ODL_DASHBOARD_PORT=8081 make up`.
 
 ### ACM test topology (real OCM + Tekton)
 
@@ -107,7 +113,10 @@ fleet at a time on smaller Docker allocations.
 ## Documentation
 
 - **[docs/onboarding.md](docs/onboarding.md)** - point a list of live OCP cluster endpoints at the data layer using a single shared service account (username/password). Config format, RBAC, TLS, verification.
-- **[docs/architecture.md](docs/architecture.md)** - components, collection flow, auth flow, data model, blast radius, and deployment, with diagrams.
+- **[docs/architecture.md](docs/architecture.md)** - components, collection flow, auth flow, storage model, natural-language queries, blast radius, and deployment, with diagrams.
+- **[docs/redis-keyspace.md](docs/redis-keyspace.md)** - the Redis keyspace contract: every key, its type, and who writes and reads it.
+- **[docs/nl-query.md](docs/nl-query.md)** - natural-language queries: the DuckDB snapshot, the guard, the semantic layer, the settings, and how to add a golden question.
+- **[docs/adr/](docs/adr/)** - the architecture decision records: [Redis as the fleet state store](docs/adr/0001-redis-as-fleet-state-store.md), [natural-language queries](docs/adr/0002-natural-language-queries.md), [operating at enterprise scale](docs/adr/0003-enterprise-scale.md).
 - **[docs/ocp-api-manifest.md](docs/ocp-api-manifest.md)** - the OCP API manifest: what is collected, the scrub policy, applications vs platform namespaces, utilization from `metrics.k8s.io`, RBAC generation, adding a resource.
 - **[docs/insight-catalog.md](docs/insight-catalog.md)** - the questions a platform team asks, which are answered from the OCP API today, and the reasoning behind the "everything from the API, scrubbed" decision.
 - **[docs/patching-workflow.md](docs/patching-workflow.md)** - the N8N patching orchestration design + data-layer integration contract (pre-check/monitor/post-check).
@@ -161,7 +170,12 @@ FLEET_PARALLEL=2 make fleet-up                                             # gen
   workloads yield image and config-reference edges.
 * `app/collector/healthchecks.py`, `runner.py` - the precondition checks and
   the parallel scheduled sweep.
-* `app/models.py` - the persisted schema (current-state + time-series tables).
+* `app/store/` - the keyspace contract and the Redis store: atomic per-cluster
+  writes, fleet indexes, ledgers, TTL. See [docs/redis-keyspace.md](docs/redis-keyspace.md).
+* `app/query/` - natural-language queries: the DuckDB snapshot rebuilt from the
+  store (`snapshot.py`), the semantic layer the model reads (`schema.py`), the
+  guard that validates generated SQL (`guard.py`), and the generate/execute
+  loop (`llm.py`, `service.py`). See [docs/nl-query.md](docs/nl-query.md).
 * `app/api/` - the REST surface.
 
 ### Applications = namespaces
@@ -186,11 +200,12 @@ utilization and history are recorded each sweep.
 
 ### Refresh / cache strategy
 
-The collector polls on an interval (`REFRESH_INTERVAL_SECONDS`, default 120s)
-and on demand via `POST /api/refresh`. The API never touches a cluster on the
-read path - it serves the last collected snapshot from Postgres, so reads are
-fast and the cluster API load is bounded by the poll interval. Every sweep also
-appends a health snapshot per cluster, powering the timeline.
+The collector polls on an interval (`REFRESH_INTERVAL_SECONDS`, default 120s) and on demand via `POST /api/refresh`.
+One cluster can also be refreshed on its own via `POST /api/clusters/{name}/refresh`, behind a single-flight lock, without waiting for the next sweep.
+The API never touches a cluster on the read path - it serves the last collected snapshot from Redis, so reads are fast and the cluster API load is bounded by the poll interval.
+Every cluster summary carries `last_synced`, `age_seconds` and `stale`, so the API never hides that it is serving a cache.
+Per-cluster keys expire (`REDIS_TTL_SECONDS`, default 24h) and Redis runs with `maxmemory-policy noeviction` - a cluster that is never collected again ages out instead of being silently dropped.
+Every sweep also appends a health snapshot per cluster, powering the timeline.
 
 ## API
 
@@ -202,6 +217,7 @@ appends a health snapshot per cluster, powering the timeline.
 | `GET /api/clusters/{name}` | full detail: platform config, capacity, checks, operators, nodes, namespaces, pod issues, what was collected |
 | `GET /api/clusters/{name}/nodes` · `/namespaces?class=` · `/workloads?namespace=&detail=` · `/pod-issues` · `/resources?kind=` | per-cluster inventory |
 | `GET /api/clusters/{name}/timeline` | health-score + utilization history |
+| `POST /api/clusters/{name}/refresh` | collect and persist this one cluster now, behind a single-flight lock, without waiting for the next sweep (404 unknown cluster, 409 already refreshing) |
 | `GET /api/applications?team=&tier=&environment=&status=` · `GET /api/applications/{app}` | applications (application namespaces) across the fleet |
 | `GET /api/versions` · `GET /api/versions/operators?name=` | OCP / cluster-operator version spread |
 | `GET /api/blast-radius?operator=&operator_version=&ocp_version=&olm_operator=&olm_version=&image=` | impacted clusters, applications, workloads |
@@ -211,6 +227,10 @@ appends a health snapshot per cluster, powering the timeline.
 | `GET /api/metrics/top-namespaces?by=cpu\|memory&class=` · `/top-nodes` · `/capacity?group_by=` · `/cluster/{name}/utilization` · `/cluster/{name}/timeline` | utilization from `metrics.k8s.io` |
 | `GET /api/manifest` · `GET /api/manifest/availability` | what is collected, and what each cluster actually served |
 | `POST /api/refresh` | trigger a collection sweep |
+| `GET /api/query/schema` | tables, columns, semantics and current snapshot state for natural-language queries (see [docs/nl-query.md](docs/nl-query.md)) |
+| `POST /api/query/sql` | run one read-only SQL `SELECT` yourself against the fleet snapshot |
+| `POST /api/query/ask` | ask a question in English; the model writes the SQL and the answer comes back with it, the explanation and the assumptions |
+| `POST /api/query/refresh-snapshot` | rebuild the SQL snapshot from Redis now, instead of waiting for the next sweep |
 
 Interactive docs at `/docs`.
 

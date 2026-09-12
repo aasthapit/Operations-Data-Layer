@@ -9,14 +9,16 @@ What changes versus local:
 * The collector no longer reads kind kubeconfigs. Instead it reads one
   kubeconfig (or, in a real ACM setup, a service-account token) per hub from a
   mounted `Secret`. Point `HUBS_CONFIG` at a config that lists those hubs.
-* Postgres can be the bundled `Deployment` here or a managed database; just set
-  `DATABASE_URL`.
+* Redis can be the bundled `Deployment` here or a managed instance; just set
+  `REDIS_URL`. It must run with `maxmemory-policy noeviction` - the data layer
+  relies on nothing being evicted behind its back, and lets per-cluster keys
+  expire on their own TTL instead (`REDIS_TTL_SECONDS`).
 
 Apply order:
 
 ```sh
 oc new-project ops-data-layer
-oc apply -f postgres.yaml
+oc apply -f redis.yaml
 oc apply -f data-layer.yaml
 oc apply -f dashboard.yaml
 oc get route                      # -> dashboard + API URLs
