@@ -22,6 +22,7 @@ from ..serialize import (
     workload_dict,
 )
 from ..store import Row, Store
+from .admin import require_collector
 from .deps import get_store_dep, order_key
 
 router = APIRouter(prefix="/api/clusters", tags=["clusters"])
@@ -72,6 +73,7 @@ def get_cluster(name: str, store: Store = Depends(get_store_dep)):
 @router.post("/{name}/refresh")
 def refresh(name: str):
     """Collect this one cluster now, without waiting for the next sweep."""
+    require_collector()
     result = runner.refresh_cluster(name)
     if result.get("error") == "unknown cluster":
         raise HTTPException(404, f"cluster {name} not found")

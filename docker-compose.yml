@@ -36,6 +36,8 @@ services:
     volumes:
       - redisdata:/data
     networks: [odl]
+    ports:
+      - "127.0.0.1:${ODL_REDIS_PORT:-16379}:6379"   # for the ad-hoc host processes (Procfile)
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

@@ -1,19 +1,30 @@
 """Operating the data layer itself: trigger a sweep, see how sweeps went."""
 import threading
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..collector import runner
 from ..serialize import _iso
+from ..settings import settings
 from ..store import Store
 from .deps import get_store_dep
 
 router = APIRouter(prefix="/api", tags=["admin"])
 
+COLLECTOR_DISABLED = ("the collector is disabled on this instance (COLLECTOR_ENABLED=false); "
+                      "refresh through the collecting instance")
+
+
+def require_collector() -> None:
+    """Refresh endpoints only make sense where a collector runs."""
+    if not settings.collector_enabled:
+        raise HTTPException(409, COLLECTOR_DISABLED)
+
 
 @router.post("/refresh")
 def refresh(background: bool = True):
     """Trigger an on-demand collection sweep."""
+    require_collector()
     if background:
         threading.Thread(target=runner.run_collection, args=("manual",),
                          daemon=True).start()

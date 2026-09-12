@@ -753,3 +753,11 @@ def test_admin_runs(client):
     run = d["runs"][0]
     assert run["trigger"] == "test" and run["clusters_ok"] == 2
     assert run["duration_ms"] == 1234 and run["started_at"]
+
+
+def test_refresh_endpoints_answer_409_when_collector_disabled(client, monkeypatch):
+    from app import settings as settings_module
+
+    monkeypatch.setattr(settings_module.settings, "collector_enabled", False)
+    assert client.post("/api/refresh").status_code == 409
+    assert client.post("/api/clusters/ocp-east-1/refresh").status_code == 409

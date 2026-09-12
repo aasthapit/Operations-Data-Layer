@@ -57,12 +57,16 @@ async def lifespan(app: FastAPI):
     m = get_manifest()      # fail fast on a bad manifest
     log.info("manifest %s: %d resources enabled", m.source, len(m.enabled_keys()))
     _wait_for_redis()
-    if settings.refresh_on_startup:
-        threading.Thread(target=run_collection, args=("startup",),
-                         daemon=True).start()
-    start_scheduler()
+    if not settings.collector_enabled:
+        log.info("collector disabled (COLLECTOR_ENABLED=false): serving Redis read-only")
+    else:
+        if settings.refresh_on_startup:
+            threading.Thread(target=run_collection, args=("startup",),
+                             daemon=True).start()
+        start_scheduler()
     yield
-    stop_scheduler()
+    if settings.collector_enabled:
+        stop_scheduler()
 
 
 app = FastAPI(

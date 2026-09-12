@@ -29,6 +29,10 @@ class Settings:
     refresh_interval_seconds: int = int(
         os.environ.get("REFRESH_INTERVAL_SECONDS", "120")
     )
+    # Whether this instance collects at all. A read-only API (a dev server on
+    # the host, or API pods separated from collector pods) sets this to false:
+    # no startup sweep, no scheduler, and the refresh endpoints answer 409.
+    collector_enabled: bool = os.environ.get("COLLECTOR_ENABLED", "true") == "true"
     # Run a collection sweep once at startup.
     refresh_on_startup: bool = os.environ.get("REFRESH_ON_STARTUP", "true") == "true"
     # Clusters are collected in parallel; this bounds the fan-out (and the

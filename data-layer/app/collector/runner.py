@@ -248,4 +248,11 @@ def refresh_cluster(name: str) -> dict:
 
 
 def last_run():
-    return dict(_last_run)
+    """The last sweep, from the store when it has one (it is shared across
+    processes: a read-only API sees the collecting instance's sweeps) and
+    from this process otherwise."""
+    try:
+        stored = get_store().last_run()
+    except Exception:  # noqa: BLE001 - never let status reporting fail on the store
+        stored = None
+    return stored or dict(_last_run)

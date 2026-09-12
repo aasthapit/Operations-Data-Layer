@@ -100,6 +100,20 @@ Natural-language questions (`POST /api/query/ask`) need `ANTHROPIC_API_KEY` set 
 Everything else - the whole REST API, the dashboard, the MCP server, and `POST /api/query/sql` for running your own SQL - works without it; `/ask` just answers 503 until a key is set.
 To run a second stack alongside this one without port clashes (a worktree, a review build), set `ODL_API_PORT`, `ODL_DASHBOARD_PORT`, `ODL_PATCHING_PORT`, `ODL_MCP_PORT` and `ODL_N8N_PORT` before `make up`, e.g. `ODL_API_PORT=18001 ODL_DASHBOARD_PORT=8081 make up`.
 
+### Ad-hoc development (honcho)
+
+For a fast loop without rebuilding images, run the pieces as plain processes with [honcho](https://github.com/nickstenning/honcho):
+
+```sh
+make dev-venv        # one-time: venvs, honcho, dashboard node_modules, .env from .env.example
+make dev             # redis + collector (containers), hot-reloading API, Vite dashboard, MCP server
+```
+
+`Procfile` defines the processes and `.env` (read by docker compose, honcho and make alike) defines every port, so `make dev-api`, `make dev-ui` or `make dev-mcp` run one of them in isolation.
+The kind clusters resolve only inside Docker's `kind` network, so collection always runs in the container; the host API starts with `COLLECTOR_ENABLED=false` and serves Redis read-only (its refresh endpoints answer 409), reloading on every code change.
+Defaults: host API http://localhost:18002/docs, Vite dashboard http://localhost:5174, MCP http://localhost:18082/mcp, Redis on localhost:16379.
+Ad-hoc queries without a browser: `make sql Q="select name, overall_status from clusters"` and `make ask Q="which clusters are critical"`.
+
 ### ACM test topology (real OCM + Tekton)
 
 Separate from the simulated fleet, `make acm-up` stands up a second, real-controller
