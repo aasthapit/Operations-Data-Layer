@@ -1,0 +1,14 @@
+# Run everything as plain host processes, no Docker: `make local`.
+# Use this when you point the data layer at real clusters (ODL_CONFIG) and at
+# a Redis you already have (REDIS_URL), or at a local redis-server.
+#
+# All settings come from .env (copy .env.example). REDIS_URL accepts any
+# redis-py URL: redis://host:6379/0, redis://:password@host:6379/0,
+# redis://user:password@host:6379/0, rediss://... for TLS.
+#
+# `redis` is only for a local instance (brew install redis / apt install
+# redis-server); with a live Redis run `make local-remote`, which skips it.
+redis: redis-server --port ${ODL_REDIS_PORT:-16379} --save 60 1 --appendonly no --maxmemory-policy noeviction
+api:   sh -c 'cd data-layer && REDIS_URL=${REDIS_URL:-redis://localhost:${ODL_REDIS_PORT:-16379}/0} COLLECTOR_ENABLED=${COLLECTOR_ENABLED:-true} ODL_MANIFEST=${ODL_MANIFEST:-config/ocp-api-manifest.yaml} ODL_CONFIG=${ODL_CONFIG:-config/clusters.yaml} exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port ${DEV_API_PORT:-18002}'
+ui:    sh -c 'cd dashboard && VITE_PROXY_TARGET=http://localhost:${DEV_API_PORT:-18002} VITE_PATCHING_TARGET=http://localhost:${ODL_PATCHING_PORT:-18010} PORT=${DEV_UI_PORT:-5174} exec npm run dev'
+mcp:   sh -c 'cd mcp-server && MCP_API_BASE=http://localhost:${DEV_API_PORT:-18002} MCP_TRANSPORT=streamable-http MCP_HOST=127.0.0.1 MCP_PORT=${DEV_MCP_PORT:-18082} exec .venv/bin/python server.py'

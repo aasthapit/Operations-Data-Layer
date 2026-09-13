@@ -12,7 +12,8 @@ DEV_API_PORT ?= 18002
 
 .PHONY: help fleet-venv fleet-up fleet-down fleet-seed fleet-status acm-up acm-down acm-status acm-smoke \
         up down logs rebuild ps reset dl-venv test lint rbac \
-        dev-venv dev dev-core dev-api dev-ui dev-mcp dev-down collect redis-cli sql ask
+        dev-venv dev dev-core dev-api dev-ui dev-mcp dev-down collect redis-cli sql ask \
+        local local-remote local-api local-ui local-mcp local-redis
 
 help:
 	@echo "Operations Data Layer"
@@ -47,6 +48,12 @@ help:
 	@echo "  make dev-ui        just the Vite dashboard against DEV_API_PORT"
 	@echo "  make dev-mcp       just the MCP server (streamable-http) against DEV_API_PORT"
 	@echo "  make dev-down      stop the redis + collector containers"
+	@echo ""
+	@echo "  make local         no Docker at all: local redis-server, API + collector, Vite dashboard, MCP"
+	@echo "                     (needs ODL_CONFIG pointing at real clusters, see clusters.example.yaml)"
+	@echo "  make local-remote  the same against a live Redis (REDIS_URL in .env), no local redis-server"
+	@echo "  make local-api     just the API + collector on the host (REDIS_URL / ODL_CONFIG from .env)"
+	@echo "  make local-ui      just the Vite dashboard      make local-mcp   just the MCP server"
 	@echo "  make collect       trigger a fleet sweep on the collector (ODL_API_PORT)"
 	@echo "  make redis-cli     open redis-cli inside the redis container"
 	@echo "  make sql Q='select ...'   run guarded SQL over the fleet snapshot"
@@ -142,8 +149,31 @@ dev-mcp:
 dev-down:
 	docker compose stop api redis
 
+# ---- no Docker at all (Procfile.local) --------------------------------------
+local:
+	$(HONCHO) -f Procfile.local start
+
+local-remote:
+	@test -n "$(REDIS_URL)" || (echo "set REDIS_URL in .env (e.g. rediss://user:pass@host:6380/0)"; exit 1)
+	$(HONCHO) -f Procfile.local start api ui mcp
+
+local-api:
+	$(HONCHO) -f Procfile.local start api
+
+local-ui:
+	$(HONCHO) -f Procfile.local start ui
+
+local-mcp:
+	$(HONCHO) -f Procfile.local start mcp
+
+local-redis:
+	$(HONCHO) -f Procfile.local start redis
+
+# API_PORT picks the container API by default; `make collect API_PORT=18002` targets a host API.
+API_PORT ?= $(ODL_API_PORT)
+
 collect:
-	curl -s -X POST http://localhost:$(ODL_API_PORT)/api/refresh && echo
+	curl -s -X POST http://localhost:$(API_PORT)/api/refresh && echo
 
 redis-cli:
 	docker compose exec redis redis-cli
@@ -151,13 +181,13 @@ redis-cli:
 # make sql Q="select name, overall_status from clusters order by 1"
 sql:
 	@test -n "$(Q)" || (echo "usage: make sql Q='select ...'"; exit 1)
-	@curl -s -X POST http://localhost:$(ODL_API_PORT)/api/query/sql -H 'content-type: application/json' \
+	@curl -s -X POST http://localhost:$(API_PORT)/api/query/sql -H 'content-type: application/json' \
 		--data-binary "$$(printf '%s' '$(Q)' | $(DLPY) -c 'import json,sys; print(json.dumps({"sql": sys.stdin.read()}))')" \
 		| $(DLPY) -m json.tool
 
 # make ask Q="which clusters are critical and why"
 ask:
 	@test -n "$(Q)" || (echo "usage: make ask Q='which ...'"; exit 1)
-	@curl -s -X POST http://localhost:$(ODL_API_PORT)/api/query/ask -H 'content-type: application/json' \
+	@curl -s -X POST http://localhost:$(API_PORT)/api/query/ask -H 'content-type: application/json' \
 		--data-binary "$$(printf '%s' '$(Q)' | $(DLPY) -c 'import json,sys; print(json.dumps({"question": sys.stdin.read()}))')" \
 		| $(DLPY) -m json.tool
