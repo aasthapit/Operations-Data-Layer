@@ -139,6 +139,7 @@ make local-remote      # live Redis: API + collector, Vite dashboard, MCP server
 make local             # same, plus a local redis-server (brew install redis) on ODL_REDIS_PORT
 ```
 
+No Redis yet and no wish to install one: `make redis-up` runs just the Redis container (persisted volume, `127.0.0.1:16379`); set `REDIS_URL=redis://localhost:16379/0` and use `make local-remote`.
 `REDIS_URL` accepts any redis-py URL (`redis://`, `redis://:password@`, `redis://user:password@`, `rediss://` for TLS); `REDIS_PREFIX` namespaces the keys on a shared instance and `REDIS_TTL_SECONDS` bounds how long an uncollected cluster stays visible.
 The API is at http://localhost:18002/docs, the dashboard at http://localhost:5174 (its Patching tab needs the patching service, which is not part of this mode), the MCP server at http://localhost:18082/mcp.
 `make local-api` runs only the API; set `COLLECTOR_ENABLED=false` in `.env` to run it read-only against a Redis that another instance fills.
