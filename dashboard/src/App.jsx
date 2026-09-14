@@ -13,6 +13,7 @@ import Insights from "./views/Insights";
 import Query from "./views/Query";
 import Manifest from "./views/Manifest";
 import Patching from "./views/Patching";
+import { ErrorBoundary } from "./components";
 
 // [root segment, label, where the tab button goes]
 const TABS = [
@@ -110,6 +111,7 @@ export default function App() {
       </div>
 
       <div className="content">
+        <ErrorBoundary key={route.path}>
         {root === "clusters" && second ? (
           <ClusterDetail name={second} tab={third} nav={nav} />
         ) : root === "clusters" ? (
@@ -133,6 +135,7 @@ export default function App() {
         ) : (
           <Overview route={route} nav={nav} />
         )}
+        </ErrorBoundary>
       </div>
     </div>
   );

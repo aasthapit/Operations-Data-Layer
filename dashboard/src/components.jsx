@@ -1,5 +1,5 @@
 // Small shared presentational components + formatters.
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 // The one table primitive every view uses: sorting, per-column filters, search.
 export { default as DataTable } from "./DataTable";
@@ -225,3 +225,24 @@ export const fmtDays = (d) => {
   if (d < 0) return `expired ${Math.abs(d).toFixed(0)}d ago`;
   return `${d.toFixed(0)}d`;
 };
+
+
+// A view that throws must not blank the whole app: show what broke and a way out.
+export class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("view crashed", error, info?.componentStack); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    const message = this.state.error?.message || String(this.state.error);
+    return (
+      <div className="card" style={{ padding: 16 }}>
+        <h3 style={{ marginTop: 0 }}>This view failed to render</h3>
+        <div className="mono" style={{ fontSize: 12, marginBottom: 10 }}>{message}</div>
+        <button className="btn" onClick={() => { this.setState({ error: null }); this.props.onReset && this.props.onReset(); }}>Try again</button>
+        {" "}
+        <a href="/" className="btn">Go to overview</a>
+      </div>
+    );
+  }
+}

@@ -981,7 +981,7 @@ function Results({ result, running, mode, table, nav, onFlash }) {
   if (!result) {
     return (
       <div className="card">
-        {running ? <Loading /> : <div className="empty">Run a query to see rows.</div>}
+        {running ? <SkeletonLines rows={4} /> : <div className="empty">Run a query to see rows.</div>}
       </div>
     );
   }
