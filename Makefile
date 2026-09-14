@@ -126,7 +126,22 @@ rbac:
 		> ../deploy/rbac/odl-collector-readonly.yaml && echo "wrote deploy/rbac/odl-collector-readonly.yaml"
 
 # ---- ad-hoc development (honcho) -------------------------------------------
+# The venvs are created on demand: running any dev/local target on a fresh
+# checkout performs the one-time setup first instead of failing on a missing
+# data-layer/.venv/bin/honcho.
+$(DLPY):
+	$(MAKE) dl-venv
+
+$(HONCHO): | $(DLPY)
+	$(MAKE) dev-venv
+
+dev dev-core dev-api dev-ui dev-mcp: $(HONCHO)
+local local-remote local-api local-ui local-mcp local-redis: $(HONCHO)
+redis-ping sql ask test lint rbac: $(DLPY)
+
 dev-venv:
+	@command -v python3 >/dev/null || (echo "python3 (3.12+) is required"; exit 1)
+	@command -v npm >/dev/null || (echo "node + npm (22+) are required for the dashboard"; exit 1)
 	@test -d data-layer/.venv || $(MAKE) dl-venv
 	data-layer/.venv/bin/pip install -q honcho
 	@test -d mcp-server/.venv || (python3 -m venv mcp-server/.venv && mcp-server/.venv/bin/pip install -q --upgrade pip)
