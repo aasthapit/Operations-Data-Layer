@@ -23,7 +23,7 @@ All keys start with the prefix `odl` (`REDIS_PREFIX`). `<name>` is the cluster n
 | Key | Type | Content |
 |---|---|---|
 | `odl:{c:<name>}:summary` | HASH | Every field of the former `clusters` row (placement, version, capacity, rollups, health, `last_synced`, `collect_ms`, `reachable`, `last_error`, `hub_name`). Scalars as strings, lists/dicts as JSON. |
-| `odl:{c:<name>}:sec:<section>` | STRING | Compressed JSON list of rows for one section. Sections: `operators`, `nodes`, `namespaces`, `workloads`, `workload_images`, `workload_refs`, `pod_issues`, `resources`, `resource_status`, `health_checks`. Rows carry the same field names as the former ORM columns. |
+| `odl:{c:<name>}:sec:<section>` | STRING | Compressed JSON list of rows for one section. Sections: `operators`, `nodes`, `namespaces`, `workloads`, `workload_images`, `workload_refs`, `pod_issues`, `resources`, `resource_status`, `health_checks`. Rows carry the same field names as the former ORM columns, plus `value` and `levels` on a `health_checks` row (what the check measured and the levels that applied). |
 | `odl:{c:<name>}:snapshots` | ZSET | Health/utilization history. Score = epoch seconds, member = JSON snapshot (includes `snapshot_at`). Trimmed to `SNAPSHOT_RETENTION`. |
 | `odl:{c:<name>}:ledger` | STRING | Compressed JSON list of `[op, key, member]` describing every fleet-index member this cluster contributed on its last write (`op` in `sadd`, `hset`, `zadd`, `hincr`). Read and reversed before the next write. Never expires: when the cluster's other keys age out, the ledger is what lets `prune_vanished` unpublish its fleet-index members. |
 | `odl:{c:<name>}:lock` | STRING | `SET NX PX` single-flight lock for on-demand refresh of one cluster. |

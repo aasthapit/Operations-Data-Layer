@@ -128,15 +128,19 @@ Utilization comes from `metrics.k8s.io` on each cluster (no Prometheus).
 ## Health model
 
 Each cluster runs a panel of precondition checks, each returning pass / warn / fail at a severity (critical / warning / info):
-ACM availability, ClusterVersion availability, critical operators available, no degraded operators, nodes ready, node pressure, supported version, upgrade in progress, operator drift, machine config pools, platform pods, application pods, capacity headroom, certificates valid, quota headroom, OLM operators, update available.
+cluster reachable, ACM availability, ClusterVersion availability, critical operators available, no degraded operators, nodes ready, node pressure, supported version, upgrade in progress, operators settled, machine config pools, platform pods, application pods, capacity headroom, certificates valid, quota headroom, OLM operators, update available.
+
+Every check is configurable in the manifest's `health_checks:` section: whether it runs at all, what a failure means for the cluster (`severity`), and the `warn:` / `fail:` levels in that check's own unit - a count of degraded operators, a percent of allocatable, a certificate window (see [ocp-api-manifest.md](ocp-api-manifest.md)).
+The check panel owns the catalogue of checks, their units and their defaults; the manifest only overrides them.
 
 The rollup rule:
 
-- any **critical fail** → `critical`
-- any **warning-level** fail or warn → `warning`
-- otherwise → `healthy` (informational results such as "update available" are surfaced but do not degrade the rollup)
+- any **fail** at `critical` severity → `critical`
+- any **fail** at `warning` severity, and any **warn** → `warning`
+- otherwise → `healthy` (results at `info` severity, such as "update available", an upgrade in progress or a cluster without `metrics.k8s.io`, are surfaced but never degrade the rollup)
 
 A health score (0-100) and a per-cluster history snapshot are recorded on every sweep, which powers the timeline.
+Every result also carries what it measured and the levels that applied (`value`, `levels`), so "87% used (warn 85, fail 95)" is readable without opening the manifest.
 Health is always **computed** from collected state - never read from a field on the cluster - so it behaves identically against the kind fixtures and real OCP.
 
 ## Storage model
@@ -236,6 +240,8 @@ erDiagram
     string cluster_name FK
     string status
     string severity
+    json value
+    json levels
   }
   HEALTH_SNAPSHOT {
     int id PK

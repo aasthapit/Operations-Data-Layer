@@ -375,8 +375,13 @@ HEALTH_CHECKS = _table(
         ("name", "VARCHAR", "Check id, e.g. 'no-degraded-operators', 'version-supported'."),
         ("title", "VARCHAR", "Human title of the check."),
         ("status", "VARCHAR", "'pass' | 'warn' | 'fail'."),
-        ("severity", "VARCHAR", "'critical' | 'warning' | 'info'."),
+        ("severity", "VARCHAR", "'critical' | 'warning' | 'info'. A failing check at 'critical' "
+                                "makes the cluster critical; 'info' never degrades it."),
         ("message", "VARCHAR", "Why it warned or failed."),
+        ("value", "JSON", "What the check measured, keyed by its unit, e.g. "
+                          "{\"used_percent\": 87.2} or {\"degraded\": 2}."),
+        ("levels", "JSON", "The configured levels that applied: "
+                           "{\"warn\": {...}, \"fail\": {...}} in the same units."),
     ],
 )
 

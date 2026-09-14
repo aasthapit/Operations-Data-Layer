@@ -1,7 +1,7 @@
 # The OCP API manifest
 
 Everything the Operations Data Layer knows about a cluster is read from that cluster's own API server.
-The **OCP API manifest** (`data-layer/config/ocp-api-manifest.yaml`) is the single declaration of *what* is read: every resource kind the collector can fetch, whether it is enabled, how namespaces are classified into applications versus platform, where application ownership comes from, and the thresholds the health checks use.
+The **OCP API manifest** (`data-layer/config/ocp-api-manifest.yaml`) is the single declaration of *what* is read: every resource kind the collector can fetch, whether it is enabled, how namespaces are classified into applications versus platform, where application ownership comes from, and how every health check is graded.
 Nothing outside the manifest is ever requested from a cluster, and the read-only RBAC the collector needs is generated from it.
 
 This document explains the manifest, the scrub policy that sits behind it, and how to extend it.
@@ -63,6 +63,20 @@ thresholds:
   capacity_critical_percent: 95
   cluster_admin_roles: [cluster-admin]
 
+health_checks:
+  no-degraded-operators:
+    warn: { degraded: 1 }        # one degraded operator is a warning
+    fail: { degraded: 3 }        # three are critical
+  capacity-headroom:
+    warn: { used_percent: 80 }
+    fail: { used_percent: 90 }
+  application-pods:
+    enabled: false               # not run, not shown
+  certificates-valid:
+    severity: critical
+    warn: { expiring: 1, expiring_within_days: 30 }
+    fail: { expiring: 1, expiring_within_days: 7 }
+
 resources:
   clusterversion:        { enabled: true }
   nodes:                 { enabled: true }
@@ -113,7 +127,136 @@ This is deliberate: `kubectl.kubernetes.io/last-applied-configuration` can embed
 
 ### `thresholds`
 
-Inputs to the health checks and status derivations (certificate windows, restart counts, quota and capacity percentages) and the roles reported by the cluster-admins insight.
+The older flat block of numbers.
+Two kinds live in it, and the difference decides when a change takes effect.
+
+| Threshold | Acts at | What it does |
+|---|---|---|
+| `pod_restart_threshold` | collection | restarts at or above this make a pod an issue |
+| `pod_pending_seconds` | collection | a pod Pending (or not-ready) longer than this is an issue |
+| `certificate_expiry_days` | collection **and** evaluation | certificates inside this window are stored with status `expiring`; also the default of `certificates-valid.warn.expiring_within_days` |
+| `quota_warning_percent` | collection **and** evaluation | a ResourceQuota at or above this is stored with status `warning`; also the default of `quotas-headroom.warn.max_percent` |
+| `capacity_warning_percent` | evaluation | default of `capacity-headroom.warn.used_percent` |
+| `capacity_critical_percent` | evaluation | default of `capacity-headroom.fail.used_percent` |
+| `cluster_admin_roles` | collection | which ClusterRoleBindings the cluster-admins insight reports |
+
+**Collection-time** thresholds are applied by the parsers while a cluster is read, so they decide what the stored document *says*; changing one only takes effect on the next sweep.
+**Evaluation-time** levels are applied by the health checks to an already-collected document, so changing one re-grades the fleet on the next sweep without collecting anything different.
+`GET /api/manifest` reports the scope of each threshold in `threshold_scope`.
+
+The four thresholds that always fed a health check keep working and are now the *defaults* of the check level they always meant; a level set under `health_checks:` wins over them.
+
+### `health_checks`
+
+Every check in the panel is configurable, one entry per check name.
+
+```yaml
+health_checks:
+  no-degraded-operators:
+    enabled: true          # a disabled check is not run and not shown
+    severity: critical     # what a FAILING check means for the cluster rollup
+    warn: { degraded: 1 }  # levels, in this check's own unit
+    fail: { degraded: 3 }
+```
+
+`severity` is `critical`, `warning` or `info`, and says what a **failing** check means for the cluster.
+A measured value at or above `fail` is a fail, at or above `warn` is a warn, otherwise the check passes.
+A band you set *replaces* that band's defaults rather than merging into it, so write every level you want in it: `fail: { degraded: 3 }` on its own means "never warn, fail at three", and `warn: {}` means "never warn".
+Two levels read the other way round, and say so in the table below: `version-supported`'s `floor` (a version *below* it trips the band) and `expiring_within_days` (a window, not a level - it says how far ahead that band looks for expiring certificates).
+
+The rollup, driven by those severities:
+
+- any **fail** at `critical` severity makes the cluster `critical`;
+- any **fail** at `warning` severity, and any **warn**, makes it `warning`;
+- anything at `info` severity is surfaced but never degrades the rollup.
+
+Three results are deliberately informational whatever the check's severity, because they report missing data or an expected transition rather than ill health: `capacity-headroom` on a cluster that does not serve `metrics.k8s.io`, `nodes-ready` on a cluster that reported no nodes, and `machine-config-pools` while a pool is updating.
+
+#### Units per check
+
+| Check | Severity | Levels (unit) | Defaults |
+|---|---|---|---|
+| `cluster-reachable` | critical | - | fails when the collector cannot connect |
+| `managed-available` | critical | - | fails on `ManagedClusterConditionAvailable=False` |
+| `cluster-version-available` | critical | - | fails when ClusterVersion is Failing or not Available |
+| `critical-operators-available` | critical | `unavailable` (count) | `fail: 1` |
+| `no-degraded-operators` | critical | `degraded` (count) | `fail: 1` |
+| `nodes-ready` | critical | `not_ready` (count), `not_ready_percent` (percent) | `fail: { not_ready: 1 }` |
+| `nodes-pressure` | warning | `pressured` (count), `cordoned` (count) | `warn: { cordoned: 1 }`, `fail: { pressured: 1 }` |
+| `version-supported` | warning | `floor` (version, *below* trips) | `fail: { floor: SUPPORTED_FLOOR }` |
+| `upgrade-in-progress` | info | - | warns while an upgrade is applying |
+| `operators-stable` | warning | `progressing` (count, outside an upgrade) | `warn: 1` |
+| `machine-config-pools` | critical | `degraded` (count), `updating` (count) | `warn: { updating: 1 }`, `fail: { degraded: 1 }` |
+| `platform-pods` | warning | `issues` (count), `issues_percent` (percent of the class's pods) | `warn: { issues: 1 }` |
+| `application-pods` | info | `issues` (count), `issues_percent` (percent of the class's pods) | `warn: { issues: 1 }` |
+| `capacity-headroom` | warning | `used_percent` (percent of allocatable, worse of CPU and memory) | `warn: 85`, `fail: 95` |
+| `certificates-valid` | warning | `expired` (count), `expiring` (count inside the band's window), `expiring_within_days` (days, the window) | `warn: { expiring: 1, expiring_within_days: 30 }`, `fail: { expired: 1 }` |
+| `quotas-headroom` | info | `max_percent` (percent of a hard limit), `namespaces` (count at or above the warn percent) | `warn: { max_percent: 90 }` |
+| `olm-operators-healthy` | warning | `unhealthy` (count) | `warn: 1` |
+| `update-available` | info | - | warns when a newer release is offered |
+
+`cluster-reachable` is the only check that runs on an unreachable cluster, so it cannot be disabled (the manifest refuses); its severity can be lowered when an unreachable cluster should not count as critical.
+`olm-operators-healthy` is skipped on a cluster without OLM, and `machine-config-pools` on one that did not serve them.
+
+#### Examples
+
+"Treat 1 degraded operator as a warning and 3 as critical":
+
+```yaml
+health_checks:
+  no-degraded-operators:
+    warn: { degraded: 1 }
+    fail: { degraded: 3 }
+```
+
+"A certificate with a week left is a failure, not a warning":
+
+```yaml
+health_checks:
+  certificates-valid:
+    warn: { expiring: 1, expiring_within_days: 30 }
+    fail: { expired: 1, expiring: 1, expiring_within_days: 7 }
+```
+
+"Application pods are this estate's problem after all" (they are informational by default):
+
+```yaml
+health_checks:
+  application-pods:
+    severity: warning
+    warn: { issues_percent: 5 }
+    fail: { issues_percent: 20 }
+```
+
+"We run a busy estate: only page on real saturation, and never on a cordon":
+
+```yaml
+health_checks:
+  capacity-headroom:
+    warn: { used_percent: 92 }
+    fail: { used_percent: 98 }
+  nodes-pressure:
+    warn: {}
+    fail: { pressured: 2 }
+```
+
+An unknown check name, an unknown level for a check, a `warn` that is only reached after `fail`, a bad severity or a level of the wrong type is a `ManifestError` at load: the API refuses to start on a manifest it cannot honour rather than silently grading the fleet differently.
+
+#### What a check result carries
+
+Every check result carries what it measured and the levels that applied, so a reader never has to open the manifest to understand a status:
+
+```json
+{
+  "name": "capacity-headroom", "title": "Capacity headroom",
+  "status": "warn", "severity": "warning",
+  "message": "CPU at 88% of allocatable",
+  "value": {"used_percent": 88.0},
+  "levels": {"warn": {"used_percent": 85}, "fail": {"used_percent": 95}}
+}
+```
+
+`GET /api/manifest` describes the effective configuration of every check (title, enabled, severity, units, warn, fail, description), which is what the dashboard and the MCP `what_is_collected` tool show.
 
 ## What is never collected
 

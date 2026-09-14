@@ -1,7 +1,22 @@
 """
 The OCP API manifest - what the collector is allowed to read from a cluster,
-how namespaces are classified, where application ownership comes from, and the
-thresholds the health checks use.
+how namespaces are classified, where application ownership comes from, and how
+every health check is graded.
+
+Two kinds of number live here, and the difference matters:
+
+  * COLLECTION time - `thresholds:` inputs the parsers apply while a cluster is
+    being read, so they decide what the stored document says (a pod is an issue,
+    a certificate is "expiring", a quota is "warning"): pod_restart_threshold,
+    pod_pending_seconds, certificate_expiry_days, quota_warning_percent,
+    cluster_admin_roles. Changing one only takes effect on the next sweep.
+  * EVALUATION time - `health_checks:` levels the health checks apply to an
+    already-collected document. Changing one re-grades the fleet on the next
+    sweep without collecting anything different.
+
+The flat `thresholds:` keys that used to drive the checks keep working and
+become the defaults of the check level they always meant (see
+LEGACY_THRESHOLDS in app/collector/healthchecks.py).
 
 Loaded once at startup from ODL_MANIFEST (default: the bundled
 config/ocp-api-manifest.yaml) and validated against the resource registry, so
@@ -13,10 +28,20 @@ Also a CLI:
 """
 import sys
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import yaml
 
 from .appmap import DEFAULT_FIELDS
+from .collector.healthchecks import (
+    BANDS,
+    CHECK_SPECS,
+    SEVERITIES,
+    CheckConfig,
+    describe_checks,
+    resolve_check_configs,
+    version_tuple,
+)
 from .collector.registry import REGISTRY, SCRUB_POLICY, rbac_rules
 from .settings import settings
 
@@ -31,6 +56,19 @@ _DEFAULT_THRESHOLDS = {
     "capacity_warning_percent": 85,
     "capacity_critical_percent": 95,
     "cluster_admin_roles": ["cluster-admin"],
+}
+
+# When each flat threshold acts. "collection" ones shape the document the
+# collector stores and only take effect on the next sweep; "evaluation" ones are
+# defaults for a `health_checks:` level and re-grade what is already stored.
+_THRESHOLD_SCOPE = {
+    "certificate_expiry_days": "collection+evaluation",
+    "pod_restart_threshold": "collection",
+    "pod_pending_seconds": "collection",
+    "quota_warning_percent": "collection+evaluation",
+    "capacity_warning_percent": "evaluation",
+    "capacity_critical_percent": "evaluation",
+    "cluster_admin_roles": "collection",
 }
 
 
@@ -55,6 +93,8 @@ class Manifest:
     ownership: dict[str, list[str]]
     keep_annotations: tuple[str, ...]
     thresholds: dict = field(default_factory=dict)
+    # Per-check overrides, already validated: {check name: {enabled, severity, warn, fail}}.
+    health_checks: dict = field(default_factory=dict)
     source: str = ""
     # {source: labels|mapping, mapping: {path, fields}}; see app/appmap.py
     applications: dict = field(default_factory=lambda: {
@@ -86,6 +126,18 @@ class Manifest:
     def threshold(self, name: str):
         return self.thresholds.get(name, _DEFAULT_THRESHOLDS.get(name))
 
+    def effective_thresholds(self) -> dict:
+        return {**_DEFAULT_THRESHOLDS, **self.thresholds}
+
+    # -- health checks ------------------------------------------------------
+    @cached_property
+    def health_check_config(self) -> dict[str, CheckConfig]:
+        """Every check's effective configuration: the catalogue's defaults, then
+        the flat `thresholds:` block, then this manifest's `health_checks:`
+        entries. Computed once - a manifest never changes after it is loaded."""
+        return resolve_check_configs(self.effective_thresholds(), self.health_checks,
+                                     supported_floor=settings.supported_floor)
+
     # -- presentation -------------------------------------------------------
     def describe(self) -> dict:
         """The manifest as the API serves it."""
@@ -115,7 +167,10 @@ class Manifest:
                 "ownership": self.ownership,
             },
             "keep_annotations": list(self.keep_annotations),
-            "thresholds": {**_DEFAULT_THRESHOLDS, **self.thresholds},
+            "thresholds": self.effective_thresholds(),
+            # Which of those act while a cluster is read, and which while it is graded.
+            "threshold_scope": dict(_THRESHOLD_SCOPE),
+            "health_checks": describe_checks(self.health_check_config),
             "applications": self.applications,
         }
 
@@ -126,6 +181,110 @@ class Manifest:
             "metadata": {"name": name, "labels": {"app": "odl"}},
             "rules": rbac_rules(self.enabled_keys()),
         }
+
+
+def _level_value(check: str, band: str, level, value):
+    """One `warn:` / `fail:` value, checked against its level's unit."""
+    if value is None:               # an explicit null clears the default level
+        return None
+    if level.unit == "version":
+        if not isinstance(value, str) or not value.strip():
+            raise ManifestError(
+                f"health check `{check}`: `{band}.{level.key}` must be a version string "
+                f'such as "4.15.0" (got {value!r})')
+        return value
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ManifestError(
+            f"health check `{check}`: `{band}.{level.key}` must be a number "
+            f"({level.unit}), got {value!r}")
+    if value < 0:
+        raise ManifestError(f"health check `{check}`: `{band}.{level.key}` must not be negative")
+    return value
+
+
+def _validate_bands(configs: dict[str, CheckConfig]):
+    """`warn` must be reached before `fail`, whichever way the level compares."""
+    for name, cfg in configs.items():
+        for level in cfg.spec.levels:
+            warn, fail = cfg.warn.get(level.key), cfg.fail.get(level.key)
+            if warn is None or fail is None:
+                continue
+            if level.unit == "version":
+                bad, rule = version_tuple(warn) < version_tuple(fail), "at or above"
+            elif level.compare == "window":
+                bad, rule = warn < fail, "at or above"
+            else:
+                bad, rule = warn > fail, "at or below"
+            if bad:
+                raise ManifestError(
+                    f"health check `{name}`: `warn.{level.key}` ({warn}) must be {rule} "
+                    f"`fail.{level.key}` ({fail}) - a check has to warn before it fails")
+
+
+def _parse_health_checks(raw: dict, thresholds: dict) -> dict:
+    """The `health_checks:` section, validated against the check catalogue."""
+    section = raw.get("health_checks") or {}
+    if not isinstance(section, dict):
+        raise ManifestError("`health_checks` must be a mapping of check name -> options")
+    unknown = sorted(set(section) - set(CHECK_SPECS))
+    if unknown:
+        raise ManifestError(
+            f"unknown health check(s) in manifest: {', '.join(unknown)}. "
+            f"Known checks: {', '.join(CHECK_SPECS)}")
+
+    overrides: dict[str, dict] = {}
+    for name, opts in section.items():
+        spec = CHECK_SPECS[name]
+        if opts is None:
+            opts = {}
+        if isinstance(opts, bool):
+            opts = {"enabled": opts}
+        if not isinstance(opts, dict):
+            raise ManifestError(f"health check `{name}` must be a mapping or a boolean")
+        bad = sorted(set(opts) - {"enabled", "severity", *BANDS})
+        if bad:
+            raise ManifestError(
+                f"health check `{name}` has unsupported option(s): {', '.join(bad)} "
+                f"(supported: enabled, severity, {', '.join(BANDS)})")
+
+        entry: dict = {}
+        if "enabled" in opts:
+            if not isinstance(opts["enabled"], bool):
+                raise ManifestError(f"health check `{name}`: enabled must be true or false")
+            if name == "cluster-reachable" and not opts["enabled"]:
+                # The only check that runs for an unreachable cluster; without it
+                # such a cluster would report healthy on an empty panel.
+                raise ManifestError("health check `cluster-reachable` cannot be disabled")
+            entry["enabled"] = opts["enabled"]
+        if "severity" in opts:
+            if opts["severity"] not in SEVERITIES:
+                raise ManifestError(
+                    f"health check `{name}`: severity must be {' | '.join(SEVERITIES)} "
+                    f"(got {opts['severity']!r})")
+            entry["severity"] = opts["severity"]
+        for band in BANDS:
+            if band not in opts:
+                continue
+            levels = opts[band] or {}
+            if not isinstance(levels, dict):
+                raise ManifestError(
+                    f"health check `{name}`: `{band}` must be a mapping of level -> value")
+            if not spec.levels:
+                raise ManifestError(
+                    f"health check `{name}` measures nothing, so it takes no `{band}:` levels "
+                    f"- it only has `enabled` and `severity`")
+            bad = sorted(set(levels) - set(spec.level_keys))
+            if bad:
+                raise ManifestError(
+                    f"health check `{name}`: unknown level(s) in `{band}`: {', '.join(bad)}. "
+                    f"Levels of this check: {', '.join(spec.level_keys)}")
+            entry[band] = {key: _level_value(name, band, spec.level(key), value)
+                           for key, value in levels.items()}
+        overrides[name] = entry
+
+    _validate_bands(resolve_check_configs(thresholds, overrides,
+                                          supported_floor=settings.supported_floor))
+    return overrides
 
 
 def parse_manifest(raw: dict, source: str = "") -> Manifest:
@@ -184,6 +343,8 @@ def parse_manifest(raw: dict, source: str = "") -> Manifest:
     if bad:
         raise ManifestError(f"unknown threshold(s): {', '.join(bad)}")
 
+    health_checks = _parse_health_checks(raw, {**_DEFAULT_THRESHOLDS, **thresholds})
+
     return Manifest(
         resources=resources,
         platform_names=set(platform.get("names") or []),
@@ -192,6 +353,7 @@ def parse_manifest(raw: dict, source: str = "") -> Manifest:
         ownership=ownership,
         keep_annotations=tuple(raw.get("keep_annotations") or []),
         thresholds=thresholds,
+        health_checks=health_checks,
         source=source,
         applications=applications,
     )
@@ -218,7 +380,10 @@ def _main(argv):
     cmd = argv[1] if len(argv) > 1 else "validate"
     m = load_manifest()
     if cmd == "validate":
-        print(f"ok: {m.source} - {len(m.enabled_keys())}/{len(REGISTRY)} resources enabled")
+        checks = m.health_check_config
+        enabled_checks = sum(1 for c in checks.values() if c.enabled)
+        print(f"ok: {m.source} - {len(m.enabled_keys())}/{len(REGISTRY)} resources enabled, "
+              f"{enabled_checks}/{len(checks)} health checks enabled")
     elif cmd == "rbac":
         header = (
             "# Read-only access the Operations Data Layer collector needs on EACH\n"

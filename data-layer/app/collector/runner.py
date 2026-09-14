@@ -266,9 +266,8 @@ def _gather(target: Target, manifest) -> tuple[Target, dict, bool]:
 # --------------------------------------------------------------------------- #
 def _persist(store: Store, target: Target, collected: dict, manifest):
     """Health-check the document and replace the cluster in one transaction."""
-    thresholds = manifest.describe()["thresholds"]
     checks, overall, score, counts = run_health_checks(
-        collected, settings.supported_floor, thresholds)
+        collected, settings.supported_floor, checks_config=manifest.health_check_config)
     store.persist_cluster(target.hub, collected, checks, overall, score, counts)
 
 

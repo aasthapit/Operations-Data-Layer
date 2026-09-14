@@ -271,6 +271,10 @@ def check_dict(h) -> dict:
         "status": h.status,
         "severity": h.severity,
         "message": h.message,
+        # What the check measured, keyed by unit, and the levels that applied -
+        # enough to render "87% used (warn 85, fail 95)" without the manifest.
+        "value": h.value or {},
+        "levels": h.levels or {},
     }
 
 

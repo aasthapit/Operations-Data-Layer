@@ -734,6 +734,24 @@ def test_metrics_capacity_and_utilization(client):
 # --------------------------------------------------------------------------- #
 # manifest + admin
 # --------------------------------------------------------------------------- #
+def test_manifest_describes_the_health_checks(client):
+    d = _get(client, "/api/manifest")
+    checks = {c["name"]: c for c in d["health_checks"]}
+    capacity = checks["capacity-headroom"]
+    assert capacity["enabled"] and capacity["severity"] == "warning"
+    assert capacity["warn"] == {"used_percent": 85} and capacity["fail"] == {"used_percent": 95}
+    assert [u["key"] for u in capacity["units"]] == ["used_percent"]
+    assert d["threshold_scope"]["pod_restart_threshold"] == "collection"
+
+    # and a cluster's own results carry what they measured against those levels
+    detail = _get(client, "/api/clusters/ocp-east-1")
+    by_name = {c["name"]: c for c in detail["health_checks"]}
+    assert by_name["capacity-headroom"]["levels"] == {"warn": {"used_percent": 85},
+                                                      "fail": {"used_percent": 95}}
+    assert "used_percent" in by_name["capacity-headroom"]["value"]
+    assert by_name["nodes-ready"]["value"]["not_ready"] == 0
+
+
 def test_manifest_availability(client):
     d = _get(client, "/api/manifest/availability")
     assert "routes" in d["resources"]

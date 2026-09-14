@@ -12,6 +12,10 @@
 # cannot answer. Point ODL_MANIFEST at a copy of this file to customise it
 # without rebuilding the image.
 #
+# The same file also decides how every cluster is GRADED: `health_checks:` below
+# gives each check its own enabled flag, severity, and warn / fail levels in the
+# check's own unit.
+#
 # What is scrubbed is NOT configurable. ConfigMap values, Secret values,
 # certificate material, and container env values are dropped at parse time and
 # never reach the database or the API. Only names, key names, byte sizes,
@@ -84,14 +88,218 @@ keep_annotations:
   - cert-manager.io/certificate-name
   - storageclass.kubernetes.io/is-default-class
 
+# Two kinds of number, and the difference matters.
+#
+#   COLLECTION time  applied by the parsers while a cluster is read, so they
+#                    decide what the stored document SAYS. Changing one only
+#                    takes effect on the next sweep.
+#   EVALUATION time  applied by the health checks to an already-collected
+#                    document (the `health_checks:` block below). Changing one
+#                    re-grades the fleet on the next sweep without collecting
+#                    anything different.
+#
+# `thresholds:` is the older flat block. It is still supported, and the four
+# keys that always fed a health check are now the DEFAULTS of that check's
+# level (see the mapping in each comment). Set the level under `health_checks:`
+# to override it per check.
 thresholds:
-  certificate_expiry_days: 30      # certs expiring within this window are flagged
-  pod_restart_threshold: 5         # restarts at/above this make a pod an issue
-  pod_pending_seconds: 300         # Pending longer than this is an issue
-  quota_warning_percent: 90        # ResourceQuota usage at/above this warns
-  capacity_warning_percent: 85     # cluster CPU/memory usage vs allocatable
+  # COLLECTION: certs expiring within this window are stored as status
+  # "expiring". Also the default of certificates-valid.warn.expiring_within_days.
+  certificate_expiry_days: 30
+  # COLLECTION: restarts at/above this make a pod an issue.
+  pod_restart_threshold: 5
+  # COLLECTION: Pending (or not-ready) longer than this is an issue.
+  pod_pending_seconds: 300
+  # COLLECTION: ResourceQuota usage at/above this is stored as status "warning".
+  # Also the default of quotas-headroom.warn.max_percent.
+  quota_warning_percent: 90
+  # EVALUATION: default of capacity-headroom.warn.used_percent / .fail.used_percent.
+  capacity_warning_percent: 85
   capacity_critical_percent: 95
-  cluster_admin_roles: [cluster-admin]   # ClusterRoleBindings to report
+  # COLLECTION: which ClusterRoleBindings are reported.
+  cluster_admin_roles: [cluster-admin]
+
+# Health checks
+# =============
+#
+# Every check in the panel is configurable here. Each entry takes:
+#
+#   enabled:  true | false      a disabled check is not run and not shown
+#   severity: critical | warning | info
+#                               what a FAILING check means for the cluster:
+#                               critical -> the cluster is critical,
+#                               warning  -> the cluster is a warning,
+#                               info     -> surfaced, never degrades the rollup
+#   warn: / fail:               levels in the check's own unit
+#
+# A measured value at or above `fail` is a fail, at or above `warn` is a warn,
+# otherwise the check passes. `version-supported`'s `floor` is the one level
+# that compares the other way (a version BELOW it trips the band), and
+# `expiring_within_days` is a window rather than a level: it says how far ahead
+# that band looks. A band you set REPLACES that band's defaults rather than
+# merging into it, so write every level you want in it: `fail: { degraded: 3 }`
+# on its own means "never warn, fail at three", and `warn: {}` means "never
+# warn". A `warn` result always rolls the cluster up to at most `warning`,
+# whatever the severity; anything at `info` never degrades it.
+#
+# Everything below is commented out at its default, so this block documents the
+# units without changing behaviour. Uncomment a line to change a check, e.g.
+# "one degraded operator is a warning, three are critical":
+#
+#   no-degraded-operators:
+#     warn: { degraded: 1 }
+#     fail: { degraded: 3 }
+#
+# The effective configuration is served by GET /api/manifest, and every check
+# result carries the value it measured and the levels that applied.
+health_checks:
+
+  # Could the collector connect to the cluster at all? When it could not, this
+  # is the ONLY check that runs, so it cannot be disabled; its severity can be
+  # lowered if an unreachable cluster should not count as critical.
+  cluster-reachable:
+    # severity: critical
+
+  # The hub's ManagedClusterConditionAvailable for this cluster.
+  managed-available:
+    # enabled: true
+    # severity: critical
+
+  # ClusterVersion is Available and not Failing.
+  cluster-version-available:
+    # enabled: true
+    # severity: critical
+
+  # Cluster operators the registry marks critical (etcd, kube-apiserver, ...)
+  # reporting Available=False.
+  #   unavailable (count)
+  critical-operators-available:
+    # enabled: true
+    # severity: critical
+    # fail: { unavailable: 1 }
+
+  # Cluster operators reporting Degraded=True.
+  #   degraded (count)
+  no-degraded-operators:
+    # enabled: true
+    # severity: critical
+    # fail: { degraded: 1 }
+
+  # Nodes whose Ready condition is not True. A cluster that reported no nodes at
+  # all warns as informational - that is missing data, not a sick cluster.
+  #   not_ready          (count)
+  #   not_ready_percent  (percent of the cluster's nodes)
+  nodes-ready:
+    # enabled: true
+    # severity: critical
+    # fail: { not_ready: 1 }
+
+  # Nodes reporting a pressure condition (memory / disk / PID), and nodes that
+  # are cordoned. By default pressure fails and a cordon warns.
+  #   pressured  (count)
+  #   cordoned   (count)
+  nodes-pressure:
+    # enabled: true
+    # severity: warning
+    # warn: { cordoned: 1 }
+    # fail: { pressured: 1 }
+
+  # The cluster's OCP version against the supported floor. A version BELOW the
+  # floor trips the band. The default floor is the SUPPORTED_FLOOR setting.
+  #   floor (version)
+  version-supported:
+    # enabled: true
+    # severity: warning
+    # fail: { floor: "4.15.0" }
+
+  # Is ClusterVersion applying a new release? Informational by default: an
+  # upgrade is expected work, not ill health.
+  upgrade-in-progress:
+    # enabled: true
+    # severity: info
+
+  # Cluster operators reporting Progressing=True while the cluster is NOT
+  # upgrading (an operator mid-rollout). Measures zero during an upgrade.
+  #   progressing (count)
+  operators-stable:
+    # enabled: true
+    # severity: warning
+    # warn: { progressing: 1 }
+
+  # MachineConfigPools degraded or still rolling out a machine config. An
+  # updating pool is reported as informational - it is a transition, not a fault.
+  #   degraded (count)
+  #   updating (count)
+  machine-config-pools:
+    # enabled: true
+    # severity: critical
+    # warn: { updating: 1 }
+    # fail: { degraded: 1 }
+
+  # Problem pods (crash-looping, OOM-killed, unschedulable, long-pending,
+  # high-restart) in platform namespaces. What counts as a problem pod is
+  # decided at COLLECTION time by thresholds.pod_restart_threshold and
+  # thresholds.pod_pending_seconds.
+  #   issues          (count)
+  #   issues_percent  (percent of the platform namespaces' pods)
+  platform-pods:
+    # enabled: true
+    # severity: warning
+    # warn: { issues: 1 }
+
+  # The same, in application namespaces. Informational by default: one
+  # application's broken pod is not the cluster's problem.
+  #   issues          (count)
+  #   issues_percent  (percent of the application namespaces' pods)
+  application-pods:
+    # enabled: true
+    # severity: info
+    # warn: { issues: 1 }
+
+  # Live usage against allocatable, whichever of CPU and memory is worse.
+  # Reported as informational on a cluster that does not serve metrics.k8s.io.
+  #   used_percent (percent of allocatable)
+  capacity-headroom:
+    # enabled: true
+    # severity: warning
+    # warn: { used_percent: 85 }    # thresholds.capacity_warning_percent
+    # fail: { used_percent: 95 }    # thresholds.capacity_critical_percent
+
+  # Certificates found in Secrets and ConfigMaps. `expiring_within_days` is the
+  # band's window: each band counts the certificates expiring inside its own
+  # window and compares that count with its `expiring` level. Adding
+  # `fail: { expiring: 1, expiring_within_days: 7 }` means "a certificate with a
+  # week left is a failure".
+  #   expired               (count)
+  #   expiring              (count, inside the band's window)
+  #   expiring_within_days  (days - the band's window, not a level)
+  certificates-valid:
+    # enabled: true
+    # severity: warning
+    # warn: { expiring: 1, expiring_within_days: 30 }   # thresholds.certificate_expiry_days
+    # fail: { expired: 1 }
+
+  # The most-consumed ResourceQuota in the cluster, against its hard limit.
+  #   max_percent  (percent of a hard limit)
+  #   namespaces   (count of quotas at or above the warn percent)
+  quotas-headroom:
+    # enabled: true
+    # severity: info
+    # warn: { max_percent: 90 }     # thresholds.quota_warning_percent
+
+  # ClusterServiceVersions not in the Succeeded phase. Skipped entirely on a
+  # cluster without OLM.
+  #   unhealthy (count)
+  olm-operators-healthy:
+    # enabled: true
+    # severity: warning
+    # warn: { unhealthy: 1 }
+
+  # Does ClusterVersion offer a newer release? Only reported when there is one
+  # and the cluster is not already upgrading.
+  update-available:
+    # enabled: true
+    # severity: info
 
 resources:
   # ---- cluster-scoped platform state --------------------------------------

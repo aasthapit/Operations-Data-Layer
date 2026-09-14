@@ -178,8 +178,9 @@ CAPACITY_FIELDS = (
     "memory_usage", "pods_capacity",
 )
 # Section rows carry exactly these fields (plus `cluster_name`), the columns the
-# former ORM tables had. Anything else the collector document holds is derived
-# state the API never read.
+# former ORM tables had - plus `value` / `levels` on a health check, which are
+# what it measured and the levels that applied. Anything else the collector
+# document holds is derived state the API never read.
 SECTION_FIELDS: dict[str, frozenset[str]] = {
     "operators": frozenset({
         "name", "version", "available", "progressing", "degraded", "critical", "message"}),
@@ -213,7 +214,8 @@ SECTION_FIELDS: dict[str, frozenset[str]] = {
         "key", "kind", "api_group", "namespace", "ns_class", "name", "status", "expires_at",
         "labels", "summary", "created_at"}),
     "resource_status": frozenset({"key", "status", "count", "duration_ms", "error"}),
-    "health_checks": frozenset({"name", "title", "status", "severity", "message"}),
+    "health_checks": frozenset({"name", "title", "status", "severity", "message",
+                                "value", "levels"}),
 }
 _OPERATOR_INDEX_FIELDS = ("version", "available", "progressing", "degraded", "critical", "message")
 

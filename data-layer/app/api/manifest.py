@@ -13,7 +13,9 @@ router = APIRouter(prefix="/api/manifest", tags=["manifest"])
 @router.get("")
 def manifest():
     """The OCP API manifest: every resource the collector knows, whether it is
-    enabled, the scrub policy, namespace classification and thresholds."""
+    enabled, the scrub policy, namespace classification, the thresholds (with
+    the scope each acts at) and the effective configuration of every health
+    check - its title, whether it runs, its severity, its units and levels."""
     return get_manifest().describe()
 
 

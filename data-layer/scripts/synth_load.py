@@ -1146,7 +1146,8 @@ def run_load(store: RedisStore, client, profile: Profile, names: list[str], hubs
         t0 = time.perf_counter()
         doc = generate_document(name, rng, profile)
         checks, overall, score, counts = run_health_checks(
-            doc, profile.supported_floor, profile.thresholds)
+            doc, profile.supported_floor, profile.thresholds,
+            checks_config=profile.manifest.health_check_config)
         t1 = time.perf_counter()
         hub = hub_names[index % len(hub_names)]
         store.persist_cluster(hub, doc, checks, overall, score, counts)
