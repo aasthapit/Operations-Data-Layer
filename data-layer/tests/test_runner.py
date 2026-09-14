@@ -218,3 +218,25 @@ def test_managed_cluster_without_secret_or_url_fails_clearly(store, monkeypatch)
     (target,), _ = runner._discover(store)
     with pytest.raises(RuntimeError, match="no kubeconfig secret on hub hub"):
         target.connect()
+
+
+def test_login_verifies_against_the_configured_ca(store, monkeypatch):
+    """A corporate CA must reach the OAuth login too, not only the API client."""
+    from app.config_loader import FleetConfig, HubConfig
+
+    hub = HubConfig(name="acm", api_url="https://api.acm:6443", ca_cert="/etc/odl/corp-ca.crt",
+                    auth={"type": "password", "username": "svc", "password": "pw"})
+    monkeypatch.setattr(runner, "load_config", lambda: FleetConfig({}, [hub], []))
+    seen = {}
+    monkeypatch.setattr(runner, "resolve_bearer_token",
+                        lambda url, auth, verify=True: seen.setdefault(url, verify) and "tok")
+    monkeypatch.setattr(
+        runner.kube, "bundle_from_endpoint",
+        lambda url, token, verify=True, ca_cert=None: seen.setdefault("client", (verify, ca_cert)))
+    monkeypatch.setattr(runner.kube, "list_managedclusters", lambda hb: [])
+
+    runner._discover(store)
+    assert seen["https://api.acm:6443"] == "/etc/odl/corp-ca.crt"
+    assert seen["client"] == (True, "/etc/odl/corp-ca.crt")
+    assert runner._tls_verify(True, "/etc/odl/corp-ca.crt") is False
+    assert runner._tls_verify(False, None) is True

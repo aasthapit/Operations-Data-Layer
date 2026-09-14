@@ -60,15 +60,25 @@ class Target:
 _HUB_KUBECONFIG_SECRETS = ("{name}-kubeconfig", "{name}-admin-kubeconfig")
 
 
+def _tls_verify(insecure_skip_tls_verify: bool, ca_cert: str | None):
+    """What `requests` should verify against: False, the default bundle, or a
+    CA file. Python does not use the OS keychain, so a corporate CA has to be
+    given explicitly (`ca_cert`) or the OAuth login fails before RBAC is
+    even consulted."""
+    if insecure_skip_tls_verify:
+        return False
+    return ca_cert or True
+
+
 def _hub_bundle(hub) -> kube.ApiBundle:
     """A client for the hub itself: kubeconfig file, or api_url + auth."""
     if hub.kubeconfig:
         return kube.bundle_from_file(hub.kubeconfig)
-    verify = not hub.insecure_skip_tls_verify
+    verify = _tls_verify(hub.insecure_skip_tls_verify, hub.ca_cert)
     token = resolve_bearer_token(hub.api_url, hub.auth, verify=verify)
     if token is None:
         raise RuntimeError(f"hub {hub.name}: api_url needs auth of type token or password")
-    return kube.bundle_from_endpoint(hub.api_url, token, verify=verify, ca_cert=hub.ca_cert)
+    return kube.bundle_from_endpoint(hub.api_url, token, verify=bool(verify), ca_cert=hub.ca_cert)
 
 
 def _managed_connect(hub, hb: kube.ApiBundle, meta: dict) -> Callable[[], kube.ApiBundle]:
@@ -95,11 +105,11 @@ def _managed_connect(hub, hb: kube.ApiBundle, meta: dict) -> Callable[[], kube.A
         url = meta.get("client_url")
         if not url:
             raise RuntimeError(f"ManagedCluster {name} has no client URL to connect to")
-        verify = not hub.insecure_skip_tls_verify
+        verify = _tls_verify(hub.insecure_skip_tls_verify, hub.ca_cert)
         token = resolve_bearer_token(url, hub.auth, verify=verify)
         if token is None:
             raise RuntimeError(f"hub {hub.name}: shared access needs auth of type token or password")
-        return kube.bundle_from_endpoint(url, token, verify=verify, ca_cert=hub.ca_cert)
+        return kube.bundle_from_endpoint(url, token, verify=bool(verify), ca_cert=hub.ca_cert)
 
     def connect():
         if hub.managed_access == "secret":
@@ -156,9 +166,9 @@ def _discover_direct(store: Store, clusters) -> list[Target]:
         }
 
         def connect(c=c):
-            verify = not c.insecure_skip_tls_verify
+            verify = _tls_verify(c.insecure_skip_tls_verify, c.ca_cert)
             token = resolve_bearer_token(c.api_url, c.auth, verify=verify)
-            return kube.bundle_from_endpoint(c.api_url, token, verify=verify, ca_cert=c.ca_cert)
+            return kube.bundle_from_endpoint(c.api_url, token, verify=bool(verify), ca_cert=c.ca_cert)
 
         targets.append(Target(c.hub, meta, connect))
     for hub_name, n in counts.items():
