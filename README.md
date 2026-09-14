@@ -130,6 +130,7 @@ Then in `.env`:
 ```sh
 REDIS_URL=rediss://odl:change-me@redis.example.internal:6380/0   # or redis://localhost:16379/0
 ODL_CONFIG=config/acm.yaml                                       # relative to data-layer/ (defaults to acm.yaml if present, else clusters.yaml)
+ODL_MANIFEST=config/ocp-api-manifest.fleet.yaml                   # recommended: tiered collection (platform state every sweep, inventory every 15m)
 OCP_USERNAME=svc-ops-data                                         # whatever the config references as ${VAR}
 OCP_PASSWORD=...
 ```
@@ -147,10 +148,14 @@ The API is at http://localhost:18002/docs, the dashboard at http://localhost:517
 `make local-api` runs only the API; set `COLLECTOR_ENABLED=false` in `.env` to run it read-only against a Redis that another instance fills.
 Onboarding real clusters (service account, RBAC, TLS) is in [docs/onboarding.md](docs/onboarding.md).
 
-If sweeps are slow: the log prints one line per cluster per sweep (`collect <name>: 4200ms (fetch 3900ms ...; slowest: secrets 1800ms, pods 900ms, ...)`), `GET /api/runs` shows whole-sweep durations, and `GET /api/manifest/availability` shows per cluster and per kind how long each list took.
-Then turn, in order: `COLLECT_WORKERS` (clusters in flight per instance, default 8; each holds one cluster's raw objects in memory), `COLLECT_FETCH_WORKERS` (kinds fetched in parallel within a cluster, default 6), `LIST_PAGE_SIZE` (default 500), and finally the manifest, where a heavy kind you do not need (`secrets`, `configmaps`, `events`) can be disabled or limited to application namespaces.
+If sweeps are slow: the log prints one line per cluster per sweep (`collect <name>: 4200ms (fetch 3900ms, assemble 300ms; 12 kinds fetched, 18 cached; slowest: secrets 1800ms, pods 900ms, ...)`), `GET /api/runs` shows whole-sweep durations, and `GET /api/manifest/availability` shows per cluster and per kind how long each list took, when it was last read and whether what is being served is cached.
+Turn the schedule first: every manifest resource takes an `interval` (0 = every sweep, or a tier such as `15m` / `1h`), and a kind that is not due is not fetched at all - its rows stand until it is.
+`ODL_MANIFEST=config/ocp-api-manifest.fleet.yaml` is the ready-made profile (platform state every sweep, inventory every 15 minutes, Secrets and ConfigMaps off); `POST /api/refresh?full=true` ignores every tier when you want one complete pass.
+Then turn, in order: `COLLECT_WORKERS` (clusters in flight per instance, default 8; each holds one cluster's raw objects in memory), `COLLECT_FETCH_WORKERS` (kinds fetched in parallel within a cluster, default 6), `LIST_PAGE_SIZE` (default 500), and finally the manifest again, where a heavy kind you do not need (`secrets`, `configmaps`, `events`) can be disabled outright or limited to application namespaces.
 A sweep in progress is visible as `sweep` on `GET /api/status` and `GET /api/health/overview` (`done` of `total`), and every cluster appears in the UI as soon as it is written.
-For a hub with a hundred or more clusters, run several collector processes against the same Redis, each taking a slice of the fleet: `COLLECT_SHARD=0/3 DEV_API_PORT=18002 make local-api`, `COLLECT_SHARD=1/3 DEV_API_PORT=18003 make local-api`, and so on; every shard discovers the whole fleet, collects only its slice, and shard 0 does the end-of-sweep housekeeping.
+For an estate of several ACM hubs, run one collector per hub against the same Redis: `COLLECT_HUBS=man01paa DEV_API_PORT=18002 make local-api`, `COLLECT_HUBS=man02paa DEV_API_PORT=18003 make local-api`, and so on.
+Each instance discovers, collects and prunes only its own hubs' clusters, holds only its own hubs' credentials, and leaves the other hubs' rows to their owners (it still records that they exist, so the fleet view is whole); an unknown hub name is a startup error.
+For a hub with a hundred or more clusters, split it further with `COLLECT_SHARD=i/n`, which takes a slice of the owned clusters: `COLLECT_HUBS=man01paa COLLECT_SHARD=0/3 DEV_API_PORT=18002 make local-api`, `... COLLECT_SHARD=1/3 DEV_API_PORT=18003 ...`, and so on; shard 0 does the end-of-sweep housekeeping.
 
 ### ACM test topology (real OCM + Tekton)
 
@@ -209,9 +214,13 @@ FLEET_PARALLEL=2 make fleet-up                                             # gen
 ## The data layer
 
 * `config/ocp-api-manifest.yaml` - **the OCP API manifest**: which resources
-  are collected from every cluster (each with an `enabled` flag), how
-  namespaces are classified as application vs platform, ownership labels, and
-  health thresholds. See [docs/ocp-api-manifest.md](docs/ocp-api-manifest.md).
+  are collected from every cluster (each with an `enabled` flag and an
+  `interval`, its collection tier), how namespaces are classified as
+  application vs platform, ownership labels, and health thresholds. See
+  [docs/ocp-api-manifest.md](docs/ocp-api-manifest.md).
+* `config/ocp-api-manifest.fleet.yaml` - the same manifest with a schedule, for
+  a real estate: platform state every sweep, inventory every 15 minutes,
+  Secrets and ConfigMaps off (`ODL_MANIFEST=config/ocp-api-manifest.fleet.yaml`).
 * `app/collector/registry.py` - the closed list of resources the collector can
   read (group/version/plural/scope); RBAC is generated from it.
 * `app/collector/scrub.py` - the non-configurable scrub policy: ConfigMap and
@@ -254,6 +263,7 @@ utilization and history are recorded each sweep.
 ### Refresh / cache strategy
 
 The collector polls on an interval (`REFRESH_INTERVAL_SECONDS`, default 120s) and on demand via `POST /api/refresh`.
+A sweep collects what is **due**: every manifest resource has its own `interval` (0 = every sweep), so platform state stays fresh while inventory is re-read on its own tier and the previous rows stand in between - `?full=true` forces a complete pass.
 One cluster can also be refreshed on its own via `POST /api/clusters/{name}/refresh`, behind a single-flight lock, without waiting for the next sweep.
 The API never touches a cluster on the read path - it serves the last collected snapshot from Redis, so reads are fast and the cluster API load is bounded by the poll interval.
 Every cluster summary carries `last_synced`, `age_seconds` and `stale`, so the API never hides that it is serving a cache.
@@ -300,7 +310,7 @@ credentials instead of kind kubeconfigs.
 ```
 fleet/            kind-based OpenShift/ACM fleet (provisioning + seed, metrics-server addon, CRDs)
 data-layer/       FastAPI app: collector, auth, models, REST API, tests
-  config/         ocp-api-manifest.yaml · hubs.yaml (generated) · clusters.example.yaml (direct mode)
+  config/         ocp-api-manifest.yaml (+ .fleet.yaml, tiered) · hubs.yaml (generated) · clusters.example.yaml (direct mode)
 dashboard/        React + Vite dashboard (served by nginx)
 mcp-server/       MCP server wrapping the API
 patching-service/ patching system of record (jobs · approvals · audit) + seed_demo.py

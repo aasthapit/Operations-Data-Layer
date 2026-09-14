@@ -12,10 +12,12 @@ This document explains the manifest, the scrub policy that sits behind it, and h
 config/ocp-api-manifest.yaml        what is enabled + options       (operators edit this)
 app/collector/registry.py           how each key is fetched          (code: group/version/plural, scope, RBAC)
 app/collector/parsers.py            how each object is normalised    (code: one parser per key, scrubbing inside)
-app/collector/collect.py            fetch every enabled key, then assemble the cluster document
+app/collector/collect.py            fetch every enabled key that is DUE, assemble the document
+                                    (kinds that are not due keep the last collection's rows)
 deploy/rbac/odl-collector-readonly.yaml   GENERATED from the enabled keys
 GET /api/manifest                   the manifest as the API serves it
-GET /api/manifest/availability      per cluster, per key: collected / unavailable / forbidden / error / disabled
+GET /api/manifest/availability      per cluster, per key: collected / unavailable / forbidden /
+                                    error / disabled, when it was last read, and what it cost
 ```
 
 The registry is the closed list of what the data layer can read.
@@ -78,11 +80,12 @@ health_checks:
     fail: { expiring: 1, expiring_within_days: 7 }
 
 resources:
-  clusterversion:        { enabled: true }
-  nodes:                 { enabled: true }
-  node_metrics:          { enabled: true }
-  pods:                  { enabled: true }
-  secrets:               { enabled: true, namespace_class: all }
+  clusterversion:        { enabled: true, interval: 0 }     # every sweep
+  nodes:                 { enabled: true, interval: 0 }
+  node_metrics:          { enabled: true, interval: 0 }
+  pods:                  { enabled: true, interval: 0 }
+  deployments:           { enabled: true, interval: 15m }   # its own tier
+  secrets:               { enabled: true, namespace_class: all, interval: 1h }
   events:                { enabled: true, limit: 200 }
   ...
 ```
@@ -91,6 +94,7 @@ resources:
 
 One entry per registry key.
 `enabled` turns collection on or off.
+`interval` says how often that kind is collected, and is what [Tiers](#tiers-collect-each-kind-on-its-own-interval) below is about: `0` (the default) means every sweep.
 Namespaced kinds also accept `namespace_class: all | application | platform` to limit collection to one class of namespace (for example, collect ConfigMaps only from application namespaces).
 `events` accepts `limit`, the number of most recent Warning events kept per cluster.
 A bare boolean (`nodes: true`) is shorthand for `{ enabled: true }`.
@@ -257,6 +261,83 @@ Every check result carries what it measured and the levels that applied, so a re
 ```
 
 `GET /api/manifest` describes the effective configuration of every check (title, enabled, severity, units, warn, fail, description), which is what the dashboard and the MCP `what_is_collected` tool show.
+
+## Tiers: collect each kind on its own interval
+
+Every resource takes an `interval`: how often that kind is collected.
+`0`, the default, means every sweep, the sweep being `REFRESH_INTERVAL_SECONDS`.
+Anything else is a tier, written as seconds or as a duration (`90`, `2m`, `15m`, `1h`, `1d`).
+
+```yaml
+resources:
+  clusterversion: { enabled: true,  interval: 0 }      # every sweep
+  deployments:    { enabled: true,  interval: 15m }    # inventory, on its own tier
+  secrets:        { enabled: false, interval: 1h }     # off here; hourly if you need it
+```
+
+This is the difference between a data layer that works on ten clusters and one that works on eight hundred.
+A full pass over a large cluster pulls on the order of 120 MB of Kubernetes JSON ([ADR-0003](adr/0003-enterprise-scale.md), Finding 1), and most of it is inventory that changes when somebody deploys, not every two minutes.
+Tiers keep the platform state that the health panel grades fresh every sweep, and re-read the rest on a schedule.
+
+### How "due" is decided
+
+Per cluster and per kind, the collector records `collected_at` on the kind's `resource_status` entry.
+At the start of a cluster's collection it reads that back, together with the sections the merge may need (the cluster summary, then one pipelined read of the sections), and a kind is due when any of the following holds:
+
+- a full refresh was asked for (`POST /api/refresh?full=true`),
+- its `interval` is 0,
+- it has never been collected, so there is nothing to keep,
+- `now - collected_at >= interval`.
+
+An attempt counts as a collection whatever its outcome, so a kind that is forbidden on a cluster is retried on its tier rather than on every sweep.
+A kind that is not due keeps its previous status entry, marked `cached`, with the `collected_at` of the collection that did fetch it.
+`GET /api/manifest/availability` shows all of it per cluster and per kind: status, `collected_at`, `cached`, `interval_seconds`, and what the last fetch cost (`duration_ms`, `requests`, `bytes`, `objects`, `parse_ms`).
+
+### What is rebuilt and what is kept
+
+The stored document has exactly the same shape whether a sweep collected everything or almost nothing, so health checks, the store and the API cannot tell the difference.
+What varies is where each part comes from:
+
+| Part of the document | When its kind is due | When it is not |
+|---|---|---|
+| `resources` rows | rebuilt from the fetch, per kind | the previous rows of that kind are kept |
+| `workloads`, `workload_images`, `workload_refs` | rebuilt for each due workload kind | the rows of the kinds that were not due are kept, grouped by kind |
+| `operators`, `nodes` | rebuilt | kept |
+| cluster config (ClusterVersion, Infrastructure, Network, Ingress) | reparsed | kept from the last parse |
+| namespace rollups (pods, workloads, resource counts) | always recomputed from the pods of this sweep and whatever workload and inventory rows are in play | pod rollups stand only if pods themselves were not due |
+| `pod_issues` | from this sweep's pods | kept |
+| capacity | recomputed from the nodes in play plus metrics | - |
+
+Two consequences worth knowing:
+
+- A kind that becomes forbidden, unavailable or disabled is reported as such and its previous rows are **dropped**.
+  The document always says what the cluster serves today, never what it used to serve.
+- Node usage and per-namespace usage follow the metrics kinds' tiers, not the nodes' or namespaces' tier: a node row that was kept still gets this sweep's usage if `node_metrics` was due, and keeps the last reading if it was not.
+
+Pods belong in the fast tier.
+Putting them on a slow one is supported (the rollups and pod issues simply stand until they are read again), but the health panel is then as old as that tier.
+
+### The fleet profile
+
+`data-layer/config/ocp-api-manifest.fleet.yaml` is the production profile: the default manifest, with a schedule.
+
+- Every sweep: `clusterversion`, `clusteroperators`, `infrastructure`, `network_config`, `ingress_config`, `nodes`, `node_metrics`, `machineconfigpools`, `namespaces`, `pods`, `pod_metrics`, `events`.
+- Every 15 minutes: `deployments`, `statefulsets`, `daemonsets`, `cronjobs`, `horizontalpodautoscalers`, `services`, `routes`, `ingresses`, `networkpolicies`, `persistentvolumeclaims`, `persistentvolumes`, `storageclasses`, `resourcequotas`, `clusterserviceversions`, `subscriptions`, `clusterrolebindings`.
+- Off: `secrets` and `configmaps`, the two heaviest kinds, together with the `certificates-valid` health check that grades what they carry.
+
+Use it with `ODL_MANIFEST=config/ocp-api-manifest.fleet.yaml`.
+To get certificate expiry back without paying for it every sweep, read those two kinds hourly and turn the check back on:
+
+```yaml
+resources:
+  secrets:    { enabled: true, interval: 1h }
+  configmaps: { enabled: true, interval: 1h }
+health_checks:
+  certificates-valid: { enabled: true }
+```
+
+Changing a manifest does not retroactively change what is stored.
+After editing tiers, `POST /api/refresh?full=true` collects everything once so the whole picture is from the new manifest; without it, each kind simply comes back on its new tier.
 
 ## What is never collected
 

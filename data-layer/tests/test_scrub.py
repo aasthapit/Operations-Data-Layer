@@ -111,3 +111,32 @@ def test_annotations_allowlist(manifest):
 def test_parse_cert_facts_ignores_garbage():
     assert scrub.parse_cert_facts(b"not a pem") == []
     assert scrub.cert_facts_from_data({"tls.crt": "!!!not-base64"}, b64=True) == []
+
+
+def test_looks_like_cert_is_a_byte_check_that_hides_nothing():
+    pem = b"-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----\n"
+    # the marker at the start, whitespace tolerated, whatever the key is called
+    assert scrub.looks_like_cert("anything", pem)
+    assert scrub.looks_like_cert("anything", b"\n\n  " + pem)
+    # a certificate-shaped key name reaches past a preamble
+    assert scrub.looks_like_cert("ca-bundle.crt", b"Bag Attributes\n" + pem)
+    assert scrub.looks_like_cert("whatever", b"Bag Attributes\n" + pem,
+                                 "kubernetes.io/tls")
+    # and nothing without the marker is worth parsing, whatever it is called
+    assert not scrub.looks_like_cert("tls.crt", b"not a certificate")
+    assert not scrub.looks_like_cert("tls.key", b"-----BEGIN PRIVATE KEY-----\nMIIE",
+                                     "kubernetes.io/tls")
+    assert not scrub.looks_like_cert("application.properties", b"db.password=hunter2")
+    assert not scrub.looks_like_cert("x", b" " * 64 + pem)   # not "at the start"
+
+
+def test_a_capped_bundle_still_leaks_nothing(manifest):
+    pem, _ = make_cert_pem(cn="corp-ca", days=10, ca=True, sans=())
+    cm = {"metadata": {"name": "trusted-ca-bundle", "namespace": "openshift-config"},
+          "data": {"ca-bundle.crt": (pem * (scrub.MAX_CERTS_PER_KEY + 3)).decode()}}
+    row = parsers.parse_configmap(cm, manifest)
+    blob = json.dumps(row, default=str)
+    assert "BEGIN CERTIFICATE" not in blob
+    assert len(row["summary"]["certificates"]) == scrub.MAX_CERTS_PER_KEY
+    # the expiry still comes from the certificates that were read
+    assert row["status"] == "expiring" and row["expires_at"] is not None

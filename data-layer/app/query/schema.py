@@ -129,6 +129,13 @@ CLUSTERS = _table(
         ("checks_failed", "INTEGER", "Health checks that failed."),
         ("last_synced", "TIMESTAMP", "When this cluster was last collected (UTC)."),
         ("collect_ms", "INTEGER", "How long collecting this cluster took, in milliseconds."),
+        ("timings", "JSON",
+         "What the last collection of this cluster cost, per stage, in milliseconds: "
+         "fetch_ms (network and API server), parse_ms (JSON decoding, measured inside the "
+         "fetch window), assemble_ms, health_ms, persist_ms; plus bytes and objects pulled "
+         "and kinds_fetched / kinds_cached. Read a field with "
+         "CAST(json_extract(timings, '$.fetch_ms') AS BIGINT). NULL for a cluster collected "
+         "before the collector measured itself."),
         ("reachable", "BOOLEAN",
          "False when the last sweep could not connect; detail tables are then empty."),
         ("last_error", "VARCHAR", "Error from the last failed collection, else NULL."),
@@ -497,6 +504,13 @@ NOTES: tuple[str, ...] = (
     "Names are case-sensitive; use ILIKE '%needle%' for fuzzy matching on images, hosts and names.",
     "All timestamps are UTC and comparable with now() and INTERVAL arithmetic, e.g. "
     "expires_at <= now() + INTERVAL 30 DAY.",
+    "clusters.timings holds what collecting each cluster cost per stage, and the bytes and "
+    "objects pulled to pay for it, so capacity questions about the collector itself are SQL: "
+    "which clusters are slowest, how the fleet's time divides between network (fetch_ms) and "
+    "Python CPU (parse_ms + assemble_ms + health_ms + persist_ms), and how many bytes per "
+    "sweep a region costs. parse_ms is measured inside the fetch window, so a wall-clock total "
+    "is fetch_ms + assemble_ms + health_ms + persist_ms. /api/collector/timings answers the "
+    "same question without SQL.",
 )
 
 # --------------------------------------------------------------------------- #

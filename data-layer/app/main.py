@@ -26,7 +26,7 @@ from .api import (
     query,
     versions,
 )
-from .collector.runner import run_collection
+from .collector.runner import run_collection, validate_hub_selection
 from .manifest import get_manifest
 from .scheduler import start_scheduler, stop_scheduler
 from .settings import settings
@@ -88,6 +88,9 @@ async def lifespan(app: FastAPI):
         log.info("collector disabled (COLLECTOR_ENABLED=false): serving Redis read-only")
     else:
         _require_fleet_config()
+        # A typo in COLLECT_HUBS would otherwise be a collector that quietly
+        # collects nothing at all.
+        validate_hub_selection()
         _require_application_mapping(m)
         if settings.refresh_on_startup:
             threading.Thread(target=run_collection, args=("startup",),

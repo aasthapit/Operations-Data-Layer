@@ -67,7 +67,7 @@ def check_hub(hub) -> bool:
             print(f"    {meta['name']}: connect FAILED ({ms}ms): {_short(err)}")
             ok = False
             continue
-        version, err, ms2 = _timed(lambda b=bundle: kube._call(b, "/version", []))
+        version, err, ms2 = _timed(lambda b=bundle: kube.get_json(b, "/version"))
         if err:
             print(f"    {meta['name']}: connected, but reading /version FAILED ({ms2}ms): {_short(err)}")
             ok = False
@@ -86,7 +86,7 @@ def check_cluster(c) -> bool:
         print(f"  login FAILED ({ms}ms): {_short(err)}")
         return False
     bundle = kube.bundle_from_endpoint(c.api_url, token, verify=bool(verify), ca_cert=c.ca_cert)
-    version, err, ms2 = _timed(lambda: kube._call(bundle, "/version", []))
+    version, err, ms2 = _timed(lambda: kube.get_json(bundle, "/version"))
     if err:
         print(f"  login ok, reading /version FAILED ({ms2}ms): {_short(err)}")
         return False

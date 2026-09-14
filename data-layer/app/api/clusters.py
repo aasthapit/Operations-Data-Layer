@@ -71,10 +71,11 @@ def get_cluster(name: str, store: Store = Depends(get_store_dep)):
 
 
 @router.post("/{name}/refresh")
-def refresh(name: str):
-    """Collect this one cluster now, without waiting for the next sweep."""
+def refresh(name: str, full: bool = False):
+    """Collect this one cluster now, without waiting for the next sweep.
+    `full` fetches every enabled kind; otherwise only the kinds that are due."""
     require_collector()
-    result = runner.refresh_cluster(name)
+    result = runner.refresh_cluster(name, full)
     if result.get("error") == "unknown cluster":
         raise HTTPException(404, f"cluster {name} not found")
     if result.get("skipped"):

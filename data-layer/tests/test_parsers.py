@@ -1,6 +1,8 @@
+import base64
 from datetime import UTC, datetime, timedelta
 
-from app.collector import parsers
+from app.collector import parsers, scrub
+from tests.conftest import make_cert_pem
 
 NOW = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
 
@@ -165,3 +167,86 @@ def test_clusterversion_and_platform_config():
                                                      "controlPlaneTopology": "HighlyAvailable",
                                                      "platformStatus": {"aws": {"region": "us-east-1"}}}})
     assert infra["infra_region"] == "us-east-1" and infra["api_url"] == "https://api:6443"
+
+
+# --------------------------------------------------------------------------- #
+# Secrets and ConfigMaps: the facts are the same, the x509 parser is not called
+# for values that cannot hold a certificate (the collector's hot path).
+# --------------------------------------------------------------------------- #
+def _counting_parser(monkeypatch):
+    """Replace the x509 parse with a counter, so a test can assert it was
+    never reached rather than assert on how long it took."""
+    calls = []
+    real = scrub.parse_cert_facts
+
+    def counted(pem, limit=scrub.MAX_CERTS_PER_KEY):
+        calls.append(len(pem))
+        return real(pem, limit)
+
+    monkeypatch.setattr(scrub, "parse_cert_facts", counted)
+    return calls
+
+
+def test_large_non_certificate_values_never_reach_the_x509_parser(manifest, monkeypatch):
+    calls = _counting_parser(monkeypatch)
+    blob = ("db.password=hunter2\n" * 50_000).encode()          # ~1 MB of properties
+    sec = {"metadata": {"name": "app-config", "namespace": "payments"},
+           "type": "Opaque",
+           "data": {"application.properties": base64.b64encode(blob).decode(),
+                    "keystore.jks": base64.b64encode(b"\xfe\xed\xfe\xed" * 100_000).decode()}}
+    row = parsers.parse_secret(sec, manifest)
+
+    assert calls == []                                           # not parsed at all
+    assert "certificates" not in row["summary"]
+    assert row["status"] is None and row["expires_at"] is None
+    # the facts that do not need parsing are unchanged
+    assert {k["key"]: k["bytes"] for k in row["summary"]["keys"]} == {
+        "application.properties": len(blob), "keystore.jks": 400_000}
+
+    cm = {"metadata": {"name": "app-config", "namespace": "payments"},
+          "data": {"nginx.conf": "server { listen 80; }" * 5_000}}
+    assert "certificates" not in parsers.parse_configmap(cm, manifest)["summary"]
+    assert calls == []
+
+
+def test_a_tls_secrets_private_key_is_not_handed_to_the_x509_parser(manifest, monkeypatch):
+    calls = _counting_parser(monkeypatch)
+    pem, key = make_cert_pem(days=200)
+    sec = {"metadata": {"name": "web-tls", "namespace": "payments"},
+           "type": "kubernetes.io/tls",
+           "data": {"tls.crt": base64.b64encode(pem).decode(),
+                    "tls.key": base64.b64encode(key).decode()}}
+    row = parsers.parse_secret(sec, manifest)
+
+    assert len(calls) == 1 and calls[0] == len(pem)              # the certificate only
+    assert [c["key"] for c in row["summary"]["certificates"]] == ["tls.crt"]
+
+
+def test_a_pem_bundle_with_a_preamble_is_still_read(manifest):
+    """openssl writes Bag Attributes before the marker; the key name is what
+    says 'certificate' there, so the marker is looked for anywhere inside."""
+    pem, _ = make_cert_pem(cn="corp-ca", days=300, ca=True, sans=())
+    cm = {"metadata": {"name": "trusted-ca", "namespace": "openshift-config"},
+          "data": {"ca-bundle.crt": "Bag Attributes\n    friendlyName: corp\n" + pem.decode()}}
+    facts = parsers.parse_configmap(cm, manifest)["summary"]["certificates"]
+    assert [f["subject"] for f in facts] == ["CN=corp-ca"]
+
+
+def test_a_bundle_is_capped_and_says_so(manifest):
+    pem, _ = make_cert_pem(cn="corp-ca", days=300, ca=True, sans=())
+    bundle = pem * (scrub.MAX_CERTS_PER_KEY + 5)
+    cm = {"metadata": {"name": "trusted-ca-bundle", "namespace": "openshift-config"},
+          "data": {"ca-bundle.crt": bundle.decode()}}
+    facts = parsers.parse_configmap(cm, manifest)["summary"]["certificates"]
+
+    assert len(facts) == scrub.MAX_CERTS_PER_KEY
+    assert all(f["truncated"] is True for f in facts)
+    # the key's byte size is still the whole bundle: nothing is under-reported
+    assert {k["key"]: k["bytes"] for k in
+            parsers.parse_configmap(cm, manifest)["summary"]["keys"]} == {
+        "ca-bundle.crt": len(bundle)}
+    # under the cap there is no flag
+    small = {"metadata": {"name": "one", "namespace": "openshift-config"},
+             "data": {"ca-bundle.crt": (pem * 2).decode()}}
+    small_facts = parsers.parse_configmap(small, manifest)["summary"]["certificates"]
+    assert len(small_facts) == 2 and all("truncated" not in f for f in small_facts)

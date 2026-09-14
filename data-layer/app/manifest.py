@@ -18,6 +18,13 @@ The flat `thresholds:` keys that used to drive the checks keep working and
 become the defaults of the check level they always meant (see
 LEGACY_THRESHOLDS in app/collector/healthchecks.py).
 
+A third number lives on each resource: `interval:`, how often that kind is
+collected. It is neither collection nor evaluation time - it is SCHEDULE time.
+0 (the default) means every sweep; "15m" means the collector fetches that kind
+only when it is due and keeps the previous rows in between (see
+app/collector/collect.py). It is what makes an estate of hundreds of clusters
+affordable: platform state stays fresh, inventory is re-read on its own tier.
+
 Loaded once at startup from ODL_MANIFEST (default: the bundled
 config/ocp-api-manifest.yaml) and validated against the resource registry, so
 a typo in a resource key fails fast instead of silently collecting nothing.
@@ -26,6 +33,7 @@ Also a CLI:
     python -m app.manifest validate      # check the manifest loads
     python -m app.manifest rbac          # emit the read-only ClusterRole it needs
 """
+import re
 import sys
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -82,6 +90,39 @@ class ResourceConfig:
     enabled: bool = True
     namespace_class: str = "all"      # all | application | platform
     limit: int | None = None
+    # How often this kind is collected, in seconds. 0 = every sweep (the
+    # default). A kind with an interval is fetched only when it is due; in
+    # between, the cluster document keeps the rows of the last collection.
+    interval_seconds: int = 0
+
+
+# Duration suffixes accepted by `interval:` ("90", 90, "2m", "15m", "1h", "1d").
+_INTERVAL_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+_INTERVAL_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([smhd]?)$")
+
+
+def parse_interval(value, where: str) -> int:
+    """`interval:` as whole seconds. Accepts a number of seconds or a duration
+    string with a unit suffix; 0 (or absent) means "every sweep"."""
+    if value is None:
+        return 0
+    bad = ManifestError(
+        f"{where}: interval must be a number of seconds or a duration like 30s, 2m, 15m, 1h "
+        f"(got {value!r})")
+    if isinstance(value, bool):
+        raise bad
+    if isinstance(value, int | float):
+        seconds = float(value)
+    elif isinstance(value, str):
+        m = _INTERVAL_RE.match(value.strip())
+        if not m:
+            raise bad
+        seconds = float(m.group(1)) * _INTERVAL_UNITS[m.group(2) or "s"]
+    else:
+        raise bad
+    if seconds < 0:
+        raise ManifestError(f"{where}: interval must not be negative (got {value!r})")
+    return int(seconds)
 
 
 @dataclass
@@ -110,6 +151,16 @@ class Manifest:
 
     def config(self, key: str) -> ResourceConfig:
         return self.resources.get(key) or ResourceConfig(key=key, enabled=False)
+
+    def interval(self, key: str) -> int:
+        """Seconds between collections of this kind; 0 = every sweep."""
+        return self.config(key).interval_seconds
+
+    def tiered(self) -> bool:
+        """Whether any enabled kind has an interval of its own. When nothing
+        does, a sweep collects everything and the collector never has to read
+        the previous state back."""
+        return any(self.config(key).interval_seconds > 0 for key in self.enabled_keys())
 
     # -- namespaces ---------------------------------------------------------
     def classify_namespace(self, name: str, labels: dict | None = None) -> str:
@@ -154,6 +205,8 @@ class Manifest:
                 "enabled": cfg.enabled,
                 "namespace_class": cfg.namespace_class if spec.scope == "namespaced" else None,
                 "limit": cfg.limit,
+                # 0 = collected every sweep; otherwise the kind's own tier.
+                "interval_seconds": cfg.interval_seconds,
                 "description": spec.description,
             })
         return {
@@ -309,7 +362,7 @@ def parse_manifest(raw: dict, source: str = "") -> Manifest:
             opts = {"enabled": opts}
         if not isinstance(opts, dict):
             raise ManifestError(f"resource `{key}` must be a mapping or a boolean")
-        bad = sorted(set(opts) - {"enabled", *spec.options})
+        bad = sorted(set(opts) - {"enabled", "interval", *spec.options})
         if bad:
             raise ManifestError(f"resource `{key}` has unsupported option(s): {', '.join(bad)}")
         ns_class = opts.get("namespace_class", "all")
@@ -317,7 +370,8 @@ def parse_manifest(raw: dict, source: str = "") -> Manifest:
             raise ManifestError(f"resource `{key}`: namespace_class must be all|application|platform")
         resources[key] = ResourceConfig(
             key=key, enabled=bool(opts.get("enabled", True)),
-            namespace_class=ns_class, limit=opts.get("limit"))
+            namespace_class=ns_class, limit=opts.get("limit"),
+            interval_seconds=parse_interval(opts.get("interval"), f"resource `{key}`"))
 
     ns = raw.get("namespaces") or {}
     platform = ns.get("platform") or {}

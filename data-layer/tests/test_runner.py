@@ -7,6 +7,7 @@ the two seams the tests replace; the rest of `run_collection` (health checks,
 persistence, pruning, run bookkeeping) runs for real against fakeredis.
 """
 import copy
+from datetime import datetime, timedelta
 
 import fakeredis
 import pytest
@@ -18,6 +19,10 @@ from app.store.redis_store import RedisStore
 
 EAST, WEST = "ocp-east-1", "ocp-west-1"
 HUB = "hub-east"
+
+
+def _parse(iso: str) -> datetime:
+    return datetime.fromisoformat(iso)
 
 
 def _document(name, version="4.16.7"):
@@ -48,7 +53,7 @@ def fleet(monkeypatch, store):
     """Discovery and gathering under test control; returns the knobs."""
     state = {"clusters": [EAST, WEST], "hub_reachable": True,
              "documents": {EAST: _document(EAST), WEST: _document(WEST, "4.15.9")},
-             "ok": {EAST: True, WEST: True}}
+             "ok": {EAST: True, WEST: True}, "gathered": []}
 
     def fake_discover(st):
         st.upsert_hub(HUB, region="us-east-1", reachable=state["hub_reachable"],
@@ -57,8 +62,9 @@ def fleet(monkeypatch, store):
                    for name in state["clusters"]]
         return targets, 1
 
-    def fake_gather(target, manifest):
+    def fake_gather(target, manifest, previous=None, full=False):
         name = target.meta["name"]
+        state["gathered"].append({"cluster": name, "previous": previous, "full": full})
         return target, copy.deepcopy(state["documents"][name]), state["ok"][name]
 
     monkeypatch.setattr(runner, "_discover", fake_discover)
@@ -299,3 +305,193 @@ def test_a_shard_collects_only_its_clusters_but_prunes_against_the_whole_fleet(f
     assert store.cluster_names() == [EAST, WEST]              # WEST was not pruned
     assert store.get_cluster(WEST).last_synced == before
     assert runner.progress()["running"] is False and runner.progress()["total"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# COLLECT_HUBS: one collector owns whole hubs
+# --------------------------------------------------------------------------- #
+def test_collect_hubs_discovers_only_the_hubs_this_instance_owns(store, monkeypatch):
+    from app.config_loader import FleetConfig, HubConfig
+
+    hubs = [HubConfig(name="hub-a", region="us-east-1", kubeconfig="/a.kubeconfig"),
+            HubConfig(name="hub-b", region="us-west-2", kubeconfig="/b.kubeconfig")]
+    monkeypatch.setattr(runner, "load_config", lambda: FleetConfig({}, hubs, []))
+    monkeypatch.setattr(runner.kube, "bundle_from_file", lambda path: path)
+    connected = []
+
+    def list_managedclusters(hb):
+        connected.append(hb)
+        return [_managed("c-a")] if hb == "/a.kubeconfig" else [_managed("c-b")]
+
+    monkeypatch.setattr(runner.kube, "list_managedclusters", list_managedclusters)
+    monkeypatch.setattr(runner.settings, "collect_hubs", ("hub-a",))
+
+    targets, hubs_total = runner._discover(store)
+
+    assert [t.meta["name"] for t in targets] == ["c-a"]
+    assert hubs_total == 2                       # the estate is still two hubs
+    assert connected == ["/a.kubeconfig"]        # hub-b was never even connected to
+    by_name = {h.name: h for h in store.hubs()}
+    assert set(by_name) == {"hub-a", "hub-b"}    # both are recorded
+    assert by_name["hub-a"].reachable is True and by_name["hub-a"].managed_count == 1
+    assert by_name["hub-b"].reachable is None    # its state belongs to its own collector
+    assert by_name["hub-b"].region == "us-west-2"
+
+    # and a typo is a startup error that names the hubs there are
+    monkeypatch.setattr(runner.settings, "collect_hubs", ("hub-c",))
+    with pytest.raises(ValueError, match="unknown hub"):
+        runner.validate_hub_selection()
+    monkeypatch.setattr(runner.settings, "collect_hubs", ())
+    assert runner.validate_hub_selection() == ()
+
+
+def test_prune_leaves_the_clusters_of_another_collectors_hub_alone(fleet, store, monkeypatch):
+    runner.run_collection("manual")
+    # another collector owns hub-west and has written its cluster there
+    store.upsert_hub("hub-west", reachable=True, managed_count=1, last_synced=runner.utcnow())
+    store.persist_cluster("hub-west", _document("ocp-other"), [], "healthy", 100,
+                          {"passed": 1, "warned": 0, "failed": 0})
+    assert store.cluster_names() == [EAST, "ocp-other", WEST]
+
+    monkeypatch.setattr(runner.settings, "collect_hubs", (HUB,))
+    fleet["clusters"] = [EAST]                   # WEST vanished from OUR hub
+    runner.run_collection("manual")
+
+    assert store.cluster_names() == [EAST, "ocp-other"]
+    assert store.get_cluster("ocp-other").hub_name == "hub-west"
+
+
+# --------------------------------------------------------------------------- #
+# tiers: a sweep collects what is due
+# --------------------------------------------------------------------------- #
+def _tiered_objects():
+    return {
+        "nodes": [{"metadata": {"name": "n1"}, "status": {
+            "capacity": {"cpu": "4", "memory": "16Gi", "pods": "110"},
+            "allocatable": {"cpu": "4", "memory": "16Gi", "pods": "110"},
+            "conditions": [{"type": "Ready", "status": "True"}], "nodeInfo": {}}}],
+        "namespaces": [{"metadata": {"name": "payments"}, "status": {"phase": "Active"}}],
+        "pods": [{"metadata": {"name": "api-1", "namespace": "payments"},
+                  "spec": {"nodeName": "n1", "containers": [{"name": "app"}]},
+                  "status": {"phase": "Running", "containerStatuses": []}}],
+        "deployments": [{"metadata": {"name": "api", "namespace": "payments"},
+                         "spec": {"replicas": 2, "template": {"spec": {"containers": [
+                             {"name": "app", "image": "quay.io/acme/api:1.0"}]}}},
+                         "status": {"readyReplicas": 2}}],
+        "secrets": [{"metadata": {"name": "api-secret", "namespace": "payments"},
+                     "type": "Opaque", "data": {"k": "c2VjcmV0"}}],
+    }
+
+
+@pytest.fixture
+def tiered(monkeypatch, store):
+    """The real collect path against a fake cluster API: one cluster, a manifest
+    with tiers, and a record of every kind actually fetched."""
+    from app import kube
+    from app.manifest import parse_manifest
+
+    manifest = parse_manifest({"resources": {
+        "nodes": True, "namespaces": True, "pods": True,          # every sweep
+        "deployments": {"enabled": True, "interval": "15m"},
+        "secrets": {"enabled": True, "interval": "1h"},
+    }}, source="tiered-test")
+    objects = _tiered_objects()
+    asked: list[str] = []
+
+    def fake_list(b, base_path, plural, namespace=None, field_selector=None,
+                  label_selector=None, page_size=None, stat_key=None):
+        asked.append(stat_key)
+        b.record(stat_key, nbytes=100, objects=len(objects.get(stat_key) or []), parse_ms=1.0)
+        return objects.get(stat_key) or []
+
+    monkeypatch.setattr(kube, "list_resource", fake_list)
+    monkeypatch.setattr(runner, "get_manifest", lambda: manifest)
+
+    def fake_discover(st):
+        st.upsert_hub(HUB, reachable=True, managed_count=1, last_synced=runner.utcnow())
+        return [runner.Target(HUB, {"name": EAST}, lambda: kube.ApiBundle(None))], 1
+
+    monkeypatch.setattr(runner, "_discover", fake_discover)
+    return {"asked": asked, "manifest": manifest, "objects": objects}
+
+
+def _status_of(store, cluster=EAST):
+    return {r.key: r for r in store.section(cluster, "resource_status")}
+
+
+def test_a_second_sweep_fetches_only_what_is_due(tiered, store, monkeypatch):
+    runner.run_collection("scheduled")
+    assert sorted(tiered["asked"]) == ["deployments", "namespaces", "nodes", "pods", "secrets"]
+    tiered["asked"].clear()
+
+    runner.run_collection("scheduled")           # straight away: the tiers are not up
+
+    assert sorted(tiered["asked"]) == ["namespaces", "nodes", "pods"]
+    status = _status_of(store)
+    assert status["deployments"].cached is True and status["secrets"].cached is True
+    assert status["pods"].cached is False
+    assert status["deployments"].status == "collected"      # the outcome is kept too
+    assert status["deployments"].interval_seconds == 900
+    # and the kept kinds are still in the document the API serves
+    assert [w.name for w in store.section(EAST, "workloads")] == ["api"]
+    assert [r.key for r in store.section(EAST, "resources")] == ["secrets"]
+    assert store.get_cluster(EAST).workloads_total == 1
+
+
+def test_a_kind_is_fetched_again_once_its_interval_has_passed(tiered, store, monkeypatch):
+    runner.run_collection("scheduled")
+    tiered["asked"].clear()
+
+    later = runner.utcnow() + timedelta(minutes=20)
+    monkeypatch.setattr(runner, "utcnow", lambda: later)
+    runner.run_collection("scheduled")
+
+    # the 15m tier is due, the hourly one is not
+    assert sorted(tiered["asked"]) == ["deployments", "namespaces", "nodes", "pods"]
+    status = _status_of(store)
+    assert status["deployments"].cached is False and status["secrets"].cached is True
+    assert _parse(status["secrets"].collected_at) < _parse(status["deployments"].collected_at)
+
+
+def test_a_full_refresh_fetches_every_enabled_kind(tiered, store):
+    runner.run_collection("scheduled")
+    tiered["asked"].clear()
+
+    runner.run_collection("manual", full=True)
+
+    assert sorted(tiered["asked"]) == ["deployments", "namespaces", "nodes", "pods", "secrets"]
+    assert all(not r.cached for r in _status_of(store).values())
+    tiered["asked"].clear()
+    assert runner.refresh_cluster(EAST, full=True)["ok"] is True
+    assert sorted(tiered["asked"]) == ["deployments", "namespaces", "nodes", "pods", "secrets"]
+    tiered["asked"].clear()
+    runner.refresh_cluster(EAST)                 # on demand, but still only what is due
+    assert sorted(tiered["asked"]) == ["namespaces", "nodes", "pods"]
+
+
+def test_timings_land_on_the_cluster_and_on_the_run(tiered, store):
+    runner.run_collection("scheduled")
+
+    timings = store.get_cluster(EAST).timings
+    assert timings["kinds_fetched"] == 5 and timings["kinds_cached"] == 0
+    assert timings["objects"] == 5 and timings["bytes"] == 500     # five fake lists
+    assert timings["parse_ms"] == 5.0
+    for stage in ("fetch_ms", "assemble_ms", "health_ms", "persist_ms", "total_ms"):
+        assert timings[stage] >= 0
+
+    run = store.runs()[0].timings
+    assert run["clusters"] == 1 and run["kinds_fetched"] == 5 and run["kinds_cached"] == 0
+    assert run["bytes"] == 500 and run["objects"] == 5
+    assert set(run["fetch_ms"]) == {"sum", "p95"}
+    assert run["persist_ms"]["sum"] >= 0 and run["persist_ms"]["p95"] >= 0
+
+    runner.run_collection("scheduled")
+    assert store.get_cluster(EAST).timings["kinds_cached"] == 2
+    assert store.runs()[0].timings["kinds_cached"] == 2
+
+
+def test_p95_is_the_worst_cluster_not_the_average():
+    assert runner._p95([]) == 0
+    assert runner._p95([7]) == 7
+    assert runner._p95([1] * 9 + [900]) == 900       # the tail is what p95 is for
+    assert runner._p95(list(range(1, 101))) == 95    # the 95th of a hundred

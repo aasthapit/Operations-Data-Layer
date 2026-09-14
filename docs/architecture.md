@@ -74,18 +74,22 @@ sequenceDiagram
   participant K as OCP Cluster
   participant R as Redis
   S->>C: run_collection()
-  C->>H: list ManagedClusters
+  C->>H: list ManagedClusters (only the hubs COLLECT_HUBS owns)
   H-->>C: clusters + kubeconfig secrets
   par each cluster (COLLECT_WORKERS)
-    loop each manifest-enabled resource
+    C->>R: read the last collection (per-kind collected_at + the sections)
+    C->>C: plan: which kinds are DUE (interval per resource, 0 = every sweep)
+    loop each DUE resource
       C->>K: list / get (paginated)
       K-->>C: raw objects, or 404 (unavailable) / 403 (forbidden)
     end
     C->>C: scrub + assemble: pods & metrics → namespaces/nodes, workloads → images/refs
+    C->>C: merge in the kept rows of the kinds that were not due
     C->>C: run precondition health checks
     C->>R: atomic per-cluster write: summary, sections, fleet index contributions, snapshot
+    C->>R: timings + the collector's per-kind bookkeeping
   end
-  C->>R: record collection run
+  C->>R: record collection run (per-stage sums and p95, bytes, objects, kinds fetched/cached)
   C->>C: invalidate the query snapshot (rebuilt on the next question)
 ```
 
@@ -276,7 +280,10 @@ The same graph answers dependency questions directly: `/api/insights/references`
 
 Redis is a pull-fed cache, not a system of record: the collector decides when a cluster's picture changes, and the API only ever reads what the last write left behind.
 
-- The collector pulls the whole fleet on `REFRESH_INTERVAL_SECONDS` (default 120s) and on demand via `POST /api/refresh`; one cluster can be pulled on demand via `POST /api/clusters/{name}/refresh`, without waiting for the next sweep or touching any other cluster.
+- The collector sweeps on `REFRESH_INTERVAL_SECONDS` (default 120s) and on demand via `POST /api/refresh`; one cluster can be pulled on demand via `POST /api/clusters/{name}/refresh`, without waiting for the next sweep or touching any other cluster.
+- A sweep collects what is **due**, not everything. Each manifest resource carries an `interval` (0 = every sweep, or a tier such as `15m`); the collector records per cluster and per kind when it last fetched it, fetches only the kinds whose tier is up, and keeps the rest of the document from the last collection. The stored document has the same shape either way, so health checks, the store and the API are unaffected. `POST /api/refresh?full=true` (and `?full=true` on a single cluster) ignores every tier, which is what to run after changing the manifest. See [the manifest doc](ocp-api-manifest.md#tiers-collect-each-kind-on-its-own-interval) and `config/ocp-api-manifest.fleet.yaml`.
+- Freshness is per kind, not only per cluster: `GET /api/manifest/availability` reports `collected_at`, `cached` and `interval_seconds` for every kind of every cluster, next to what its last fetch cost (requests, bytes, objects, parse time).
+- Collection is partitioned by whole hubs before it is partitioned by cluster: `COLLECT_HUBS=man01paa` makes an instance discover, collect and prune only that hub's clusters (it still records that the other hubs exist, and never touches their state), and `COLLECT_SHARD=i/n` then splits the owned hubs' clusters across processes. One collector per ACM hub is the unit an estate of seven hubs with ~114 clusters each is run as.
 - A single-flight lock in Redis (`SET NX PX`) prevents two refreshes of the same cluster from racing; a separate in-process lock prevents overlapping full sweeps. Tokens are cached for 30 minutes to keep credential exchanges rare.
 - Reads never touch a cluster - the API serves the last write from Redis, so the dashboard and API stay fast and cluster API load is bounded by the poll interval.
 - Freshness is visible, not implied: every cluster summary carries `last_synced`, `age_seconds`, and `stale` (age beyond three times `REFRESH_INTERVAL_SECONDS`).

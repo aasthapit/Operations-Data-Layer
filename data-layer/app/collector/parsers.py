@@ -6,6 +6,13 @@ Parsing lives here (and only here) so the rest of the data layer never has to
 know the shape of an API object. Scrubbing happens *inside* these parsers, so
 a raw ConfigMap / Secret / container spec never escapes this module with its
 values intact.
+
+The Secret and ConfigMap parsers are the collector's hot path - they see more
+bytes than every other kind together - so they take the key names, the sizes
+and the certificate facts in a single pass over the values, and reach for
+`cryptography` only for a value that actually contains a PEM certificate
+(`scrub.scrub_data_and_certs`). Everything else keeps exactly the facts it
+kept before: the key name and its byte size.
 """
 import re
 from collections import Counter, defaultdict
@@ -575,8 +582,10 @@ def _generic(obj, manifest, summary: dict, status=None, expires_at=None) -> dict
 
 
 def parse_configmap(cm: dict, manifest) -> dict:
-    keys, total = scrub.scrub_data(cm.get("data"), cm.get("binaryData"), b64=False)
-    facts = scrub.cert_facts_from_data(cm.get("data"), b64=False)
+    # One pass: every value is measured, and only the ones that could hold a
+    # certificate reach the x509 parser (see scrub.looks_like_cert).
+    keys, total, facts = scrub.scrub_data_and_certs(cm.get("data"), cm.get("binaryData"),
+                                                    b64=False)
     exp = scrub.earliest_expiry(facts)
     summary = {"keys": keys, "total_bytes": total, "key_count": len(keys)}
     if facts:
@@ -585,9 +594,9 @@ def parse_configmap(cm: dict, manifest) -> dict:
 
 
 def parse_secret(sec: dict, manifest) -> dict:
-    keys, total = scrub.scrub_data(sec.get("data"), None, b64=True)
     stype = sec.get("type")
-    facts = scrub.cert_facts_from_data(sec.get("data"), b64=True, secret_type=stype)
+    keys, total, facts = scrub.scrub_data_and_certs(sec.get("data"), None, b64=True,
+                                                    secret_type=stype)
     exp = scrub.earliest_expiry(facts)
     summary = {"type": stype, "keys": keys, "total_bytes": total, "key_count": len(keys)}
     if facts:

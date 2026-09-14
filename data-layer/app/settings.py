@@ -45,6 +45,15 @@ class Settings:
     # Every shard writes its own clusters to the shared Redis; shard 0 does
     # the end-of-sweep housekeeping. Empty = the whole fleet.
     collect_shard: str = os.environ.get("COLLECT_SHARD", "")
+    # Which ACM hubs this instance owns: a comma-separated list of hub names,
+    # empty = every configured hub. One collector per hub is the unit that
+    # scales to an estate of several hubs with ~100 clusters each: the process
+    # holds only that hub's credentials, discovers only its ManagedClusters,
+    # and prunes only its own clusters. Composes with COLLECT_SHARD, which then
+    # partitions the owned hubs' clusters further.
+    collect_hubs: tuple = tuple(
+        name.strip() for name in os.environ.get("COLLECT_HUBS", "").split(",") if name.strip()
+    )
     # Within one cluster the manifest's resource kinds are fetched concurrently;
     # this bounds that fan-out. Against a real cluster over a network the
     # sequential sum of ~30 round trips (plus pages) is what makes a sweep slow,

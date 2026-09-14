@@ -1,26 +1,42 @@
-# Operations Data Layer - OCP API manifest
-# =========================================
+# Operations Data Layer - OCP API manifest, FLEET PROFILE
+# =======================================================
 #
-# Everything the collector reads from an OpenShift cluster is declared here.
-# Nothing outside this file is ever requested from a cluster, and the read-only
-# ClusterRole in deploy/rbac/ is generated from the enabled entries:
+# The production profile: the same manifest as ocp-api-manifest.yaml, with a
+# collection SCHEDULE. Point a collector at it with
 #
-#     cd data-layer && .venv/bin/python -m app.manifest rbac > ../deploy/rbac/odl-collector-readonly.yaml
+#     ODL_MANIFEST=config/ocp-api-manifest.fleet.yaml
 #
-# Flip `enabled` to control what is collected. Disabled resources are still
-# listed by GET /api/manifest, so it is always clear what the data layer can and
-# cannot answer. Point ODL_MANIFEST at a copy of this file to customise it
-# without rebuilding the image.
+# Why: an estate of seven ACM hubs with ~114 clusters each cannot be read
+# whole every two minutes (ADR-0003, Finding 1: ~120 MB of Kubernetes JSON per
+# cluster per full pass). Nothing here reads less of a cluster - it reads each
+# kind on the cadence that kind actually changes on:
 #
-# The same file also decides how every cluster is GRADED: `health_checks:` below
-# gives each check its own enabled flag, severity, and warn / fail levels in the
-# check's own unit.
+#   every sweep (REFRESH_INTERVAL_SECONDS)  platform state: ClusterVersion,
+#       cluster operators, infrastructure / network / ingress config, nodes and
+#       node metrics, MachineConfigPools, namespaces, pods, pod metrics, events.
+#       This is what the health panel grades and what changes minute to minute.
+#   every 15m   inventory: workloads, autoscalers, services, routes, ingresses,
+#       network policies, storage, quotas, OLM, cluster-admin bindings. Between
+#       collections the stored rows stand, and every API answer says how old
+#       they are (GET /api/manifest/availability, `cached` + `collected_at`).
+#   disabled    Secrets and ConfigMaps. They are the heaviest kinds by far
+#       (roughly half the bytes of a full pass) and only the certificate facts
+#       inside them are used, so they are off here and the `certificates-valid`
+#       health check is off with them.
 #
-# What is scrubbed is NOT configurable. ConfigMap values, Secret values,
-# certificate material, and container env values are dropped at parse time and
-# never reach the database or the API. Only names, key names, byte sizes,
-# references, and certificate facts (subject / issuer / expiry) are kept.
-# See docs/ocp-api-manifest.md.
+# To get certificate expiry back without paying for it every sweep, read those
+# two kinds hourly and re-enable the check:
+#
+#     resources:
+#       secrets:    { enabled: true, interval: 1h }
+#       configmaps: { enabled: true, interval: 1h }
+#     health_checks:
+#       certificates-valid: { enabled: true }
+#
+# `POST /api/refresh?full=true` ignores every tier and collects everything once
+# (what to run after changing this file). Everything else - namespace
+# classification, ownership, what is scrubbed, the health checks - is identical
+# to the default manifest; see docs/ocp-api-manifest.md.
 
 namespaces:
   # OpenShift / Kubernetes platform namespaces are grouped separately.
@@ -273,8 +289,12 @@ health_checks:
   #   expired               (count)
   #   expiring              (count, inside the band's window)
   #   expiring_within_days  (days - the band's window, not a level)
+  # OFF in this profile: it grades certificate facts that come from Secrets and
+  # ConfigMaps, and those are not collected here. Turn both back on together
+  # (see the header) - a check without its data would report "healthy" on an
+  # empty panel.
   certificates-valid:
-    enabled: true
+    enabled: false
     severity: warning
     warn: { expiring: 1, expiring_within_days: 30 }   # thresholds.certificate_expiry_days
     fail: { expired: 1 }
@@ -304,22 +324,11 @@ health_checks:
 # Resources
 # =========
 #
-# Every entry also accepts `interval:` - how often that kind is collected.
-# 0 (the default, written out below) means "every sweep", the sweep being
-# REFRESH_INTERVAL_SECONDS. A tier such as `15m` or `1h` makes the collector
-# fetch that kind only when it is due and keep the rows of the last collection
-# in between, so platform state stays fresh while inventory is re-read on its
-# own schedule. That is what makes an estate of hundreds of clusters
-# affordable; `GET /api/manifest/availability` shows per cluster and per kind
-# when each was last read and whether what is being served is cached.
-#
-# This file collects everything every sweep, which is what a small fleet and
-# the demo want. For a real estate start from the tiered profile next to it:
-#
-#     ODL_MANIFEST=config/ocp-api-manifest.fleet.yaml
-#
+# `interval:` is this file's point: 0 = every sweep, otherwise the kind is
+# fetched only when `now - collected_at >= interval` and the previous rows are
+# kept until then. A kind that is disabled contributes nothing at all.
 resources:
-  # ---- cluster-scoped platform state --------------------------------------
+  # ---- platform state: every sweep ----------------------------------------
   clusterversion:        { enabled: true, interval: 0 }
   clusteroperators:      { enabled: true, interval: 0 }
   infrastructure:        { enabled: true, interval: 0 }
@@ -328,29 +337,32 @@ resources:
   nodes:                 { enabled: true, interval: 0 }
   node_metrics:          { enabled: true, interval: 0 }   # metrics.k8s.io - live CPU/memory per node
   machineconfigpools:    { enabled: true, interval: 0 }
-  clusterrolebindings:   { enabled: true, interval: 0 }   # only bindings to thresholds.cluster_admin_roles
-  storageclasses:        { enabled: true, interval: 0 }
-  persistentvolumes:     { enabled: true, interval: 0 }
-
-  # ---- namespaced ------------------------------------------------------------
-  # `namespace_class` limits a namespaced resource to application or platform
-  # namespaces (default: all).
   namespaces:            { enabled: true, interval: 0 }
-  pods:                  { enabled: true, interval: 0 }
-  pod_metrics:           { enabled: true, interval: 0 }   # metrics.k8s.io - live CPU/memory per pod, rolled up per namespace
-  deployments:           { enabled: true, interval: 0 }
-  statefulsets:          { enabled: true, interval: 0 }
-  daemonsets:            { enabled: true, interval: 0 }
-  cronjobs:              { enabled: true, interval: 0 }
-  horizontalpodautoscalers: { enabled: true, interval: 0 }
-  services:              { enabled: true, interval: 0 }
-  routes:                { enabled: true, interval: 0 }
-  ingresses:             { enabled: true, interval: 0 }
-  networkpolicies:       { enabled: true, interval: 0 }
-  configmaps:            { enabled: true, interval: 0 }   # names, keys, sizes, certificate facts - never values
-  secrets:               { enabled: true, interval: 0 }   # names, types, keys, certificate facts - never values
-  persistentvolumeclaims: { enabled: true, interval: 0 }
-  resourcequotas:        { enabled: true, interval: 0 }
-  events:                { enabled: true, interval: 0, limit: 200 }   # most recent Warning events
-  clusterserviceversions: { enabled: true, interval: 0 }  # OLM-installed operators
-  subscriptions:         { enabled: true, interval: 0 }
+  pods:                  { enabled: true, interval: 0 }   # the health panel's pod issues
+  pod_metrics:           { enabled: true, interval: 0 }   # metrics.k8s.io - live CPU/memory per pod
+  events:                { enabled: true, interval: 0, limit: 200 }   # what is going wrong right now
+
+  # ---- inventory: every 15 minutes ----------------------------------------
+  # Rows the fleet views and blast radius are built from. They change when
+  # somebody deploys, not continuously, and the age of each is visible.
+  deployments:              { enabled: true, interval: 15m }
+  statefulsets:             { enabled: true, interval: 15m }
+  daemonsets:               { enabled: true, interval: 15m }
+  cronjobs:                 { enabled: true, interval: 15m }
+  horizontalpodautoscalers: { enabled: true, interval: 15m }
+  services:                 { enabled: true, interval: 15m }
+  routes:                   { enabled: true, interval: 15m }
+  ingresses:                { enabled: true, interval: 15m }
+  networkpolicies:          { enabled: true, interval: 15m }
+  persistentvolumeclaims:   { enabled: true, interval: 15m }
+  persistentvolumes:        { enabled: true, interval: 15m }
+  storageclasses:           { enabled: true, interval: 15m }
+  resourcequotas:           { enabled: true, interval: 15m }
+  clusterserviceversions:   { enabled: true, interval: 15m }   # OLM-installed operators
+  subscriptions:            { enabled: true, interval: 15m }
+  clusterrolebindings:      { enabled: true, interval: 15m }   # only bindings to thresholds.cluster_admin_roles
+
+  # ---- off: the heaviest kinds, for certificate facts only ----------------
+  # See the header for reading these hourly instead of not at all.
+  secrets:               { enabled: false, interval: 1h }
+  configmaps:            { enabled: false, interval: 1h }

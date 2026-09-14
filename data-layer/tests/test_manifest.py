@@ -175,3 +175,73 @@ def test_cluster_reachable_cannot_be_disabled():
         parse_manifest({"health_checks": {"cluster-reachable": False}}, source="t")
     m = parse_manifest({"health_checks": {"cluster-reachable": {"severity": "warning"}}}, source="t")
     assert m.health_check_config["cluster-reachable"].severity == "warning"
+
+
+# --------------------------------------------------------------------------- #
+# tiers: `interval` per resource
+# --------------------------------------------------------------------------- #
+def test_interval_accepts_seconds_and_durations():
+    m = parse_manifest({"resources": {
+        "nodes": True,                                   # absent -> every sweep
+        "pods": {"enabled": True, "interval": 0},
+        "deployments": {"enabled": True, "interval": 90},
+        "services": {"enabled": True, "interval": "90"},
+        "routes": {"enabled": True, "interval": "2m"},
+        "secrets": {"enabled": True, "interval": "15m"},
+        "configmaps": {"enabled": True, "interval": "1h"},
+        "events": {"enabled": True, "interval": "1d", "limit": 10},
+    }})
+    assert m.interval("nodes") == 0 and m.interval("pods") == 0
+    assert m.interval("deployments") == 90 and m.interval("services") == 90
+    assert m.interval("routes") == 120 and m.interval("secrets") == 900
+    assert m.interval("configmaps") == 3600 and m.interval("events") == 86400
+    assert m.interval("storageclasses") == 0              # not in the manifest at all
+    assert m.tiered() is True
+    assert parse_manifest({"resources": {"nodes": True}}).tiered() is False
+    # a kind that is off cannot make a manifest tiered
+    assert parse_manifest({"resources": {
+        "nodes": True, "secrets": {"enabled": False, "interval": "1h"}}}).tiered() is False
+    assert {r["key"]: r["interval_seconds"] for r in m.describe()["resources"]}["routes"] == 120
+
+
+def test_bad_interval_rejected():
+    for bad in ("soon", "15 minutes", "2w", True, [], "-5m"):
+        with pytest.raises(ManifestError, match="interval must be"):
+            parse_manifest({"resources": {"pods": {"enabled": True, "interval": bad}}})
+    with pytest.raises(ManifestError, match="must not be negative"):
+        parse_manifest({"resources": {"pods": {"enabled": True, "interval": -30}}})
+    # and `interval` is accepted on every kind, not only the ones with options
+    assert parse_manifest({"resources": {"nodes": {"interval": "5m"}}}).interval("nodes") == 300
+
+
+def test_the_fleet_profile_is_the_default_manifest_with_tiers(manifest):
+    import os
+
+    from app.manifest import load_manifest
+
+    fleet = load_manifest(os.path.join(os.path.dirname(manifest.source),
+                                       "ocp-api-manifest.fleet.yaml"))
+    # the heavy kinds are off, and the check that grades their data with them
+    assert not fleet.enabled("secrets") and not fleet.enabled("configmaps")
+    assert fleet.health_check_config["certificates-valid"].enabled is False
+    assert fleet.health_check_config["no-degraded-operators"].enabled is True
+
+    # platform state every sweep, inventory on its own tier
+    assert fleet.tiered() is True and manifest.tiered() is False
+    for key in ("clusterversion", "clusteroperators", "nodes", "node_metrics", "namespaces",
+                "pods", "pod_metrics", "machineconfigpools", "events", "infrastructure",
+                "network_config", "ingress_config"):
+        assert fleet.enabled(key) and fleet.interval(key) == 0, key
+    for key in ("deployments", "statefulsets", "daemonsets", "cronjobs", "services", "routes",
+                "ingresses", "networkpolicies", "persistentvolumeclaims", "persistentvolumes",
+                "storageclasses", "resourcequotas", "clusterserviceversions", "subscriptions",
+                "horizontalpodautoscalers", "clusterrolebindings"):
+        assert fleet.enabled(key) and fleet.interval(key) == 900, key
+
+    # everything that is not the schedule is the default manifest's
+    assert fleet.platform_names == manifest.platform_names
+    assert fleet.ownership == manifest.ownership
+    assert fleet.effective_thresholds() == manifest.effective_thresholds()
+    assert fleet.keep_annotations == manifest.keep_annotations
+    # and the RBAC it needs is a subset of the default's (two kinds fewer)
+    assert set(fleet.enabled_keys()) < set(manifest.enabled_keys())

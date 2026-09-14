@@ -122,3 +122,51 @@ The data layer can host the allowed graph and link out to the observed one.
 4. ClusterVersion history (upgrade timeline, already in an object the collector fetches).
 5. Pod security facts from pod specs the collector already reads (privileged, hostNetwork, hostPath).
 6. Previous-container log tail for flagged pods, with redaction (Tier B, needs a scrub rule).
+
+## 7. Where the collector's time goes
+
+Source: the per-stage measurements the collector now records for every cluster, served by `GET /api/collector/timings` and shown on the dashboard's **Collected** tab.
+ADR-0003 Finding 1 modelled the collector as the bottleneck; this section is how to check the model against a real estate rather than argue about it.
+
+### The stages, and what each is bound by
+
+| Stage | What it covers | Bound by | What shrinks it |
+|---|---|---|---|
+| `fetch_ms` | Time in HTTP for every kind the sweep fetched, including pagination: connect, the API server's own work (etcd reads, serialization), and the transfer. | Network and kube-apiserver. | Fetching less and less often: tiered intervals, watches instead of polling, `PartialObjectMetadata` lists, a per-cluster QPS budget (ADR-0003, Finding 1). Not a faster language. |
+| `parse_ms` | Decoding those response bodies into Python objects (`orjson`, measured inside `kube.get_json`). | CPU, and the size of the JSON. | Pulling fewer bytes; a faster decoder (already done: orjson instead of the client's `json.loads` over a decoded `str`); a collector in a compiled language. |
+| `assemble_ms` | Turning raw objects into the normalised document: parsers, scrubbing, certificate facts, rollups per namespace and per cluster. | CPU, and the number of objects. | Parsing lazily (certificates are only parsed for values that contain a PEM certificate), collecting fewer kinds, a compiled language. |
+| `health_ms` | Running the health checks over the assembled document. | CPU, small and flat. | Nothing worth doing. |
+| `persist_ms` | The store write: compressing ten sections and applying the fleet-index contributions in one MULTI/EXEC. | CPU in the collector (compression, index maths) plus one Redis round trip. | Sharding the collector (ADR-0003, Finding 2); it is ~2 s of CPU per cluster at synthetic-load scale. |
+
+`parse_ms` is measured *inside* the fetch phase - a response is decoded on the thread that fetched it, and a cluster's kinds are fetched concurrently.
+So a cluster's wall clock is `fetch + assemble + health + persist`, and `parse_ms` says how much of the fetch window was Python burning CPU rather than waiting on a socket.
+The endpoint reports both: `share_percent` partitions the wall clock, `cpu_percent` and `parse_percent_of_fetch` say how much of it is CPU.
+
+### How to read the endpoint
+
+`GET /api/collector/timings?limit=50` answers "where does the time go?" in one call:
+
+- `clusters[]` - one row per cluster that reported, sorted by `total_ms` descending: the five stage times, `cpu_ms`, the bytes and objects pulled, and how many kinds were fetched versus served from cache by the tiered schedule. The slowest clusters are the ones to look at first, and the `kinds_fetched` / `kinds_cached` split says whether a slow cluster is slow because it was a full collection.
+- `fleet` - `totals`, `p50` and `p95` per stage over every cluster that reported (`limit` bounds the rows, never the aggregates), plus `share_percent`, `cpu_percent`, `parse_percent_of_fetch`, `bytes_per_fetch_second` and `objects_per_parse_second`.
+- `last_run` - the last completed sweep: its wall duration and the aggregates the runner wrote, so a sweep's elapsed time can be compared with the summed per-cluster work (the ratio is how much concurrency the collector actually achieved).
+
+The same numbers are on each cluster (`timings` on `/api/clusters` and `/api/clusters/{name}`), per kind (`/api/clusters/{name}` `resource_status`, which carries `bytes`, `objects`, `parse_ms`, `requests`, `collected_at`, `cached` and `interval_seconds`), per sweep (`/api/runs`, `/api/status`) and in SQL (`clusters.timings`, for "which region costs the most bytes per sweep").
+
+### The decision it is there to inform
+
+Whether to rewrite the collector in Go. The numbers to look at, in order:
+
+1. `fleet.cpu_percent`. A Go collector replaces `parse_ms + assemble_ms + health_ms + persist_ms`. If that is 20% of the wall clock, a rewrite buys at most 20% before it buys anything else; if it is 70%, the case is real.
+2. `fleet.share_percent.fetch_ms` against `bytes_per_fetch_second`. A low throughput with a high fetch share is an API-server or network problem, and tiering and watches are the fix - a rewrite would not touch it.
+3. `p95` against `p50` per stage. A fleet whose p95 is many times its p50 has a few pathological clusters (a huge Secret count, a slow API server), and fixing those is cheaper than any rewrite.
+4. `persist_ms` as a share. If persistence dominates, the answer is sharding (ADR-0003, Finding 2), which is a deployment change, not a language change.
+
+The numbers themselves are deliberately not written here: they are a property of the estate the collector is pointed at, and the local kind fleet would only mislead.
+Fill them in from a real sweep - `/api/collector/timings` after a full sweep against production hubs - and record the date and the fleet size next to them.
+
+### Two measured improvements already in the collector
+
+Both were measured on this machine (Apple M-series, Python 3.12) and are reproducible from the scripts described below.
+
+- **Deserialisation moved off the kubernetes client.** `kube.get_json` asks `call_api` for the raw urllib3 response (`_preload_content=False`) and parses the bytes with `orjson`, instead of letting the client decode the body to `str` and run `json.loads` over it. On a synthetic 52.6 MB Secret list: 91.2 ms for the client's path (576 MB/s) against 50.1 ms (1,049 MB/s), a **1.8x speedup** of every byte the collector reads. Worth noting against ADR-0003's model, which assumed ~50 MB/s per core for parsing: the real figure is an order of magnitude higher, so the "~18 cores of parsing" line in Finding 1 is pessimistic - the pull volume is still the problem, the decode is not.
+- **Certificates are only parsed when a value contains one.** Every Secret and ConfigMap value used to be handed to `cryptography`; now `scrub.looks_like_cert` gates it on a byte check (the PEM marker at the start of the value, or anywhere inside it for a key named like a certificate or any key of a `kubernetes.io/tls` Secret), and sizes and certificate facts are taken in one pass so a Secret value is base64-decoded once rather than twice. On a realistic 600-Secret / 500-ConfigMap mix: Secrets **1.9x faster**, and a trust bundle is capped at the first 20 certificates (`scrub.MAX_CERTS_PER_KEY`, facts from a capped bundle carry `"truncated": true`), which is another **1.7x** on ConfigMaps in a fleet that mounts a full CA bundle. No certificate fact changes: a PEM certificate cannot exist without its marker.

@@ -442,7 +442,7 @@ def test_timeline_has_one_point_per_sweep(client):
 def test_refresh_one_cluster(client, monkeypatch):
     calls = []
 
-    def fake_refresh(name):
+    def fake_refresh(name, full=False):
         calls.append(name)
         if name == "nope":
             return {"ok": False, "error": "unknown cluster"}
@@ -844,3 +844,46 @@ def test_application_counts_per_cluster_and_group(client):
 
     summary = _get(client, "/api/health/summary", group_by="hub")
     assert all("applications" in g and "unassigned_namespaces" in g for g in summary["groups"])
+
+
+def test_manifest_availability_reports_freshness_per_kind():
+    """With tiers, a kind is not re-read every sweep, so the availability view
+    has to say how old each answer is and what the last fetch cost."""
+    from app.collector.collect import assemble
+
+    manifest = get_manifest()
+    st = RedisStore(fakeredis.FakeRedis())
+    st.upsert_hub("hub-east", region="us-east-1", reachable=True, last_synced=NOW)
+    raw = _east_raw()
+    fetched_at = "2026-09-10T12:00:00+00:00"
+    kept_at = "2026-09-10T11:45:00+00:00"
+    status = {key: {"status": "collected", "count": 1, "duration_ms": 5, "error": None,
+                    "collected_at": fetched_at, "cached": False, "interval_seconds": 0,
+                    "bytes": 2048, "objects": 12, "parse_ms": 3.5, "requests": 2}
+              for key in raw}
+    status["routes"] = {**status["routes"], "cached": True, "collected_at": kept_at,
+                        "interval_seconds": 900}
+    collected = assemble({"name": "ocp-tier-1", "region": "us-east-1"}, raw, status, manifest, NOW)
+    checks, overall, score, counts = run_health_checks(
+        collected, settings.supported_floor, manifest.describe()["thresholds"])
+    st.persist_cluster("hub-east", collected, checks, overall, score, counts)
+
+    app = FastAPI()
+    app.include_router(manifest_api.router)
+    store_module.set_store(st)
+    try:
+        d = TestClient(app).get("/api/manifest/availability").json()
+        resources = d["clusters"][0]["resources"]
+        assert resources["pods"]["cached"] is False
+        assert resources["pods"]["collected_at"] == fetched_at
+        assert resources["pods"]["objects"] == 12 and resources["pods"]["bytes"] == 2048
+        assert resources["pods"]["parse_ms"] == 3.5 and resources["pods"]["requests"] == 2
+        # the kind that was kept says so, and says how old the answer is
+        assert resources["routes"]["cached"] is True
+        assert resources["routes"]["collected_at"] == kept_at
+        assert resources["routes"]["status"] == "collected"
+        # the interval comes from the manifest in force now, not from the row
+        assert resources["routes"]["interval_seconds"] == manifest.interval("routes")
+        assert d["clusters"][0]["last_synced"]
+    finally:
+        store_module.set_store(None)

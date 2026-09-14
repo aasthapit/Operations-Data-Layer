@@ -1,7 +1,13 @@
 import { Fragment } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Loading, ErrorBanner, DataTable } from "../components";
+import { Loading, ErrorBanner, DataTable, fmtBytes } from "../components";
+
+// Durations here span three orders of magnitude (a 40 ms health check, a 12 s
+// fetch), so the unit follows the value rather than the column.
+const fmtMs = (v) => (v == null ? "—" : v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`);
+const fmtNum = (v) => (v == null ? "—" : Number(v).toLocaleString());
+const fmtPercent = (v) => (v == null ? "—" : `${v}%`);
 
 const RESOURCE_COLUMNS = [
   {
@@ -32,9 +38,137 @@ const RESOURCE_COLUMNS = [
   },
 ];
 
+const TIMING_COLUMNS = (onOpen) => [
+  {
+    key: "cluster", label: "Cluster", className: "mono nowrap", filter: "text",
+    render: (r) => <span className="link" onClick={() => onOpen(r.cluster)}>{r.cluster}</span>,
+  },
+  { key: "hub", label: "Hub", className: "muted nowrap", filter: "select" },
+  {
+    key: "total_ms", label: "Total", align: "right", className: "nowrap",
+    render: (r) => fmtMs(r.total_ms),
+  },
+  {
+    key: "cpu_ms", label: "CPU", align: "right", className: "nowrap",
+    render: (r) => fmtMs(r.cpu_ms),
+  },
+  {
+    key: "fetch_ms", label: "Fetch", align: "right", className: "nowrap muted",
+    render: (r) => fmtMs(r.fetch_ms),
+  },
+  {
+    key: "parse_ms", label: "Parse", align: "right", className: "nowrap muted",
+    render: (r) => fmtMs(r.parse_ms),
+  },
+  {
+    key: "assemble_ms", label: "Assemble", align: "right", className: "nowrap muted",
+    render: (r) => fmtMs(r.assemble_ms),
+  },
+  {
+    key: "health_ms", label: "Health", align: "right", className: "nowrap muted",
+    render: (r) => fmtMs(r.health_ms),
+  },
+  {
+    key: "persist_ms", label: "Persist", align: "right", className: "nowrap muted",
+    render: (r) => fmtMs(r.persist_ms),
+  },
+  {
+    key: "bytes", label: "Pulled", align: "right", className: "nowrap",
+    render: (r) => fmtBytes(r.bytes),
+  },
+  {
+    key: "objects", label: "Objects", align: "right", className: "nowrap",
+    render: (r) => fmtNum(r.objects),
+  },
+  {
+    key: "kinds_fetched", label: "Kinds fetched / cached", align: "right", className: "nowrap muted",
+    sortValue: (r) => r.kinds_fetched,
+    filterValue: (r) => `${r.kinds_fetched ?? "—"} / ${r.kinds_cached ?? "—"}`,
+    render: (r) => `${r.kinds_fetched ?? "—"} / ${r.kinds_cached ?? "—"}`,
+  },
+];
+
+function Timings({ data, onOpen }) {
+  const fleet = data.fleet || {};
+  const totals = fleet.totals || {};
+  const share = fleet.share_percent || {};
+  const p50 = fleet.p50 || {};
+  const p95 = fleet.p95 || {};
+  const last = data.last_run;
+  const stages = data.stages || [];
+  const measured = fleet.clusters || 0;
+
+  return (
+    <>
+      {measured === 0 ? (
+        <div className="muted" style={{ padding: "0 18px 14px", fontSize: 12.5 }}>
+          No cluster has reported collection timings yet - they appear after the next sweep.
+        </div>
+      ) : (
+        <div style={{ padding: "0 18px 14px" }}>
+          <div className="stats" style={{ gap: 12 }}>
+            <div className="stat">
+              <div className="label">Collection time</div>
+              <div className="value" style={{ fontSize: 24 }}>{fmtMs(totals.total_ms)}</div>
+              <div className="sub">{measured} of {fleet.clusters_total} clusters measured</div>
+            </div>
+            <div className="stat">
+              <div className="label">Network (fetch)</div>
+              <div className="value" style={{ fontSize: 24 }}>{fmtPercent(share.fetch_ms)}</div>
+              <div className="sub">
+                {fmtMs(totals.fetch_ms)}
+                {fleet.bytes_per_fetch_second ? ` · ${fmtBytes(fleet.bytes_per_fetch_second)}/s` : ""}
+              </div>
+            </div>
+            <div className="stat accent">
+              <div className="label">Python CPU</div>
+              <div className="value" style={{ fontSize: 24 }}>{fmtPercent(fleet.cpu_percent)}</div>
+              <div className="sub">
+                {fmtMs(totals.cpu_ms)}
+                {fleet.parse_percent_of_fetch != null
+                  ? ` · parsing is ${fleet.parse_percent_of_fetch}% of the fetch window` : ""}
+              </div>
+            </div>
+            <div className="stat">
+              <div className="label">Last sweep</div>
+              <div className="value" style={{ fontSize: 24 }}>{fmtMs(last && last.duration_ms)}</div>
+              <div className="sub">
+                {last ? `${last.trigger} · ${last.clusters_total ?? "?"} clusters · ${fmtBytes(totals.bytes)} pulled`
+                  : "no completed sweep yet"}
+              </div>
+            </div>
+          </div>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>
+            Per cluster, p50 / p95:{" "}
+            {stages.map((s, i) => (
+              <Fragment key={s}>
+                {i > 0 ? " · " : ""}
+                <b>{s.replace("_ms", "")}</b> {fmtMs(p50[s])} / {fmtMs(p95[s])}
+              </Fragment>
+            ))}
+            {" · "}<b>total</b> {fmtMs(p50.total_ms)} / {fmtMs(p95.total_ms)}
+          </div>
+        </div>
+      )}
+      <DataTable
+        id="collector.timings"
+        columns={TIMING_COLUMNS(onOpen)}
+        rows={data.clusters || []}
+        rowKey="cluster"
+        initialSort={{ key: "total_ms", dir: "desc" }}
+        empty="No cluster has reported collection timings yet."
+        searchPlaceholder="Search clusters"
+        scroll
+        dense
+      />
+    </>
+  );
+}
+
 export default function Manifest({ onOpen }) {
   const m = useFetch(() => api.manifest(), []);
   const av = useFetch(() => api.manifestAvailability(), []);
+  const tm = useFetch(() => api.collectorTimings(), []);
   if (m.error) return <ErrorBanner error={m.error} />;
   if (m.loading && !m.data) return <Loading />;
   const d = m.data;
@@ -42,13 +176,18 @@ export default function Manifest({ onOpen }) {
   const domains = [...new Set(d.resources.map((r) => r.domain))];
 
   return (
-    <div className="grid" style={{ gap: 16 }}>
+    // minmax(0, 1fr) rather than the default 1fr: a grid item's automatic
+    // minimum is its content, so without this the widest table on the tab
+    // stretches the column and the whole page scrolls sideways instead of the
+    // table scrolling inside its own card.
+    <div className="grid" style={{ gap: 16, gridTemplateColumns: "minmax(0, 1fr)" }}>
       <div className="section-head">
         <div>
           <div className="section-title" style={{ margin: 0 }}>What is collected</div>
           <div className="desc">
             The OCP API manifest declares everything the collector reads from a cluster - {enabled} of {d.resources.length} resources
-            enabled from <span className="mono">{d.source}</span>. Nothing outside it is ever requested, and the read-only RBAC is generated from it.
+            enabled from <span className="mono" style={{ overflowWrap: "anywhere" }}>{d.source}</span>. Nothing outside
+            it is ever requested, and the read-only RBAC is generated from it.
           </div>
         </div>
       </div>
@@ -91,14 +230,18 @@ export default function Manifest({ onOpen }) {
           <h3>Resources</h3>
           <div className="desc">{d.resources.length} declared across {domains.length} domains.</div>
         </div>
-        <DataTable
-          id="manifest.resources"
-          columns={RESOURCE_COLUMNS}
-          rows={d.resources}
-          rowKey="key"
-          initialSort={{ key: "domain", dir: "asc" }}
-          empty="The manifest declares no resources."
-        />
+        {/* Twelve columns of prose do not fit a narrow window; the table scrolls
+            inside the card rather than making the whole page scroll sideways. */}
+        <div style={{ overflowX: "auto" }}>
+          <DataTable
+            id="manifest.resources"
+            columns={RESOURCE_COLUMNS}
+            rows={d.resources}
+            rowKey="key"
+            initialSort={{ key: "domain", dir: "asc" }}
+            empty="The manifest declares no resources."
+          />
+        </div>
       </div>
 
       <div className="card flush">
@@ -107,6 +250,21 @@ export default function Manifest({ onOpen }) {
           <div className="desc">What each cluster actually served on the last sweep: object count when collected; n/a when the API is not served (e.g. no OLM); 403 when RBAC denies it.</div>
         </div>
         {av.error ? <ErrorBanner error={av.error} /> : !av.data ? <Loading /> : <Matrix data={av.data} onOpen={onOpen} />}
+      </div>
+
+      <div className="card flush">
+        <div className="card-head">
+          <h3>Collector timing</h3>
+          <div className="desc">
+            What collecting each cluster cost on its last collection. <b>Fetch</b> is the network and the
+            cluster&apos;s API server - it shrinks by asking for less, less often (tiered intervals, watches,
+            metadata-only lists), not by writing the collector in another language. <b>Parse</b>, <b>assemble</b>,
+            <b> health</b> and <b>persist</b> are CPU in Python, and are what a Go collector would shrink; the CPU
+            column adds them up. Parsing is measured inside the fetch window, so a cluster&apos;s total is
+            fetch + assemble + health + persist.
+          </div>
+        </div>
+        {tm.error ? <ErrorBanner error={tm.error} /> : !tm.data ? <Loading /> : <Timings data={tm.data} onOpen={onOpen} />}
       </div>
     </div>
   );

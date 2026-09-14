@@ -213,7 +213,13 @@ SECTION_FIELDS: dict[str, frozenset[str]] = {
     "resources": frozenset({
         "key", "kind", "api_group", "namespace", "ns_class", "name", "status", "expires_at",
         "labels", "summary", "created_at"}),
-    "resource_status": frozenset({"key", "status", "count", "duration_ms", "error"}),
+    # Everything after `error` is collection telemetry the collector adds when
+    # it has it (a tiered sweep that reused a cached section writes `cached`
+    # and the `collected_at` of the sweep that did fetch it).
+    "resource_status": frozenset({
+        "key", "status", "count", "duration_ms", "error",
+        "collected_at", "cached", "bytes", "objects", "parse_ms", "requests",
+        "interval_seconds"}),
     "health_checks": frozenset({"name", "title", "status", "severity", "message",
                                 "value", "levels"}),
 }

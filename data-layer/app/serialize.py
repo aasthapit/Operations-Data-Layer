@@ -112,6 +112,11 @@ def cluster_summary(c) -> dict:
         "last_synced": _iso(c.last_synced),
         "age_seconds": age,
         "stale": age is not None and age > 3 * settings.refresh_interval_seconds,
+        # Where the last collection of this cluster spent its time, as the
+        # collector measured it (null until a sweep has written it). The stage
+        # names and units are described in docs/findings.md, "Where the
+        # collector's time goes"; /api/collector/timings aggregates them.
+        "timings": c.timings or None,
     }
 
 
@@ -260,9 +265,24 @@ def resource_dict(r) -> dict:
     }
 
 
+# Per-kind collection facts the collector records when it has them: when this
+# kind was last collected, whether this sweep reused the cached section instead
+# of fetching (tiered refresh intervals), and what the fetch cost. They are
+# absent from the response unless the collector wrote them, so a store written
+# by an older collector serialises exactly as it did before.
+_RESOURCE_STATUS_EXTRA = ("collected_at", "cached", "bytes", "objects", "parse_ms",
+                          "requests", "interval_seconds")
+
+
 def resource_status_dict(s) -> dict:
-    return {"key": s.key, "status": s.status, "count": s.count,
-            "duration_ms": s.duration_ms, "error": s.error}
+    d = {"key": s.key, "status": s.status, "count": s.count,
+         "duration_ms": s.duration_ms, "error": s.error}
+    for field in _RESOURCE_STATUS_EXTRA:
+        value = getattr(s, field, None)
+        if value is None:
+            continue
+        d[field] = _iso(value) if field == "collected_at" else value
+    return d
 
 
 def check_dict(h) -> dict:

@@ -22,6 +22,7 @@ The collection side, extrapolated from the same per-cluster assumptions (6k Secr
 | 60 min | 109 GB | ~0.24 Gbit/s | ~0.6 cores |
 
 A single 2-minute full sweep is not viable at 900 clusters.
+(Measured later on Apple Silicon: JSON decoding runs at ~0.6 GB/s with the stock decoder and ~1 GB/s with `orjson`, so the parse column above is pessimistic by an order of magnitude; the certificate parsing and the per-object assembly are the larger CPU items. `GET /api/collector/timings` reports the real split per cluster and replaces this estimate.)
 The fix is not a bigger collector; it is collecting less, less often, and only what changed.
 
 Decision:

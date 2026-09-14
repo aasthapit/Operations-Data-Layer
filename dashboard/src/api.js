@@ -93,6 +93,9 @@ export const api = {
   // manifest
   manifest: () => get("/api/manifest"),
   manifestAvailability: () => get("/api/manifest/availability"),
+  // Where the collector's time goes: per-cluster stage breakdown plus fleet
+  // aggregates and the last sweep, in one call.
+  collectorTimings: (limit) => get(`/api/collector/timings${qs({ limit })}`),
 
   // utilization (metrics.k8s.io, collected with the inventory)
   metricsHealth: () => get("/api/metrics/health"),

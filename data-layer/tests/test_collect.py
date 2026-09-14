@@ -1,7 +1,14 @@
-"""assemble() joins raw objects into the cluster document."""
-from datetime import UTC, datetime
+"""assemble() joins raw objects into the cluster document, this sweep's and
+the previous one's (the kinds that were not due)."""
+from datetime import UTC, datetime, timedelta
 
-from app.collector.collect import assemble
+from app.collector.collect import (
+    PREVIOUS_SECTIONS,
+    Previous,
+    assemble,
+    plan_collection,
+)
+from app.manifest import parse_manifest
 from tests.test_parsers import _pod
 
 NOW = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
@@ -175,3 +182,170 @@ def test_assemble_takes_ownership_from_the_mapping_not_from_labels(manifest, tmp
     by = {n["name"]: n for n in doc["namespaces"]}
     assert by["payments"]["app_name"] == "from-label" and by["payments"]["assigned"] is True
     assert by["scratch"]["app_name"] == "scratch-app" and by["payments"]["environment"] is None
+
+
+# --------------------------------------------------------------------------- #
+# tiers: a kind that is not due keeps the rows of its last collection
+# --------------------------------------------------------------------------- #
+def _previous(doc):
+    """The `Previous` a store round trip hands back for a collected document
+    (mirrors redis_store._section_rows and the `collector_state` summary field)."""
+    sections = {name: [dict(row) for row in (doc.get(name) or [])]
+                for name in PREVIOUS_SECTIONS if name != "resource_status"}
+    sections["resource_status"] = [{"key": key, **entry}
+                                   for key, entry in (doc.get("resource_status") or {}).items()]
+    return Previous(sections=sections, state=doc.get("collector_state") or {})
+
+
+def _fetched(keys, at=NOW, status="collected"):
+    return {key: {"status": status, "count": 1, "error": None, "duration_ms": 1,
+                  "collected_at": at.isoformat(), "cached": False} for key in keys}
+
+
+def _kept(previous, keys):
+    return {key: {**previous.status(key), "cached": True} for key in keys}
+
+
+def _first_sweep(manifest, raw):
+    """Collect everything once, and hand back (document, Previous)."""
+    doc = assemble({"name": "ocp-1", "region": "us-east-1"}, raw,
+                   _fetched(raw.keys()), manifest, NOW)
+    return doc, _previous(doc)
+
+
+_TIERED_RAW = {
+    "clusterversion": {"spec": {"channel": "stable-4.16"},
+                       "status": {"desired": {"version": "4.16.7"},
+                                  "history": [{"state": "Completed", "version": "4.16.7"}],
+                                  "conditions": []}},
+    "clusteroperators": [{"metadata": {"name": "etcd"}, "status": {"versions": [
+        {"name": "operator", "version": "4.16.7"}], "conditions": [
+        {"type": "Available", "status": "True"}]}}],
+    "nodes": [_node("n1")],
+    "namespaces": [_ns("payments")],
+    "pods": [_pod("api-1", "payments"), _pod("api-2", "payments")],
+    "deployments": [_dep("api", "payments")],
+    "statefulsets": [],
+    "secrets": [{"metadata": {"name": "api-secret", "namespace": "payments"},
+                 "type": "Opaque", "data": {"k": "c2VjcmV0"}}],
+    "routes": [{"metadata": {"name": "api", "namespace": "payments"},
+                "spec": {"host": "api.example.com", "to": {"name": "api"}}, "status": {}}],
+}
+LATER = NOW + timedelta(minutes=5)
+
+
+def test_plan_collects_a_kind_only_when_its_interval_has_passed():
+    m = parse_manifest({"resources": {
+        "pods": True,                                       # every sweep
+        "deployments": {"enabled": True, "interval": "15m"},
+        "secrets": {"enabled": True, "interval": "1h"},
+        "routes": {"enabled": False, "interval": "15m"}}})
+    previous = Previous(sections={"resource_status": [
+        {"key": "pods", "status": "collected", "collected_at": NOW.isoformat()},
+        {"key": "deployments", "status": "collected", "collected_at": NOW.isoformat()},
+        {"key": "secrets", "status": "forbidden", "collected_at": NOW.isoformat()}]})
+
+    plan = plan_collection(m, previous, now=LATER)
+    assert plan.due == ["pods"]                              # the tiers are not up yet
+    assert set(plan.cached) == {"deployments", "secrets"}
+    assert plan.cached["secrets"]["status"] == "forbidden"   # kept, with its own timestamp
+    assert plan.cached["secrets"]["cached"] is True
+    assert plan.cached["secrets"]["collected_at"].startswith("2026-09-10T12:00")
+    assert plan.cached["deployments"]["interval_seconds"] == 900
+
+    # twenty minutes on, the 15m tier is due again and the hourly one is not
+    assert plan_collection(m, previous, now=NOW + timedelta(minutes=20)).due == [
+        "pods", "deployments"]
+    # a full refresh ignores every tier, and so does a cluster never collected
+    assert plan_collection(m, previous, now=LATER, full=True).due == [
+        "pods", "deployments", "secrets"]
+    assert plan_collection(m, None, now=LATER).due == ["pods", "deployments", "secrets"]
+    # a disabled kind is never due, whatever its interval
+    assert "routes" not in plan_collection(m, None, now=LATER).due
+    # upgrade path: rows an older collector wrote carry no `collected_at`, and a
+    # kind that used to be disabled has none either - both are due
+    older = Previous(sections={"resource_status": [
+        {"key": "pods", "status": "collected", "count": 3},
+        {"key": "deployments", "status": "collected", "count": 1},
+        {"key": "secrets", "status": "disabled", "count": 0}]})
+    assert plan_collection(m, older, now=LATER).due == ["pods", "deployments", "secrets"]
+    assert plan_collection(m, older, now=LATER).cached == {}
+
+
+def test_assemble_keeps_the_rows_of_kinds_that_were_not_due(manifest):
+    first, previous = _first_sweep(manifest, _TIERED_RAW)
+    assert [w["name"] for w in first["workloads"]] == ["api"]
+
+    # second sweep: only namespaces and pods are due, and one pod is gone
+    raw = {"namespaces": [_ns("payments")], "pods": [_pod("api-1", "payments")]}
+    status = {**_fetched(raw, LATER),
+              **_kept(previous, ("clusterversion", "clusteroperators", "nodes", "deployments",
+                                 "statefulsets", "secrets", "routes"))}
+    doc = assemble({"name": "ocp-1", "region": "us-east-1"}, raw, status, manifest,
+                   LATER, previous)
+
+    # kept: workloads with their image and reference edges, inventory, nodes,
+    # operators, and the cluster-level config of the singleton kinds
+    assert [w["name"] for w in doc["workloads"]] == ["api"]
+    assert [(r["workload_name"], r["ref_name"]) for r in doc["workload_refs"]] == [
+        ("api", "api-secret")]
+    assert [r["repository"] for r in doc["workload_images"]] == ["acme/api"]
+    assert {r["key"] for r in doc["resources"]} == {"secrets", "routes"}
+    assert [n["name"] for n in doc["nodes"]] == ["n1"] and doc["nodes_ready"] == 1
+    assert [o["name"] for o in doc["operators"]] == ["etcd"]
+    assert doc["version"] == "4.16.7" and doc["channel"] == "stable-4.16"
+
+    # recomputed: the namespace rollups, from this sweep's pods and the kept workloads
+    ns = {n["name"]: n for n in doc["namespaces"]}["payments"]
+    assert ns["pods_total"] == 1 and ns["pods_running"] == 1
+    assert ns["workloads_total"] == 1 and ns["replicas_ready"] == 2
+    assert ns["resource_counts"] == {"secrets": 1, "routes": 1}     # kept rows still count
+    assert doc["nodes"][0]["pods_running"] == 1
+    assert doc["workloads_total"] == 1 and doc["capacity"]["pods_running"] == 1
+
+    # and the document says which kinds it did not re-read
+    assert doc["resource_status"]["secrets"]["cached"] is True
+    assert doc["resource_status"]["pods"]["cached"] is False
+    assert doc["collector_state"]["config"]["clusterversion"]["version"] == "4.16.7"
+
+
+def test_assemble_drops_the_rows_of_a_kind_that_became_forbidden(manifest):
+    first, previous = _first_sweep(manifest, _TIERED_RAW)
+    assert {r["key"] for r in first["resources"]} == {"secrets", "routes"}
+
+    raw = {"namespaces": [_ns("payments")], "pods": [_pod("api-1", "payments")]}
+    status = {**_fetched(raw, LATER),
+              # secrets were due and came back 403; the deployments tier is not up
+              **_fetched(["secrets"], LATER, status="forbidden"),
+              **_kept(previous, ("clusterversion", "clusteroperators", "nodes", "deployments",
+                                 "statefulsets", "routes"))}
+    doc = assemble({"name": "ocp-1"}, raw, status, manifest, LATER, previous)
+
+    assert {r["key"] for r in doc["resources"]} == {"routes"}       # the secrets rows are gone
+    assert doc["resource_status"]["secrets"]["status"] == "forbidden"
+    assert doc["resource_status"]["secrets"]["cached"] is False
+    assert {n["name"]: n for n in doc["namespaces"]}["payments"]["resource_counts"] == {"routes": 1}
+    assert doc["certs_expiring_total"] == 0
+    # a workload kind that is disabled outright drops its rows the same way
+    status["deployments"] = {"status": "disabled", "count": 0, "cached": False}
+    doc = assemble({"name": "ocp-1"}, raw, status, manifest, LATER, previous)
+    assert doc["workloads"] == [] and doc["workload_refs"] == []
+
+
+def test_assemble_keeps_pod_rollups_when_pods_are_not_due(manifest):
+    """Pods belong in the fast tier, but putting them in a slow one must not
+    zero every namespace: the rollups stand until they are read again."""
+    first, previous = _first_sweep(manifest, _TIERED_RAW)
+
+    raw = {"namespaces": [_ns("payments")], "deployments": [_dep("api", "payments")]}
+    status = {**_fetched(raw, LATER),
+              **_kept(previous, ("clusterversion", "clusteroperators", "nodes", "pods",
+                                 "statefulsets", "secrets", "routes"))}
+    doc = assemble({"name": "ocp-1"}, raw, status, manifest, LATER, previous)
+
+    ns = {n["name"]: n for n in doc["namespaces"]}["payments"]
+    assert ns["pods_total"] == 2 and ns["pods_running"] == 2
+    assert ns["cpu_requests"] == first["namespaces"][0]["cpu_requests"]
+    assert doc["nodes"][0]["pods_running"] == 2
+    assert doc["capacity"]["pods_running"] == 2
+    assert [i["name"] for i in doc["pod_issues"]] == [i["name"] for i in first["pod_issues"]]
