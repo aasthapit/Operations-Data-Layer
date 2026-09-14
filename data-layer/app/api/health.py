@@ -72,7 +72,8 @@ def overview(store: Store = Depends(get_store_dep)):
         "hubs": [{"name": h.name, "region": h.region,
                   "datacenter": h.datacenter, "reachable": h.reachable,
                   "managed_count": h.managed_count,
-                  "last_synced": _iso(h.last_synced)}
+                  "last_synced": _iso(h.last_synced),
+                  "last_error": h.last_error}
                  # the hub hash has no order of its own; name order keeps the
                  # overview stable between refreshes
                  for h in sorted(store.hubs(), key=lambda h: h.name or "")],

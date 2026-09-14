@@ -127,11 +127,16 @@ def _discover_via_hubs(store: Store, hubs) -> list[Target]:
             hb = _hub_bundle(hub)
             managed = kube.list_managedclusters(hb)
         except Exception as e:  # noqa: BLE001
+            log.warning("hub %s unreachable: %s", hub.name, e)
             store.upsert_hub(hub.name, **placement, reachable=False, last_error=str(e),
                              managed_count=0, last_synced=utcnow())
             continue
         store.upsert_hub(hub.name, **placement, reachable=True, last_error=None,
                          managed_count=len(managed), last_synced=utcnow())
+        log.info("hub %s: %d managed clusters", hub.name, len(managed))
+        if not managed:
+            log.warning("hub %s lists no ManagedClusters: check that the identity may "
+                        "list managedclusters.cluster.open-cluster-management.io", hub.name)
         for mc in managed:
             meta = normalize_managedcluster(mc)
             targets.append(Target(hub.name, meta, _managed_connect(hub, hb, meta)))
@@ -184,6 +189,7 @@ def _gather(target: Target, manifest) -> tuple[Target, dict, bool]:
     try:
         bundle = target.connect()
     except Exception as e:  # noqa: BLE001
+        log.warning("%s unreachable: connect: %s", target.meta.get("name"), e)
         return target, unreachable(target.meta, f"connect: {e}"), False
     try:
         return target, collect_managed_cluster(bundle, target.meta, manifest), True

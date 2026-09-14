@@ -68,7 +68,7 @@ export default function Overview({ nav }) {
         <h3>Hubs (ACM)</h3>
         <table>
           <thead>
-            <tr><th>Hub</th><th>Region</th><th>Data center</th><th>Managed</th><th>Status</th><th>Last synced</th></tr>
+            <tr><th>Hub</th><th>Region</th><th>Data center</th><th>Managed</th><th>Status</th><th>Last synced</th><th>Error</th></tr>
           </thead>
           <tbody>
             {d.hubs.map((h) => (
@@ -79,6 +79,7 @@ export default function Overview({ nav }) {
                 <td>{h.managed_count}</td>
                 <td><Pill status={h.reachable ? "healthy" : "critical"} /></td>
                 <td className="muted">{fmtTime(h.last_synced)}</td>
+                <td className="muted" style={{ fontSize: 12, maxWidth: 420, wordBreak: "break-word" }}>{h.last_error || ""}</td>
               </tr>
             ))}
           </tbody>
