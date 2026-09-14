@@ -130,7 +130,8 @@ Then in `.env`:
 ```sh
 REDIS_URL=rediss://odl:change-me@redis.example.internal:6380/0   # or redis://localhost:16379/0
 ODL_CONFIG=config/acm.yaml                                       # relative to data-layer/
-OCP_PASSWORD=...                                                  # whatever the config references as ${VAR}
+OCP_USERNAME=svc-ops-data                                         # whatever the config references as ${VAR}
+OCP_PASSWORD=...
 ```
 
 and start it:

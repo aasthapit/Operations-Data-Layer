@@ -13,7 +13,7 @@ defaults:
   # Applied to every cluster below unless the cluster overrides it.
   auth:
     type: password            # password | token | kubeconfig
-    username: svc-ops-data    # the shared service-account identity
+    username: ${OCP_USERNAME} # the shared service-account identity
     password: ${OCP_PASSWORD} # injected from the environment / a secret
 
   # TLS: provide a CA bundle, or skip verification for self-signed dev clusters.

@@ -19,7 +19,7 @@
 defaults:
   auth:
     type: password            # password | token
-    username: svc-ops-data
+    username: ${OCP_USERNAME}
     password: ${OCP_PASSWORD}
   insecure_skip_tls_verify: false
   # ca_cert: /etc/odl/ca/corp-ca.crt
