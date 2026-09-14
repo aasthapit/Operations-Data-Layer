@@ -19,6 +19,8 @@
   --unknown: #6b7785;
   --unknown-bg: rgba(107, 119, 133, 0.14);
 
+  color-scheme: dark;
+
   --radius: 10px;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   --topbar-h: 58px;
@@ -151,11 +153,14 @@ tr.clickable { cursor: pointer; }
 
 /* ----- filters ----- */
 .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
-select, input[type="text"] {
+select, textarea,
+input[type="text"], input[type="number"], input[type="date"], input[type="search"] {
   background: var(--bg-elev-2); border: 1px solid var(--border); color: var(--text);
   padding: 7px 10px; border-radius: 7px; font-size: 13px; outline: none;
+  font-family: inherit;
 }
-select:focus, input:focus { border-color: var(--accent); }
+select:focus, input:focus, textarea:focus { border-color: var(--accent); }
+input[type="checkbox"] { accent-color: var(--accent); }
 label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--text-dim); }
 
 .toggle-group { display: inline-flex; background: var(--bg-elev-2); border: 1px solid var(--border);
@@ -307,3 +312,81 @@ td.nowrap, th.nowrap { white-space: nowrap; }
    collide with the outer table's own sticky header */
 .dt-expanded .dt thead th, .dt-expanded .dt thead td { position: static; }
 .dt-foot { color: var(--text-faint); font-size: 12.5px; padding: 10px 12px 12px; }
+
+/* ----- query builder ----------------------------------------------------- */
+/* A left rail of controls that stays put, and the SQL plus the rows it
+   produced filling the rest of the width. */
+.q-layout { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; align-items: start; }
+.q-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
+/* the single column must be capped, or a wide result table sizes the
+   card to its own max-content and the page scrolls sideways */
+.q-rail {
+  padding: 0; position: sticky; top: calc(var(--topbar-h) + 24px);
+  max-height: calc(100vh - var(--topbar-h) - 48px); overflow: auto;
+}
+@media (max-width: 1080px) {
+  .q-layout { grid-template-columns: 1fr; }
+  .q-rail { position: static; max-height: none; }
+}
+
+.q-sec { padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
+.q-sec:last-child { border-bottom: 0; }
+.q-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.q-title { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-dim); font-weight: 600; }
+.q-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.q-mini { background: none; border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: 5px; padding: 1px 7px; font-size: 11px; cursor: pointer; }
+.q-mini:hover { border-color: var(--accent); color: var(--text); }
+.q-desc { color: var(--text-faint); font-size: 11.5px; margin: 6px 0 0; }
+
+.q-rail select,
+.q-rail input[type="text"], .q-rail input[type="number"], .q-rail input[type="date"] {
+  font-size: 12px; padding: 4px 7px; border-radius: 6px; max-width: 100%;
+}
+.q-full { width: 100%; flex: 1 1 100%; min-width: 0; }
+.q-grow { flex: 1 1 110px; min-width: 0; }
+.q-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.q-row:last-child { margin-bottom: 0; }
+.q-x { background: none; border: 1px solid var(--border); color: var(--text-faint);
+  border-radius: 6px; width: 24px; height: 24px; line-height: 1; font-size: 14px;
+  cursor: pointer; flex: none; }
+.q-x:hover { border-color: var(--critical); color: var(--critical); }
+.q-add { background: none; border: 1px dashed var(--border); color: var(--text-dim);
+  border-radius: 6px; padding: 4px 10px; font-size: 11.5px; cursor: pointer;
+  width: 100%; margin-top: 4px; }
+.q-add:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.q-add:disabled { opacity: 0.4; cursor: default; }
+.q-filter, .q-agg { border-left: 2px solid var(--border); padding-left: 8px; margin-bottom: 10px; }
+
+.q-list { max-height: 260px; overflow: auto; margin: 0 -4px; padding: 0 4px; }
+.q-check { display: flex; align-items: center; gap: 7px; padding: 3px 2px; font-size: 12.5px;
+  cursor: pointer; }
+.q-check input { margin: 0; flex: none; }
+.q-check.q-off { opacity: 0.45; cursor: default; }
+.q-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-type { color: var(--text-faint); font-size: 10.5px; flex: none; }
+.q-subhead { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-faint); margin: 10px 0 4px; }
+.toggle-group.q-tiny button { padding: 2px 8px; font-size: 11.5px; }
+
+.q-sql { margin: 0; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border-soft);
+  border-radius: 8px; white-space: pre-wrap; word-break: break-word; line-height: 1.55;
+  color: var(--text); overflow-x: auto; }
+.q-sql-edit { width: 100%; display: block; resize: vertical; }
+.q-problems { margin: 10px 0 0; padding-left: 18px; color: var(--warning); font-size: 12.5px; }
+.q-meta { margin-top: 12px; color: var(--text-faint); font-size: 12.5px; }
+.q-ran { margin-top: 8px; }
+.q-ran summary { cursor: pointer; color: var(--text-dim); }
+.q-ran summary:hover { color: var(--text); }
+.q-ran .q-sql { margin-top: 8px; }
+
+.q-answer { margin-top: 12px; font-size: 13px; }
+.q-assumptions { margin: 6px 0 0; padding-left: 18px; color: var(--text-dim); font-size: 12.5px; }
+.q-examples { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px;
+  font-size: 12px; }
+.q-example { cursor: pointer; font: inherit; font-size: 11.5px; }
+.q-example:hover { border-color: var(--accent); color: var(--text); }
+
+.q-trunc { display: inline-block; max-width: 360px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; vertical-align: bottom; }

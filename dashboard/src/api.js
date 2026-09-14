@@ -23,6 +23,31 @@ async function post(path) {
   return res.json();
 }
 
+// POST with a JSON body. The query plane answers a refusal with a reason the
+// user is meant to read ({"detail": "only SELECT queries are allowed"}), so the
+// error carries the status and the parsed detail rather than a formatted blob.
+async function postJson(path, body) {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* not JSON: keep the text */ }
+  if (res.ok) return data;
+
+  const detail = data && typeof data === "object" ? data.detail : null;
+  const message =
+    typeof detail === "string" ? detail
+      : detail && typeof detail === "object" ? (detail.error || JSON.stringify(detail))
+        : text || `${res.status} ${res.statusText}`;
+  const error = new Error(message);
+  error.status = res.status;
+  error.detail = detail;
+  throw error;
+}
+
 export const api = {
   // fleet
   overview: () => get("/api/health/overview"),
@@ -58,6 +83,12 @@ export const api = {
   references: (params = {}) => get(`/api/insights/references${qs(params)}`),
   clusterAdmins: (params = {}) => get(`/api/insights/cluster-admins${qs(params)}`),
   inventory: (params = {}) => get(`/api/insights/resources${qs(params)}`),
+
+  // query plane (guarded SQL over the in-process DuckDB snapshot)
+  querySchema: () => get("/api/query/schema"),
+  runSql: (sql, limit) => postJson("/api/query/sql", limit ? { sql, limit } : { sql }),
+  askQuery: (question, limit) =>
+    postJson("/api/query/ask", limit ? { question, limit } : { question }),
 
   // manifest
   manifest: () => get("/api/manifest"),

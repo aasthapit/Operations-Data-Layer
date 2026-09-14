@@ -8,6 +8,7 @@ import BlastRadius from "./views/BlastRadius";
 import Versions from "./views/Versions";
 import Metrics from "./views/Metrics";
 import Insights from "./views/Insights";
+import Query from "./views/Query";
 import Manifest from "./views/Manifest";
 import Patching from "./views/Patching";
 
@@ -18,13 +19,21 @@ const TABS = [
   ["versions", "Versions"],
   ["metrics", "Utilization"],
   ["insights", "Insights"],
+  ["query", "Query"],
   ["blast", "Blast radius"],
   ["patching", "Patching"],
   ["manifest", "Collected"],
 ];
 
 export default function App() {
-  const [tab, setTab] = useState("overview");
+  // A shared query link (#query=<state>) opens on the Query tab.
+  const [tab, setTab] = useState(() => {
+    try {
+      return (window.location.hash || "").startsWith("#query=") ? "query" : "overview";
+    } catch {
+      return "overview";
+    }
+  });
   const [selectedCluster, setSelectedCluster] = useState(null);
   const [selectedApp, setSelectedApp] = useState(null);
   const [clusterFilter, setClusterFilter] = useState(null);
@@ -93,6 +102,8 @@ export default function App() {
           <Metrics onOpen={openCluster} />
         ) : tab === "insights" ? (
           <Insights initialSection={insightSection} nav={nav} />
+        ) : tab === "query" ? (
+          <Query nav={nav} />
         ) : tab === "patching" ? (
           <Patching />
         ) : tab === "manifest" ? (
