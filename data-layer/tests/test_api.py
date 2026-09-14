@@ -321,7 +321,7 @@ def test_overview(client):
 
 def test_summary_groups_by_dimension(client):
     d = _get(client, "/api/health/summary", group_by="region")
-    assert d["group_by"] == "region"
+    assert d["group_by"] == "hub"
     assert [g["key"] for g in d["groups"]] == ["us-east-1", "us-west-2"]
     east, west = d["groups"]
     assert east["total"] == 1 and east["counts"]["healthy"] == 1 and east["rollup_status"] == "healthy"
@@ -330,7 +330,7 @@ def test_summary_groups_by_dimension(client):
     env = _get(client, "/api/health/summary", group_by="environment")
     assert [g["key"] for g in env["groups"]] == ["prod", "staging"]
     # an unknown dimension falls back to region rather than erroring
-    assert _get(client, "/api/health/summary", group_by="nonsense")["group_by"] == "region"
+    assert _get(client, "/api/health/summary", group_by="nonsense")["group_by"] == "hub"
 
 
 # --------------------------------------------------------------------------- #

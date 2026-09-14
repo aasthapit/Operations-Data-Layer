@@ -60,9 +60,9 @@ def top_nodes(store: Store = Depends(get_store_dep),
 
 @router.get("/capacity")
 def capacity(store: Store = Depends(get_store_dep),
-             group_by: str = Query("cluster", description="cluster|region|environment|datacenter")):
-    key = group_by if group_by in ("region", "environment", "datacenter") else "cluster"
-    field = "name" if key == "cluster" else key
+             group_by: str = Query("cluster", description="cluster|hub|region|environment|datacenter")):
+    key = group_by if group_by in ("region", "environment", "datacenter", "hub") else "cluster"
+    field = {"cluster": "name", "hub": "hub_name"}.get(key, key)
     groups = defaultdict(lambda: {"allocatable_cores": 0.0, "used_cores": 0.0, "requests_cores": 0.0,
                                   "allocatable_bytes": 0, "used_bytes": 0, "requests_bytes": 0,
                                   "clusters": 0, "with_metrics": 0})

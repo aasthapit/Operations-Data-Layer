@@ -122,12 +122,12 @@ function Result({ result, nav }) {
         <div className="card flush">
           <div className="card-head"><h3>Impacted clusters</h3></div>
           <table>
-            <thead><tr><th>Cluster</th><th>Region</th><th>Env</th><th>Match</th><th>Status</th></tr></thead>
+            <thead><tr><th>Cluster</th><th>Hub</th><th>Env</th><th>Match</th><th>Status</th></tr></thead>
             <tbody>
               {result.clusters.map((c) => (
                 <tr key={c.name} className="clickable" onClick={() => nav.openCluster(c.name)}>
                   <td className="mono">{c.name}</td>
-                  <td>{c.region}</td>
+                  <td className="mono">{c.hub}</td>
                   <td><span className="tag">{c.environment}</span></td>
                   <td className="muted wrap">{c.reason}</td>
                   <td><Pill status={c.status} /></td>
@@ -187,8 +187,8 @@ function Result({ result, nav }) {
             ))}
           </div>
           <div>
-            <div className="dim" style={{ marginBottom: 6 }}>By region</div>
-            {Object.entries(s.by_region).map(([k, v]) => (
+            <div className="dim" style={{ marginBottom: 6 }}>By hub</div>
+            {Object.entries(s.by_hub || s.by_region).map(([k, v]) => (
               <div key={k}><span className="tag">{k}</span> {v}</div>
             ))}
           </div>

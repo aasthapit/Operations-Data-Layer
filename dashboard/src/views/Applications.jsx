@@ -61,7 +61,7 @@ export default function Applications({ initialApp, nav, onClearApp }) {
                     ? <td>{(a.namespace_environments || []).map((e) => <span key={e} className="tag" style={{ marginRight: 4 }}>{e}</span>)}</td>
                     : <td><Tier tier={a.tier} /></td>}
                   <td><Pill status={a.status} /></td>
-                  <td>{a.cluster_count} <span className="muted">· {a.regions.join(", ")}</span></td>
+                  <td>{a.cluster_count} <span className="muted">· {(a.hubs || a.regions).join(", ")}</span></td>
                   <td>{a.environments.map((e) => <span key={e} className="tag" style={{ marginRight: 4 }}>{e}</span>)}</td>
                   <td>{a.workloads}</td>
                   <td>{a.replicas_ready}/{a.replicas_desired}</td>
@@ -98,12 +98,12 @@ function ApplicationDetail({ app, nav, onBack }) {
         <div className="card flush">
           <div className="card-head"><h3>Placements ({a.cluster_count} clusters)</h3></div>
           <table>
-            <thead><tr><th>Cluster</th><th>Region</th><th>Env</th><th>OCP</th><th>Cluster status</th><th>Namespace</th><th>Namespace env</th><th>App status</th><th>Workloads</th><th>Replicas</th><th>Pod issues</th><th>CPU</th><th>Memory</th></tr></thead>
+            <thead><tr><th>Cluster</th><th>Hub</th><th>Env</th><th>OCP</th><th>Cluster status</th><th>Namespace</th><th>Namespace env</th><th>App status</th><th>Workloads</th><th>Replicas</th><th>Pod issues</th><th>CPU</th><th>Memory</th></tr></thead>
             <tbody>
               {a.placements.map((p) => (
                 <tr key={p.cluster + "/" + p.namespace} className="clickable" onClick={() => nav.openCluster(p.cluster)}>
                   <td className="mono">{p.cluster}</td>
-                  <td>{p.region}</td>
+                  <td className="mono">{p.hub}</td>
                   <td><span className="tag">{p.environment}</span></td>
                   <td className="mono">{p.ocp_version}</td>
                   <td><Pill status={p.cluster_status} /></td>

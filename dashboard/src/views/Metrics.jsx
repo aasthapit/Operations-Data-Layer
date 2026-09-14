@@ -77,7 +77,7 @@ export default function Metrics({ onOpen }) {
         <div className="card-head">
           <div className="section-head">
             <h3 style={{ margin: 0 }}>Capacity headroom</h3>
-            <SubTabs tabs={[["cluster", "Cluster"], ["region", "Region"], ["environment", "Environment"], ["datacenter", "Data center"]]}
+            <SubTabs tabs={[["cluster", "Cluster"], ["hub", "Hub"], ["region", "Region"], ["environment", "Environment"], ["datacenter", "Data center"]]}
               value={groupBy} onChange={setGroupBy} />
           </div>
         </div>

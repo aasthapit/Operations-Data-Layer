@@ -14,6 +14,7 @@ export default function Clusters({ initialFilter, onOpen }) {
   return (
     <div>
       <div className="filters">
+        <FilterSelect label="Hub" value={filters.hub} options={opts.hub} onChange={(v) => set("hub", v)} />
         <FilterSelect label="Region" value={filters.region} options={opts.region} onChange={(v) => set("region", v)} />
         <FilterSelect label="Data center" value={filters.datacenter} options={opts.datacenter} onChange={(v) => set("datacenter", v)} />
         <FilterSelect label="Environment" value={filters.environment} options={opts.environment} onChange={(v) => set("environment", v)} />
@@ -30,7 +31,7 @@ export default function Clusters({ initialFilter, onOpen }) {
           <table>
             <thead>
               <tr>
-                <th>Cluster</th><th>Status</th><th>Region / DC</th><th>Env</th>
+                <th>Cluster</th><th>Status</th><th>Hub</th><th>Region / DC</th><th>Env</th>
                 <th>OCP version</th><th>Nodes</th><th>CPU</th><th>Memory</th>
                 <th>Apps</th><th>Pod issues</th><th>Certs</th><th>Checks</th>
               </tr>
@@ -40,7 +41,8 @@ export default function Clusters({ initialFilter, onOpen }) {
                 <tr key={c.name} className="clickable" onClick={() => onOpen(c.name)}>
                   <td className="mono">{c.name}</td>
                   <td><Pill status={c.overall_status} /></td>
-                  <td>{c.region} <span className="muted">/ {c.datacenter}</span></td>
+                  <td className="mono">{c.hub}</td>
+                  <td className="muted">{c.region} / {c.datacenter}</td>
                   <td><span className="tag">{c.environment}</span></td>
                   <td className="mono">
                     {c.ocp_version}

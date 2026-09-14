@@ -37,7 +37,7 @@ export default function App() {
   const openCluster = (name) => { setSelectedApp(null); setSelectedCluster(name); };
   const openApp = (name) => { setSelectedCluster(null); setSelectedApp(name); setTab("applications"); };
   const goClusters = (key, value) => {
-    const map = { region: "region", datacenter: "datacenter", environment: "environment", version: "version" };
+    const map = { hub: "hub", region: "region", datacenter: "datacenter", environment: "environment", version: "version" };
     setClusterFilter(map[key] ? { [map[key]]: value } : null);
     clearSelection();
     setTab("clusters");

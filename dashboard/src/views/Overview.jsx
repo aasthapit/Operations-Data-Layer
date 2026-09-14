@@ -4,6 +4,7 @@ import { useFetch } from "../hooks";
 import { HealthBar, Stat, Loading, ErrorBanner, Pill, fmtTime } from "../components";
 
 const GROUPS = [
+  ["hub", "Hub"],
   ["region", "Region"],
   ["datacenter", "Data center"],
   ["environment", "Environment"],
@@ -11,7 +12,7 @@ const GROUPS = [
 ];
 
 export default function Overview({ nav }) {
-  const [groupBy, setGroupBy] = useState("region");
+  const [groupBy, setGroupBy] = useState("hub");
   const ov = useFetch(() => api.overview(), []);
   const sum = useFetch(() => api.summary(groupBy), [groupBy]);
   const ins = useFetch(() => api.insightsSummary(), []);
