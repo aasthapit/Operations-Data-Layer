@@ -1,0 +1,46 @@
+# Operations Data Layer - a static list of ACM hubs
+# =================================================================
+# List your hubs once; the collector discovers every ManagedCluster on each of
+# them (name, placement labels and claims, version, availability) and reads
+# the clusters themselves. Copy to acm.yaml, set ODL_CONFIG=config/acm.yaml.
+#
+# Reaching a managed cluster (managed_access):
+#   secret  a kubeconfig Secret in the cluster's namespace on the hub
+#           (<name>-kubeconfig, <name>-admin-kubeconfig): clusters ACM
+#           provisioned through Hive, and the local kind fleet
+#   shared  the cluster's own API URL recorded on the ManagedCluster, with the
+#           hub's auth below: imported clusters, which have no kubeconfig on
+#           the hub. The same service account must exist on every cluster
+#           (deploy/rbac/odl-collector-readonly.yaml).
+#   auto    secret when present, otherwise shared (the default)
+#
+# Any string may reference an environment variable as ${VAR}.
+
+defaults:
+  auth:
+    type: password            # password | token
+    username: svc-ops-data
+    password: ${OCP_PASSWORD}
+  insecure_skip_tls_verify: false
+  # ca_cert: /etc/odl/ca/corp-ca.crt
+
+hubs:
+  - name: acm-prod-east
+    region: us-east-1
+    datacenter: iad1
+    api_url: https://api.acm-prod-east.example.com:6443
+    # managed_access: auto
+
+  - name: acm-prod-west
+    region: us-west-2
+    datacenter: sjc1
+    api_url: https://api.acm-prod-west.example.com:6443
+    auth:
+      type: token             # per-hub override of the shared auth
+      token: ${ACM_WEST_TOKEN}
+    managed_access: shared
+
+  # A hub reached through a kubeconfig file still works (the kind fleet):
+  # - name: hub-east
+  #   region: us-east-1
+  #   kubeconfig: /fleet/kubeconfigs/hub-east.kubeconfig

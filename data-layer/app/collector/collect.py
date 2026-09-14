@@ -12,6 +12,7 @@ Two phases:
               other kind becomes a scrubbed inventory row, and capacity is
               summed for the cluster.
 """
+import concurrent.futures
 import logging
 import time
 from collections import Counter, defaultdict
@@ -19,6 +20,7 @@ from datetime import UTC, datetime
 
 from .. import kube
 from ..manifest import APPLICATION, Manifest
+from ..settings import settings
 from . import parsers as p
 from .registry import REGISTRY
 
@@ -62,28 +64,54 @@ def _fetch(b: kube.ApiBundle, key: str, manifest: Manifest):
                               field_selector=spec.field_selector)
 
 
+def _fetch_one(b: kube.ApiBundle, key: str, manifest: Manifest) -> tuple[str, object, dict]:
+    """Fetch one kind; never raises. Returns (key, objects or None, status)."""
+    t0 = time.time()
+    got = None
+    try:
+        got = _fetch(b, key, manifest)
+        count = len(got) if isinstance(got, list) else 1
+        status = {"status": "collected", "count": count, "error": None}
+    except kube.ResourceUnavailable as e:
+        status = {"status": "unavailable", "count": 0, "error": str(e)}
+    except kube.ResourceForbidden as e:
+        status = {"status": "forbidden", "count": 0, "error": str(e)}
+    except Exception as e:  # noqa: BLE001
+        status = {"status": "error", "count": 0, "error": str(e)[:500]}
+        log.warning("collect %s: %s", key, e)
+    status["duration_ms"] = int((time.time() - t0) * 1000)
+    return key, got, status
+
+
 def fetch_all(b: kube.ApiBundle, manifest: Manifest) -> tuple[dict, dict]:
-    """Return (raw objects by key, status by key)."""
+    """Return (raw objects by key, status by key).
+
+    Kinds are fetched concurrently (bounded by COLLECT_FETCH_WORKERS): against
+    a real cluster each list is a network round trip, often several pages, and
+    ~30 of them in sequence is what made a sweep slow. The Kubernetes client
+    reuses one connection pool per cluster, so this costs no extra handshakes.
+    Results are returned in registry order regardless of completion order.
+    """
     raw, status = {}, {}
+    enabled = [key for key in REGISTRY if manifest.enabled(key)]
     for key in REGISTRY:
-        if not manifest.enabled(key):
+        if key not in enabled:
             status[key] = {"status": "disabled", "count": 0, "duration_ms": 0, "error": None}
-            continue
-        t0 = time.time()
-        try:
-            got = _fetch(b, key, manifest)
+    workers = max(1, min(settings.collect_fetch_workers, len(enabled) or 1))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        results = list(ex.map(lambda key: _fetch_one(b, key, manifest), enabled))
+    for key, got, st in results:
+        if got is not None:
             raw[key] = got
-            count = len(got) if isinstance(got, list) else 1
-            status[key] = {"status": "collected", "count": count, "error": None}
-        except kube.ResourceUnavailable as e:
-            status[key] = {"status": "unavailable", "count": 0, "error": str(e)}
-        except kube.ResourceForbidden as e:
-            status[key] = {"status": "forbidden", "count": 0, "error": str(e)}
-        except Exception as e:  # noqa: BLE001
-            status[key] = {"status": "error", "count": 0, "error": str(e)[:500]}
-            log.warning("collect %s: %s", key, e)
-        status[key]["duration_ms"] = int((time.time() - t0) * 1000)
+        status[key] = st
     return raw, status
+
+
+def slowest(status: dict, n: int = 3) -> str:
+    """'secrets 3200ms, pods 1800ms, configmaps 900ms' - for the sweep log."""
+    top = sorted(((st.get("duration_ms") or 0, key) for key, st in status.items()
+                  if st.get("status") == "collected"), reverse=True)[:n]
+    return ", ".join(f"{key} {ms}ms" for ms, key in top)
 
 
 # --------------------------------------------------------------------------- #
@@ -299,8 +327,13 @@ def collect_managed_cluster(b: kube.ApiBundle, meta: dict, manifest: Manifest) -
     """Pull everything the manifest enables from one cluster."""
     t0 = time.time()
     raw, status = fetch_all(b, manifest)
+    fetch_ms = int((time.time() - t0) * 1000)
     data = assemble(meta, raw, status, manifest)
     data["collect_ms"] = int((time.time() - t0) * 1000)
+    # One line per cluster per sweep answers "why is this slow?" without a debugger.
+    log.info("collect %s: %dms (fetch %dms, assemble %dms; slowest: %s)",
+             meta.get("name"), data["collect_ms"], fetch_ms, data["collect_ms"] - fetch_ms,
+             slowest(status) or "n/a")
     return data
 
 

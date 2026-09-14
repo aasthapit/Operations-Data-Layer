@@ -129,6 +129,22 @@ The data layer supports two discovery modes in the same config file, and you can
 - **Direct list** (`clusters:`) - the flow above; you enumerate endpoints.
 - **ACM hubs** (`hubs:`) - you list ACM hubs and the collector discovers their `ManagedCluster`s automatically. This is what the local kind fleet uses (`data-layer/config/hubs.yaml`).
 
+### A static list of ACM hubs
+
+Real hubs are listed with `api_url` + `auth` (the same `password` / `token` forms as clusters, with `defaults.auth` shared) instead of a kubeconfig file; `data-layer/config/acm.example.yaml` is the template.
+The hub identity needs `get`/`list` on `managedclusters.cluster.open-cluster-management.io` and, for the secret path below, `get` on `secrets` in the managed clusters' namespaces.
+
+Each `ManagedCluster` gives the data layer the cluster's name, placement labels and claims (region, cloud, vendor, version) and availability.
+Reaching the cluster itself is decided per hub by `managed_access`:
+
+| `managed_access` | How the managed cluster is reached | When |
+|---|---|---|
+| `secret` | the kubeconfig Secret in the cluster's namespace on the hub (`<name>-kubeconfig`, `<name>-admin-kubeconfig`) | clusters ACM provisioned through Hive; the kind fleet |
+| `shared` | the cluster's API URL recorded on the `ManagedCluster` (`spec.managedClusterClientConfigs`), with the hub's `auth` | imported clusters, which have no kubeconfig on the hub; the shared service account must exist on every cluster |
+| `auto` (default) | `secret` when present, otherwise `shared` | mixed estates |
+
+In `shared` mode the collector never touches the hub's Secrets at all.
+
 For a large estate, ACM-hub discovery scales better because you onboard a hub once instead of maintaining a per-cluster list.
 The direct list is the simplest way to get started and to onboard clusters that are not under ACM.
 

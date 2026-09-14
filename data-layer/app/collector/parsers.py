@@ -121,6 +121,11 @@ def normalize_managedcluster(mc: dict) -> dict:
         "cluster_id": claims.get("id.openshift.io"),
         "kube_version": status.get("version", {}).get("kubernetes"),
         "managed_available": conds.get("ManagedClusterConditionAvailable") == "True",
+        # The cluster's own API server, as ACM knows it: how an imported cluster
+        # (no kubeconfig on the hub) is reached with the shared credential.
+        "client_url": next((c.get("url") for c in
+                            (mc.get("spec") or {}).get("managedClusterClientConfigs") or []
+                            if c.get("url")), None),
     }
 
 

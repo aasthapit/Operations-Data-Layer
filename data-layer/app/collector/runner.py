@@ -55,6 +55,68 @@ class Target:
 # --------------------------------------------------------------------------- #
 # discovery
 # --------------------------------------------------------------------------- #
+# Kubeconfig Secrets ACM keeps in a managed cluster's namespace on the hub:
+# the kind fleet's fixture name, then Hive's for clusters ACM provisioned.
+_HUB_KUBECONFIG_SECRETS = ("{name}-kubeconfig", "{name}-admin-kubeconfig")
+
+
+def _hub_bundle(hub) -> kube.ApiBundle:
+    """A client for the hub itself: kubeconfig file, or api_url + auth."""
+    if hub.kubeconfig:
+        return kube.bundle_from_file(hub.kubeconfig)
+    verify = not hub.insecure_skip_tls_verify
+    token = resolve_bearer_token(hub.api_url, hub.auth, verify=verify)
+    if token is None:
+        raise RuntimeError(f"hub {hub.name}: api_url needs auth of type token or password")
+    return kube.bundle_from_endpoint(hub.api_url, token, verify=verify, ca_cert=hub.ca_cert)
+
+
+def _managed_connect(hub, hb: kube.ApiBundle, meta: dict) -> Callable[[], kube.ApiBundle]:
+    """How to reach one ManagedCluster, per the hub's `managed_access`.
+
+    A kubeconfig Secret on the hub exists for clusters ACM provisioned (Hive)
+    and for the kind fleet; imported clusters have none, so they are reached
+    at the API URL ACM recorded on the ManagedCluster, with the hub's shared
+    credential (the same service account the direct list uses).
+    """
+    name = meta["name"]
+
+    def via_secret():
+        errors = []
+        for pattern in _HUB_KUBECONFIG_SECRETS:
+            secret = pattern.format(name=name)
+            try:
+                return kube.bundle_from_kubeconfig_str(kube.read_kubeconfig_secret(hb, name, secret))
+            except Exception as e:  # noqa: BLE001 - every failure means "not this secret"
+                errors.append(f"{secret}: {e}")
+        raise RuntimeError("no kubeconfig secret on hub " + hub.name + " (" + "; ".join(errors) + ")")
+
+    def via_shared():
+        url = meta.get("client_url")
+        if not url:
+            raise RuntimeError(f"ManagedCluster {name} has no client URL to connect to")
+        verify = not hub.insecure_skip_tls_verify
+        token = resolve_bearer_token(url, hub.auth, verify=verify)
+        if token is None:
+            raise RuntimeError(f"hub {hub.name}: shared access needs auth of type token or password")
+        return kube.bundle_from_endpoint(url, token, verify=verify, ca_cert=hub.ca_cert)
+
+    def connect():
+        if hub.managed_access == "secret":
+            return via_secret()
+        if hub.managed_access == "shared":
+            return via_shared()
+        try:
+            return via_secret()
+        except RuntimeError as secret_error:
+            if not meta.get("client_url"):
+                raise
+            log.debug("%s: %s; using the shared credential", name, secret_error)
+            return via_shared()
+
+    return connect
+
+
 def _discover_via_hubs(store: Store, hubs) -> list[Target]:
     """ACM mode: discover ManagedClusters on each hub."""
     targets = []
@@ -62,7 +124,7 @@ def _discover_via_hubs(store: Store, hubs) -> list[Target]:
         placement = {k: v for k, v in (("region", hub.region),
                                        ("datacenter", hub.datacenter)) if v}
         try:
-            hb = kube.bundle_from_file(hub.kubeconfig)
+            hb = _hub_bundle(hub)
             managed = kube.list_managedclusters(hb)
         except Exception as e:  # noqa: BLE001
             store.upsert_hub(hub.name, **placement, reachable=False, last_error=str(e),
@@ -70,15 +132,9 @@ def _discover_via_hubs(store: Store, hubs) -> list[Target]:
             continue
         store.upsert_hub(hub.name, **placement, reachable=True, last_error=None,
                          managed_count=len(managed), last_synced=utcnow())
-
         for mc in managed:
             meta = normalize_managedcluster(mc)
-
-            def connect(hb=hb, name=meta["name"]):
-                kc = kube.read_kubeconfig_secret(hb, name, f"{name}-kubeconfig")
-                return kube.bundle_from_kubeconfig_str(kc)
-
-            targets.append(Target(hub.name, meta, connect))
+            targets.append(Target(hub.name, meta, _managed_connect(hub, hb, meta)))
     return targets
 
 

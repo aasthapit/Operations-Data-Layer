@@ -162,3 +162,59 @@ def test_refresh_cluster_releases_the_lock_when_persisting_fails(monkeypatch, fl
 
 def test_refresh_cluster_rejects_an_unknown_cluster(fleet, store):
     assert runner.refresh_cluster("ocp-nowhere") == {"ok": False, "error": "unknown cluster"}
+
+
+# --------------------------------------------------------------------------- #
+# ACM hubs reached by api_url + auth; managed clusters by secret or shared auth
+# --------------------------------------------------------------------------- #
+def _managed(name, url=None):
+    mc = {"metadata": {"name": name, "labels": {"region": "us-east-1"}},
+          "status": {"conditions": [{"type": "ManagedClusterConditionAvailable", "status": "True"}]}}
+    if url:
+        mc["spec"] = {"managedClusterClientConfigs": [{"url": url, "caBundle": ""}]}
+    return mc
+
+
+def test_hub_by_api_url_reaches_managed_clusters_by_secret_or_shared_auth(store, monkeypatch):
+    from app.config_loader import FleetConfig, HubConfig
+
+    hub = HubConfig(name="acm-east", region="us-east-1", api_url="https://api.acm-east:6443",
+                    auth={"type": "password", "username": "svc", "password": "pw"})
+    monkeypatch.setattr(runner, "load_config", lambda: FleetConfig({}, [hub], []))
+    calls = []
+    monkeypatch.setattr(runner, "resolve_bearer_token",
+                        lambda url, auth, verify=True: calls.append(("token", url)) or "tok")
+    monkeypatch.setattr(runner.kube, "bundle_from_endpoint",
+                        lambda url, token, verify=True, ca_cert=None: ("endpoint", url))
+    monkeypatch.setattr(runner.kube, "list_managedclusters",
+                        lambda hb: [_managed("hive-1"), _managed("imported-1", "https://api.imported-1:6443")])
+
+    def read_secret(hb, ns, name):
+        if ns == "hive-1" and name == "hive-1-admin-kubeconfig":
+            return "kubeconfig-of-hive-1"
+        raise KeyError(f"{ns}/{name} not found")
+    monkeypatch.setattr(runner.kube, "read_kubeconfig_secret", read_secret)
+    monkeypatch.setattr(runner.kube, "bundle_from_kubeconfig_str", lambda kc: ("secret", kc))
+
+    targets, hubs_total = runner._discover(store)
+    assert hubs_total == 1 and [t.meta["name"] for t in targets] == ["hive-1", "imported-1"]
+    assert calls == [("token", "https://api.acm-east:6443")]        # the hub login
+    assert targets[0].connect() == ("secret", "kubeconfig-of-hive-1")
+    assert targets[1].connect() == ("endpoint", "https://api.imported-1:6443")
+    assert ("token", "https://api.imported-1:6443") in calls        # shared auth for the import
+    assert store.hubs()[0].reachable is True and store.hubs()[0].managed_count == 2
+
+
+def test_managed_cluster_without_secret_or_url_fails_clearly(store, monkeypatch):
+    from app.config_loader import FleetConfig, HubConfig
+
+    hub = HubConfig(name="hub", kubeconfig="/x.kubeconfig")
+    monkeypatch.setattr(runner, "load_config", lambda: FleetConfig({}, [hub], []))
+    monkeypatch.setattr(runner.kube, "bundle_from_file", lambda path: "hub-bundle")
+    monkeypatch.setattr(runner.kube, "list_managedclusters", lambda hb: [_managed("orphan")])
+    monkeypatch.setattr(runner.kube, "read_kubeconfig_secret",
+                        lambda hb, ns, name: (_ for _ in ()).throw(KeyError(name)))
+
+    (target,), _ = runner._discover(store)
+    with pytest.raises(RuntimeError, match="no kubeconfig secret on hub hub"):
+        target.connect()

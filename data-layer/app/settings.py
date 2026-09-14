@@ -38,6 +38,12 @@ class Settings:
     # Clusters are collected in parallel; this bounds the fan-out (and the
     # number of concurrent connections to cluster API servers).
     collect_workers: int = int(os.environ.get("COLLECT_WORKERS", "4"))
+    # Within one cluster the manifest's resource kinds are fetched concurrently;
+    # this bounds that fan-out. Against a real cluster over a network the
+    # sequential sum of ~30 round trips (plus pages) is what makes a sweep slow,
+    # so this is the first knob to turn. Keep it modest: the API server's
+    # priority-and-fairness limits apply per identity.
+    collect_fetch_workers: int = int(os.environ.get("COLLECT_FETCH_WORKERS", "6"))
     # Page size for list calls against a cluster (large clusters have thousands
     # of pods / secrets; paging keeps API-server memory bounded).
     list_page_size: int = int(os.environ.get("LIST_PAGE_SIZE", "500"))

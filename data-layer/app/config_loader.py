@@ -42,10 +42,21 @@ def _expand(value):
 
 @dataclass
 class HubConfig:
+    """An ACM hub. Reached through a kubeconfig file (the kind fleet) or through
+    `api_url` + `auth` like a direct cluster (a real hub behind a service
+    account). `managed_access` says how its ManagedClusters are reached:
+    `secret` (a kubeconfig Secret on the hub: Hive-provisioned clusters, the
+    kind fleet), `shared` (the cluster's own API URL from the ManagedCluster
+    with this hub's `auth`: imported clusters), or `auto` (secret, else shared)."""
     name: str
     region: str = None
     datacenter: str = None
     kubeconfig: str = None
+    api_url: str = None
+    auth: dict = field(default_factory=dict)
+    insecure_skip_tls_verify: bool = False
+    ca_cert: str = None
+    managed_access: str = "auto"
 
 
 @dataclass
@@ -79,8 +90,19 @@ def load_config(path: str = None) -> FleetConfig:
     default_insecure = bool(defaults.get("insecure_skip_tls_verify", False))
     default_ca = defaults.get("ca_cert")
 
-    hubs = [HubConfig(**{k: h.get(k) for k in ("name", "region", "datacenter", "kubeconfig")})
-            for h in (raw.get("hubs") or [])]
+    hubs = []
+    for h in raw.get("hubs") or []:
+        if not h.get("kubeconfig") and not h.get("api_url"):
+            raise ValueError(f"hub {h.get('name')!r}: needs 'kubeconfig' or 'api_url' (+ auth)")
+        access = h.get("managed_access", "auto")
+        if access not in ("auto", "secret", "shared"):
+            raise ValueError(f"hub {h.get('name')!r}: managed_access must be auto, secret or shared")
+        hubs.append(HubConfig(
+            name=h["name"], region=h.get("region"), datacenter=h.get("datacenter"),
+            kubeconfig=h.get("kubeconfig"), api_url=h.get("api_url"),
+            auth={**default_auth, **(h.get("auth") or {})},
+            insecure_skip_tls_verify=bool(h.get("insecure_skip_tls_verify", default_insecure)),
+            ca_cert=h.get("ca_cert", default_ca), managed_access=access))
 
     clusters = []
     for c in raw.get("clusters") or []:

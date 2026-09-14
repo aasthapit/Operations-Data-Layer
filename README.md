@@ -121,15 +121,16 @@ Against real OpenShift clusters nothing needs Docker: the API with its collector
 
 ```sh
 make dev-venv                                          # python venvs, honcho, dashboard node_modules, .env
-cp data-layer/config/clusters.example.yaml data-layer/config/clusters.yaml   # your endpoints (git-ignored)
+cp data-layer/config/acm.example.yaml data-layer/config/acm.yaml             # your ACM hubs (git-ignored); ManagedClusters are discovered
+# or: cp data-layer/config/clusters.example.yaml data-layer/config/clusters.yaml   # a direct list of endpoints instead
 ```
 
 Then in `.env`:
 
 ```sh
 REDIS_URL=rediss://odl:change-me@redis.example.internal:6380/0   # or redis://localhost:16379/0
-ODL_CONFIG=config/clusters.yaml                                  # relative to data-layer/
-OCP_PASSWORD=...                                                  # whatever clusters.yaml references as ${VAR}
+ODL_CONFIG=config/acm.yaml                                       # relative to data-layer/
+OCP_PASSWORD=...                                                  # whatever the config references as ${VAR}
 ```
 
 and start it:
@@ -144,6 +145,9 @@ No Redis yet and no wish to install one: `make redis-up` runs just the Redis con
 The API is at http://localhost:18002/docs, the dashboard at http://localhost:5174 (its Patching tab needs the patching service, which is not part of this mode), the MCP server at http://localhost:18082/mcp.
 `make local-api` runs only the API; set `COLLECTOR_ENABLED=false` in `.env` to run it read-only against a Redis that another instance fills.
 Onboarding real clusters (service account, RBAC, TLS) is in [docs/onboarding.md](docs/onboarding.md).
+
+If sweeps are slow: the log prints one line per cluster per sweep (`collect <name>: 4200ms (fetch 3900ms ...; slowest: secrets 1800ms, pods 900ms, ...)`), `GET /api/runs` shows whole-sweep durations, and `GET /api/manifest/availability` shows per cluster and per kind how long each list took.
+Then turn, in order: `COLLECT_FETCH_WORKERS` (kinds fetched in parallel within a cluster, default 6), `COLLECT_WORKERS` (clusters in parallel, default 4), `LIST_PAGE_SIZE` (default 500), and finally the manifest, where a heavy kind you do not need (`secrets`, `configmaps`, `events`) can be disabled or limited to application namespaces.
 
 ### ACM test topology (real OCM + Tekton)
 
