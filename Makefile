@@ -32,7 +32,7 @@ DEV_API_PORT ?= 18002
 .PHONY: help fleet-venv fleet-up fleet-down fleet-seed fleet-status acm-up acm-down acm-status acm-smoke \
         up down logs rebuild ps reset dl-venv test lint rbac \
         dev-venv dev dev-core dev-api dev-ui dev-mcp dev-down collect redis-cli sql ask \
-        local local-remote local-api local-ui local-mcp local-redis redis-up redis-down redis-ping
+        local local-remote local-api local-ui local-mcp local-redis redis-up redis-down redis-ping check-config
 
 help:
 	@echo "Operations Data Layer"
@@ -76,6 +76,7 @@ help:
 	@echo "  make redis-up      just Redis, in a container via docker or podman (127.0.0.1:ODL_REDIS_PORT, persisted volume)"
 	@echo "  make redis-down    stop it (data stays in the volume)"
 	@echo "  make redis-ping    check REDIS_URL from .env (auth, TLS) before starting anything"
+	@echo "  make check-config  try the fleet config like the collector does: hub login, ManagedClusters, cluster access"
 	@echo "  make collect       trigger a fleet sweep on the collector (ODL_API_PORT)"
 	@echo "  make redis-cli     open redis-cli inside the redis container"
 	@echo "  make sql Q='select ...'   run guarded SQL over the fleet snapshot"
@@ -155,7 +156,7 @@ $(HONCHO): | $(DLPY)
 
 dev dev-core dev-api dev-ui dev-mcp: $(HONCHO)
 local local-remote local-api local-ui local-mcp local-redis: $(HONCHO)
-redis-ping sql ask test lint rbac: $(DLPY)
+redis-ping sql ask test lint rbac check-config: $(DLPY)
 
 dev-venv:
 	@test -n "$(UV)" || command -v python3 >/dev/null || (echo "python3 (3.12+) or uv is required"; exit 1)
@@ -216,6 +217,12 @@ redis-up:
 
 redis-down:
 	$(ENGINE) stop $(REDIS_CONTAINER)
+
+# Logs in to every hub / cluster in ODL_CONFIG the way the collector will and
+# prints what fails (TLS, identity provider, RBAC, unreachable clusters).
+check-config:
+	@cd data-layer && ODL_CONFIG=$${ODL_CONFIG:-$$([ -f config/acm.yaml ] && echo config/acm.yaml || echo config/clusters.yaml)} \
+		.venv/bin/python scripts/check_fleet_config.py
 
 # Verifies the connection string (password, ACL user, TLS) without printing it.
 redis-ping:
