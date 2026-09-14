@@ -59,6 +59,8 @@ def check_hub(hub) -> bool:
     ok = True
     for mc in managed[:SAMPLE]:
         meta = normalize_managedcluster(mc)
+        if hub.managed_access != "secret":
+            print(f"    {meta['name']}: API URL {runner.managed_api_url(hub, meta) or 'UNKNOWN'}")
         connect = runner._managed_connect(hub, hb, meta)
         bundle, err, ms = _timed(connect)
         if err:

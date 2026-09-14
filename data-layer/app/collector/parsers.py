@@ -126,6 +126,7 @@ def normalize_managedcluster(mc: dict) -> dict:
         "client_url": next((c.get("url") for c in
                             (mc.get("spec") or {}).get("managedClusterClientConfigs") or []
                             if c.get("url")), None),
+        "console_url": claims.get("consoleurl.cluster.open-cluster-management.io"),
     }
 
 

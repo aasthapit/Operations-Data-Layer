@@ -23,6 +23,13 @@ defaults:
     password: ${OCP_PASSWORD}
   insecure_skip_tls_verify: false
   # ca_cert: /etc/odl/ca/corp-ca.crt
+  # One credential for the whole estate: log in to every managed cluster with
+  # the auth above and never read kubeconfigs from the hubs.
+  managed_access: shared
+  # Where a managed cluster's API server is when ACM did not record it on the
+  # ManagedCluster (spec.managedClusterClientConfigs) and there is no console
+  # URL claim to derive it from. {name} is the ManagedCluster name.
+  # managed_api_url: https://api.{name}.ocp.example.net:6443
 
 hubs:
   - name: acm-prod-east
@@ -38,7 +45,7 @@ hubs:
     auth:
       type: token             # per-hub override of the shared auth
       token: ${ACM_WEST_TOKEN}
-    managed_access: shared
+    managed_access: auto      # per-hub override: hub secrets first on this one
 
   # A hub reached through a kubeconfig file still works (the kind fleet):
   # - name: hub-east

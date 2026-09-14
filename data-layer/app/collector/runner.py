@@ -102,9 +102,11 @@ def _managed_connect(hub, hb: kube.ApiBundle, meta: dict) -> Callable[[], kube.A
         raise RuntimeError("no kubeconfig secret on hub " + hub.name + " (" + "; ".join(errors) + ")")
 
     def via_shared():
-        url = meta.get("client_url")
+        url = managed_api_url(hub, meta)
         if not url:
-            raise RuntimeError(f"ManagedCluster {name} has no client URL to connect to")
+            raise RuntimeError(
+                f"ManagedCluster {name}: no API URL (none recorded by ACM, no console URL claim, "
+                f"and hub {hub.name} has no managed_api_url template)")
         verify = _tls_verify(hub.insecure_skip_tls_verify, hub.ca_cert)
         token = resolve_bearer_token(url, hub.auth, verify=verify)
         if token is None:
@@ -119,12 +121,29 @@ def _managed_connect(hub, hb: kube.ApiBundle, meta: dict) -> Callable[[], kube.A
         try:
             return via_secret()
         except RuntimeError as secret_error:
-            if not meta.get("client_url"):
+            if not managed_api_url(hub, meta):
                 raise
             log.debug("%s: %s; using the shared credential", name, secret_error)
             return via_shared()
 
     return connect
+
+
+def managed_api_url(hub, meta: dict) -> str | None:
+    """The API server of a managed cluster, best source first: what ACM
+    recorded on the ManagedCluster, the hub's `managed_api_url` template, or
+    the console URL claim (console-openshift-console.apps.<domain> ->
+    api.<domain>:6443, the OpenShift convention)."""
+    if meta.get("client_url"):
+        return meta["client_url"]
+    if hub.managed_api_url:
+        return hub.managed_api_url.format(name=meta["name"])
+    console = meta.get("console_url") or ""
+    marker = "console-openshift-console.apps."
+    if marker in console:
+        domain = console.split(marker, 1)[1].split("/", 1)[0]
+        return f"https://api.{domain}:6443"
+    return None
 
 
 def _discover_via_hubs(store: Store, hubs) -> list[Target]:

@@ -240,3 +240,37 @@ def test_login_verifies_against_the_configured_ca(store, monkeypatch):
     assert seen["client"] == (True, "/etc/odl/corp-ca.crt")
     assert runner._tls_verify(True, "/etc/odl/corp-ca.crt") is False
     assert runner._tls_verify(False, None) is True
+
+
+def test_managed_api_url_prefers_acm_then_template_then_console_claim():
+    from app.config_loader import HubConfig
+
+    plain = HubConfig(name="h", api_url="https://h")
+    templated = HubConfig(name="h", api_url="https://h",
+                          managed_api_url="https://api.{name}.ocp.example.net:6443")
+    recorded = {"name": "c1", "client_url": "https://api.c1.recorded:6443",
+                "console_url": "https://console-openshift-console.apps.c1.example.net"}
+    assert runner.managed_api_url(templated, recorded) == "https://api.c1.recorded:6443"
+    assert runner.managed_api_url(templated, {"name": "c2"}) == "https://api.c2.ocp.example.net:6443"
+    assert runner.managed_api_url(
+        plain, {"name": "c3", "console_url": "https://console-openshift-console.apps.c3.example.net/"}
+    ) == "https://api.c3.example.net:6443"
+    assert runner.managed_api_url(plain, {"name": "c4"}) is None
+
+
+def test_shared_access_never_reads_hub_secrets(store, monkeypatch):
+    from app.config_loader import FleetConfig, HubConfig
+
+    hub = HubConfig(name="acm", api_url="https://api.acm:6443", managed_access="shared",
+                    auth={"type": "password", "username": "svc", "password": "pw"},
+                    managed_api_url="https://api.{name}.ocp.example.net:6443")
+    monkeypatch.setattr(runner, "load_config", lambda: FleetConfig({}, [hub], []))
+    monkeypatch.setattr(runner, "resolve_bearer_token", lambda url, auth, verify=True: "tok")
+    monkeypatch.setattr(runner.kube, "bundle_from_endpoint",
+                        lambda url, token, verify=True, ca_cert=None: ("endpoint", url))
+    monkeypatch.setattr(runner.kube, "list_managedclusters", lambda hb: [_managed("imported-2")])
+    monkeypatch.setattr(runner.kube, "read_kubeconfig_secret",
+                        lambda hb, ns, name: (_ for _ in ()).throw(AssertionError("must not read secrets")))
+
+    (target,), _ = runner._discover(store)
+    assert target.connect() == ("endpoint", "https://api.imported-2.ocp.example.net:6443")

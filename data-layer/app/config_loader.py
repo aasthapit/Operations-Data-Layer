@@ -57,6 +57,10 @@ class HubConfig:
     insecure_skip_tls_verify: bool = False
     ca_cert: str = None
     managed_access: str = "auto"
+    # Where a managed cluster's API server is when ACM did not record one on
+    # the ManagedCluster: a template with {name}, e.g.
+    # "https://api.{name}.ocp.example.net:6443".
+    managed_api_url: str = None
 
 
 @dataclass
@@ -90,11 +94,13 @@ def load_config(path: str = None) -> FleetConfig:
     default_insecure = bool(defaults.get("insecure_skip_tls_verify", False))
     default_ca = defaults.get("ca_cert")
 
+    default_access = defaults.get("managed_access", "auto")
+    default_managed_url = defaults.get("managed_api_url")
     hubs = []
     for h in raw.get("hubs") or []:
         if not h.get("kubeconfig") and not h.get("api_url"):
             raise ValueError(f"hub {h.get('name')!r}: needs 'kubeconfig' or 'api_url' (+ auth)")
-        access = h.get("managed_access", "auto")
+        access = h.get("managed_access", default_access)
         if access not in ("auto", "secret", "shared"):
             raise ValueError(f"hub {h.get('name')!r}: managed_access must be auto, secret or shared")
         hubs.append(HubConfig(
@@ -102,7 +108,8 @@ def load_config(path: str = None) -> FleetConfig:
             kubeconfig=h.get("kubeconfig"), api_url=h.get("api_url"),
             auth={**default_auth, **(h.get("auth") or {})},
             insecure_skip_tls_verify=bool(h.get("insecure_skip_tls_verify", default_insecure)),
-            ca_cert=h.get("ca_cert", default_ca), managed_access=access))
+            ca_cert=h.get("ca_cert", default_ca), managed_access=access,
+            managed_api_url=h.get("managed_api_url", default_managed_url)))
 
     clusters = []
     for c in raw.get("clusters") or []:

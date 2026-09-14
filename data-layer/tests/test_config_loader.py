@@ -50,3 +50,18 @@ def test_hub_needs_a_way_in(tmp_path):
     with pytest.raises(ValueError, match="managed_access"):
         load_config(_write(tmp_path,
                            "hubs:\n  - {name: h, api_url: https://h, managed_access: magic}\n"))
+
+
+def test_defaults_managed_access_and_url_template_apply_to_every_hub(tmp_path):
+    cfg = load_config(_write(tmp_path, """
+defaults:
+  auth: {type: token, token: t}
+  managed_access: shared
+  managed_api_url: "https://api.{name}.ocp.example.net:6443"
+hubs:
+  - {name: a, api_url: https://a}
+  - {name: b, api_url: https://b, managed_access: auto}
+"""))
+    a, b = cfg.hubs
+    assert a.managed_access == "shared" and b.managed_access == "auto"
+    assert a.managed_api_url == b.managed_api_url == "https://api.{name}.ocp.example.net:6443"
