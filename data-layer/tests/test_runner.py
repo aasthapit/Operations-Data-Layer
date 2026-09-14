@@ -422,6 +422,8 @@ def _status_of(store, cluster=EAST):
 
 
 def test_a_second_sweep_fetches_only_what_is_due(tiered, store, monkeypatch):
+    # per-kind tiers are the subject here, so every cluster must count as due
+    monkeypatch.setattr(runner.settings, "refresh_interval_seconds", 0)
     runner.run_collection("scheduled")
     assert sorted(tiered["asked"]) == ["deployments", "namespaces", "nodes", "pods", "secrets"]
     tiered["asked"].clear()
@@ -471,7 +473,9 @@ def test_a_full_refresh_fetches_every_enabled_kind(tiered, store):
     assert sorted(tiered["asked"]) == ["namespaces", "nodes", "pods"]
 
 
-def test_timings_land_on_the_cluster_and_on_the_run(tiered, store):
+def test_timings_land_on_the_cluster_and_on_the_run(tiered, store, monkeypatch):
+    # per-kind tiers are the subject here, so every cluster must count as due
+    monkeypatch.setattr(runner.settings, "refresh_interval_seconds", 0)
     runner.run_collection("scheduled")
 
     timings = store.get_cluster(EAST).timings
@@ -547,3 +551,39 @@ def test_shared_access_verifies_against_the_cluster_ca_recorded_by_acm(store, mo
     assert "CLUSTER" in content and "CORP" in content        # the cluster's CA plus the corporate one
     assert runner.cluster_ca_bundle(hub, {"name": "x"}) == str(corp)   # no ACM bundle: hub ca_cert
     assert runner.cluster_ca_bundle(HubConfig(name="h", api_url="https://h"), {"name": "x"}) is None
+
+
+def test_scheduled_sweeps_skip_fresh_clusters_and_resume_the_stale_ones_first(fleet, store, monkeypatch):
+    """A restart mid-sweep must continue with the clusters that were not yet
+    collected, not start over: clusters collected within the interval are
+    skipped and the rest are taken oldest first."""
+    from datetime import timedelta
+
+    runner.run_collection("manual")                      # both collected just now
+    fleet["gathered"].clear()
+    result = runner.run_collection("scheduled")
+    assert result["clusters"] == 0 and fleet["gathered"] == []      # everything is fresh
+
+    # make WEST look old (collected before the interval) and EAST fresh
+    old = runner.utcnow() - timedelta(seconds=10 * runner.settings.refresh_interval_seconds)
+    store.update_summary(WEST, last_synced=old)
+    result = runner.run_collection("scheduled")
+    assert [g["cluster"] for g in fleet["gathered"]] == [WEST] and result["clusters"] == 1
+
+    # a never-collected cluster comes first, then the stalest known one
+    fleet["gathered"].clear()
+    fleet["clusters"] = ["brand-new", EAST, WEST]
+    fleet["documents"]["brand-new"] = _document("brand-new")
+    fleet["ok"]["brand-new"] = True
+    store.update_summary(WEST, last_synced=old)
+    store.update_summary(EAST, last_synced=old + timedelta(seconds=60))
+    runner.run_collection("startup")
+    assert [g["cluster"] for g in fleet["gathered"]] == ["brand-new", WEST, EAST]
+
+    # manual and full refreshes always take everything
+    fleet["gathered"].clear()
+    runner.run_collection("manual")
+    assert len(fleet["gathered"]) == 3
+    fleet["gathered"].clear()
+    runner.run_collection("scheduled", full=True)
+    assert len(fleet["gathered"]) == 3

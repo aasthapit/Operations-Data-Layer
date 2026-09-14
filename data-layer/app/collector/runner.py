@@ -521,6 +521,10 @@ def run_collection(trigger="manual", full: bool = False) -> dict:
         if shard:
             log.info("shard %d/%d: collecting %d of %d clusters", shard[0], shard[1],
                      len(mine), len(targets))
+        mine, fresh = _due_first(store, mine, force=full or trigger == "manual")
+        if fresh:
+            log.info("sweep %s: %d clusters due, %d fresh skipped (collected within the interval)",
+                     trigger, len(mine), fresh)
         with _progress_lock:
             _progress.update({"running": True, "trigger": trigger, "started_at": utcnow(),
                               "total": len(mine), "done": 0, "ok": 0, "failed": 0})
@@ -572,6 +576,34 @@ def run_collection(trigger="manual", full: bool = False) -> dict:
             _progress["running"] = False
         _publish_progress(store)
         _lock.release()
+
+
+def _due_first(store: Store, targets: list[Target], force: bool) -> tuple[list[Target], int]:
+    """Which clusters this sweep collects, stalest first.
+
+    A cluster written less than the sweep interval ago (by this process
+    before a restart, or by an on-demand refresh) is not due and is skipped;
+    the rest are ordered by age with never-collected clusters first. That is
+    what lets a restarted collector resume the remaining fleet instead of
+    starting over at the top of the hub's list. A manual or full refresh
+    forces every cluster. The 10% slack keeps a scheduled sweep from skipping
+    clusters it collected a few milliseconds under one interval ago.
+    Returns (due targets, number skipped as fresh).
+    """
+    if force or not targets:
+        return targets, 0
+    now = utcnow()
+    known = {c.name: c for c in store.clusters(names=[t.meta["name"] for t in targets])}
+
+    def age(target: Target) -> float:
+        row = known.get(target.meta["name"])
+        if not row or not row.last_synced:
+            return math.inf
+        return (now - row.last_synced).total_seconds()
+
+    threshold = 0.9 * settings.refresh_interval_seconds
+    due = sorted((t for t in targets if age(t) >= threshold), key=age, reverse=True)
+    return due, len(targets) - len(due)
 
 
 def _collect_and_persist(target: Target, manifest, full: bool = False) -> tuple[bool, dict]:
