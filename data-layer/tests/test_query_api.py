@@ -38,14 +38,14 @@ def store(manifest):
 def client(store):
     """A one-router app, the fixture store, and no leftover snapshot."""
     set_store(store)
-    manager.invalidate()
+    manager.reset()
     app = FastAPI()
     app.include_router(query_api.router)
     with TestClient(app) as test_client:
         yield test_client
     set_generator(None)
     set_store(None)
-    manager.invalidate()
+    manager.reset()
 
 
 def plan(sql, explanation="Clusters that are critical.", assumptions=(), confidence=0.9):

@@ -43,6 +43,7 @@ import duckdb
 import pyarrow as pa
 
 from ..store import Store, get_store
+from .config import query_config
 from .schema import SECTION_TABLES, TABLES, Table
 
 log = logging.getLogger("odl.query.snapshot")
@@ -372,12 +373,18 @@ class SnapshotInfo:
     build_ms: int = 0
     row_counts: dict[str, int] = field(default_factory=dict)
     source_run: str | None = None       # the sweep the data came from
+    stale: bool = False                 # the fleet moved on; a rebuild is due or running
+    rebuilding: bool = False
 
     def as_dict(self) -> dict:
+        age = (datetime.now(UTC) - self.built_at).total_seconds() if self.built_at else None
         return {
             "generation": self.generation,
             "built_at": self.built_at.isoformat() if self.built_at else None,
+            "age_seconds": int(age) if age is not None else None,
             "build_ms": self.build_ms,
+            "stale": self.stale,
+            "rebuilding": self.rebuilding,
             "rows": dict(self.row_counts),
             "total_rows": sum(self.row_counts.values()),
             "source_run": self.source_run,
@@ -385,13 +392,26 @@ class SnapshotInfo:
 
 
 class SnapshotManager:
-    """Lazily builds the snapshot and hands it out until it goes stale."""
+    """Builds the snapshot once, then serves it while rebuilding in the background.
+
+    Stale-while-rebuild: a query never waits for a rebuild except the very
+    first one. When the fleet moves on (a collector finished a sweep, or a
+    cluster was refreshed), the snapshot is marked stale and one background
+    build starts, at most every `rebuild_seconds`; queries keep using the
+    last build and see the new one at the next call. The previous
+    connection is retired rather than closed at once, because in-flight
+    cursors may still read from it; it is closed at the swap after next.
+    """
 
     def __init__(self):
         self._lock = threading.Lock()
         self._conn: duckdb.DuckDBPyConnection | None = None
+        self._retired: list[duckdb.DuckDBPyConnection] = []
         self._info = SnapshotInfo()
         self._live: tuple[int, dict[str, list[str]]] | None = None
+        self._stale = False
+        self._rebuilding = False
+        self._last_attempt = 0.0
 
     # -- freshness ---------------------------------------------------------
     @staticmethod
@@ -406,30 +426,49 @@ class SnapshotManager:
         return at.isoformat() if isinstance(at, datetime) else (str(at) if at else None)
 
     # -- api ---------------------------------------------------------------
-    def get(self, store: Store | None = None) -> duckdb.DuckDBPyConnection:
-        """The current snapshot, rebuilding it if it is absent or stale."""
+    def get(self, store: Store | None = None, wait: bool = False) -> duckdb.DuckDBPyConnection:
+        """The current snapshot. Builds synchronously only when there is none
+        yet (or `wait` is set); otherwise a stale snapshot is served and a
+        background rebuild is scheduled."""
         store = store or get_store()
         with self._lock:
-            if self._conn is not None:
-                marker = self._run_marker(store)
-                if marker is None or marker == self._info.source_run:
-                    return self._conn
-                log.info("query snapshot is behind sweep %s, rebuilding", marker)
-                self._close_locked()
-            return self._build_locked(store)
+            if self._conn is None:
+                return self._build_locked(store)
+            marker = self._run_marker(store)
+            behind = self._stale or (marker is not None and marker != self._info.source_run)
+            if not behind:
+                return self._conn
+            if wait:
+                return self._build_locked(store)
+            self._schedule_rebuild_locked(store, marker)
+            return self._conn
 
     def refresh(self, store: Store | None = None) -> SnapshotInfo:
-        """Rebuild now (POST /api/query/refresh-snapshot)."""
+        """Rebuild now, synchronously (POST /api/query/refresh-snapshot)."""
         store = store or get_store()
         with self._lock:
-            self._close_locked()
             self._build_locked(store)
             return self._info
 
     def invalidate(self) -> None:
-        """Drop the snapshot; the next `get()` rebuilds it."""
+        """The fleet changed: rebuild in the background at the next call.
+        The current snapshot stays in service until the new one is ready."""
         with self._lock:
-            self._close_locked()
+            self._stale = True
+            self._info.stale = True
+
+    def reset(self) -> None:
+        """Drop everything; the next `get()` builds synchronously. For tests and
+        for switching stores, not for the collector hook."""
+        with self._lock:
+            self._retire_locked(self._conn)
+            self._retire_locked(None)
+            self._conn = None
+            self._stale = False
+            self._rebuilding = False
+            self._last_attempt = 0.0
+            self._live = None
+            self._info = SnapshotInfo(generation=self._info.generation)
 
     def info(self) -> SnapshotInfo:
         return self._info
@@ -445,22 +484,54 @@ class SnapshotManager:
         return values
 
     # -- internals ---------------------------------------------------------
+    def _schedule_rebuild_locked(self, store: Store, marker: str | None) -> None:
+        if self._rebuilding or time.time() - self._last_attempt < query_config.rebuild_seconds:
+            return
+        self._rebuilding = True
+        self._info.rebuilding = True
+        self._last_attempt = time.time()
+        log.info("query snapshot is behind sweep %s, rebuilding in the background", marker)
+        threading.Thread(target=self._rebuild, args=(store,), name="odl-query-snapshot",
+                         daemon=True).start()
+
+    def _rebuild(self, store: Store) -> None:
+        try:
+            marker = self._run_marker(store)
+            conn, counts, elapsed = build(store)
+        except Exception:  # noqa: BLE001 - keep serving the old snapshot; try again later
+            log.exception("query snapshot rebuild failed; the previous snapshot stays in service")
+            with self._lock:
+                self._rebuilding = False
+                self._info.rebuilding = False
+            return
+        with self._lock:
+            self._retire_locked(self._conn)
+            self._install_locked(conn, counts, elapsed, marker)
+
     def _build_locked(self, store: Store) -> duckdb.DuckDBPyConnection:
         marker = self._run_marker(store)
         conn, counts, elapsed = build(store)
+        self._retire_locked(self._conn)
+        return self._install_locked(conn, counts, elapsed, marker)
+
+    def _install_locked(self, conn, counts, elapsed, marker) -> duckdb.DuckDBPyConnection:
         self._conn = conn
         self._info = SnapshotInfo(
             generation=self._info.generation + 1, built_at=datetime.now(UTC),
             build_ms=elapsed, row_counts=counts, source_run=marker)
+        self._stale = False
+        self._rebuilding = False
         return conn
 
-    def _close_locked(self) -> None:
-        if self._conn is not None:
+    def _retire_locked(self, old: duckdb.DuckDBPyConnection | None) -> None:
+        """Close the connection retired last time; keep `old` for one more swap
+        so cursors still reading from it are not pulled away mid-query."""
+        for conn in self._retired:
             try:
-                self._conn.close()
+                conn.close()
             except Exception as e:  # noqa: BLE001 - closing must never raise at us
-                log.debug("closing the previous snapshot failed: %s", e)
-            self._conn = None
+                log.debug("closing a retired snapshot failed: %s", e)
+        self._retired = [old] if old is not None else []
 
 
 manager = SnapshotManager()

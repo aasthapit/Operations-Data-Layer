@@ -269,9 +269,9 @@ def store(manifest):
 @pytest.fixture(autouse=True)
 def _fresh_snapshot():
     """The snapshot manager is process-wide; never inherit one across tests."""
-    manager.invalidate()
+    manager.reset()
     yield
-    manager.invalidate()
+    manager.reset()
 
 
 @pytest.fixture
@@ -446,9 +446,15 @@ def test_snapshot_is_cached_and_rebuilt_on_invalidate(store):
     first = manager.get(store)
     assert manager.get(store) is first
     generation = manager.info().generation
+    # invalidate marks it stale: the old snapshot keeps serving, a background
+    # rebuild is scheduled; `wait` forces the rebuild inline
     manager.invalidate()
-    assert manager.get(store) is not first
-    assert manager.info().generation == generation + 1
+    assert manager.info().stale is True
+    assert manager.get(store, wait=True) is not first
+    assert manager.info().generation == generation + 1 and manager.info().stale is False
+    # reset drops it entirely: the next get builds synchronously
+    manager.reset()
+    assert manager.get(store) is not first and manager.info().generation == generation + 2
     assert manager.info().row_counts["clusters"] == 2
     assert manager.info().built_at is not None
 
@@ -471,7 +477,7 @@ def test_live_values_come_from_the_data(conn):
 def test_live_values_are_computed_once_per_build(store):
     first = manager.live_values(store)
     assert manager.live_values(store) is first
-    manager.invalidate()
+    manager.reset()
     assert manager.live_values(store) is not first
 
 

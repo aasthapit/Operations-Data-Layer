@@ -80,6 +80,17 @@ def _require_application_mapping(manifest):
     log.info("application mapping: %s", appmap.describe())
 
 
+def _warm_query_snapshot() -> None:
+    import time
+
+    from .query.snapshot import get_snapshot
+    time.sleep(5)          # let the startup sweep write something first
+    try:
+        get_snapshot()
+    except Exception as e:  # noqa: BLE001 - warming is a courtesy
+        log.info("query snapshot warm-up skipped: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     m = get_manifest()      # fail fast on a bad manifest
@@ -97,6 +108,9 @@ async def lifespan(app: FastAPI):
             threading.Thread(target=run_collection, args=("startup",),
                              daemon=True).start()
         start_scheduler()
+    # Warm the SQL snapshot in the background so the first Query page visit
+    # does not pay for the build; a later fleet change rebuilds it the same way.
+    threading.Thread(target=_warm_query_snapshot, name="odl-query-warm", daemon=True).start()
     yield
     if settings.collector_enabled:
         stop_scheduler()

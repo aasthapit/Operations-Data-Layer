@@ -22,6 +22,12 @@ class QueryConfig:
     effort: str = os.environ.get("ODL_QUERY_EFFORT", "medium")
     max_tokens: int = int(os.environ.get("ODL_QUERY_MAX_TOKENS", "4096"))
 
+    # A changed fleet marks the SQL snapshot stale; it is then rebuilt in the
+    # background at most this often while queries keep using the last build.
+    # With several collectors sweeping, the marker changes every few seconds,
+    # and rebuilding a large fleet per request is what made the Query page hang.
+    rebuild_seconds: float = float(os.environ.get("ODL_QUERY_REBUILD_SECONDS", "60"))
+
     # Attempts per question: the first try plus one retry with the error fed
     # back. More than two turns rarely fixes anything a human would not.
     max_attempts: int = int(os.environ.get("ODL_QUERY_MAX_ATTEMPTS", "2"))
