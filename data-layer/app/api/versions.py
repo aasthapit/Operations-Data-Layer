@@ -4,6 +4,7 @@ from collections import defaultdict
 from fastapi import APIRouter, Depends
 
 from ..store import Store
+from .cache import cached
 from .deps import get_store_dep
 
 router = APIRouter(prefix="/api/versions", tags=["versions"])
@@ -12,6 +13,10 @@ router = APIRouter(prefix="/api/versions", tags=["versions"])
 @router.get("")
 def version_distribution(store: Store = Depends(get_store_dep)):
     """OCP version spread across the fleet, with the clusters on each."""
+    return cached(store, "versions", lambda: _distribution(store))
+
+
+def _distribution(store: Store) -> dict:
     by_version = defaultdict(list)
     channels = defaultdict(int)
     for c in store.clusters():

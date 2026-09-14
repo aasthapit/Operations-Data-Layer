@@ -461,7 +461,7 @@ def test_refresh_one_cluster(client, monkeypatch):
 # applications
 # --------------------------------------------------------------------------- #
 def test_applications_group_across_clusters(client):
-    d = _get(client, "/api/applications")
+    d = _get(client, "/api/applications", placements="true")
     assert d["count"] == 2 and d["teams"] == ["payments", "risk"]
     fraud, payments = d["applications"]
     assert fraud["app"] == "fraud" and payments["app"] == "payments"
@@ -895,3 +895,42 @@ def test_clusters_filter_by_upgrading(client):
     not_up = _get(client, "/api/clusters", upgrading="false")["clusters"]
     assert len(up) + len(not_up) == len(everything)
     assert all(c["upgrading"] for c in up) and not any(c["upgrading"] for c in not_up)
+
+
+def test_applications_list_is_slim_paged_and_cached(client, store):
+    from app.api.cache import cache_key
+
+    body = _get(client, "/api/applications")
+    assert body["total"] == body["count"] >= 1 and body["offset"] == 0
+    row = body["applications"][0]
+    assert "placements" not in row and row["clusters"] and isinstance(row["clusters"], list)
+    with_placements = _get(client, "/api/applications", placements="true")["applications"][0]
+    assert with_placements["placements"][0]["cluster"] in with_placements["clusters"]
+    page = _get(client, "/api/applications", limit=1, offset=0)
+    assert page["count"] == 1 and page["total"] == body["total"]
+    # cached at the current generation, recomputed once a cluster is written
+    key = cache_key("applications")
+    assert store.cache_get(key)["gen"] == store.generation()
+    store.update_summary("ocp-east-1", timings={})          # not a write of the cluster: same generation
+    assert _get(client, "/api/applications")["total"] == body["total"]
+    gen_before = store.generation()
+    store.delete_cluster("no-such-cluster")                   # a (no-op) write still bumps the generation
+    assert store.generation() == gen_before + 1
+    assert store.cache_get(key)["gen"] == gen_before          # stale until the next request recomputes
+    _get(client, "/api/applications")
+    assert store.cache_get(key)["gen"] == gen_before + 1
+
+
+def test_responses_are_gzipped_when_accepted():
+    from fastapi import FastAPI
+    from fastapi.middleware.gzip import GZipMiddleware
+
+    app = FastAPI()
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+    @app.get("/big")
+    def big():
+        return {"rows": list(range(2000))}
+
+    r = TestClient(app).get("/big", headers={"accept-encoding": "gzip"})
+    assert r.headers.get("content-encoding") == "gzip" and r.json()["rows"][-1] == 1999

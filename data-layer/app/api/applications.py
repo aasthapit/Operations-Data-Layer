@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from ..manifest import get_manifest
 from ..serialize import UNASSIGNED, namespace_dict, workload_dict
 from ..store import Store
+from .cache import cache_key, cached
 from .deps import get_store_dep, order_key
 
 router = APIRouter(prefix="/api/applications", tags=["applications"])
@@ -87,6 +88,7 @@ def _group(rows, clusters_by_name):
             "pod_issues": sum(n.pod_issues or 0 for n in nss),
             "cpu_used_cores": round(sum(cpu), 3) if cpu else None,
             "memory_used_bytes": int(sum(mem)) if mem else None,
+            "clusters": sorted({p["cluster"] for p in placements}),
             "placements": sorted(placements, key=lambda p: p["cluster"]),
         })
     return out
@@ -140,8 +142,9 @@ def applications_summary(store: Store = Depends(get_store_dep),
     namespaces alongside)."""
     if group_by not in GROUP_FIELDS:
         group_by = "hub"
-    rows, totals = application_counts(store, group_by)
-    return {"group_by": group_by, "groups": rows, "totals": totals}
+    return cached(store, cache_key("applications-summary", group_by=group_by),
+                  lambda: dict(zip(("groups", "totals"), application_counts(store, group_by),
+                                   strict=True), group_by=group_by))
 
 
 @router.get("")
@@ -154,28 +157,44 @@ def list_applications(
     cluster: str | None = None,
     status: str | None = Query(None, description="healthy|warning|critical"),
     assigned: bool | None = Query(None, description="false: namespaces under no business application"),
+    placements: bool = Query(False, description="include per-cluster placements in every row "
+                                                "(the detail endpoint always does)"),
+    limit: int | None = Query(None, ge=1), offset: int = Query(0, ge=0),
 ):
-    rows = store.namespaces(ns_class="application", team=team,
-                            clusters=[cluster] if cluster else None)
-    clusters = {c.name: c for c in store.clusters()}
-    if tier:
-        rows = [n for n in rows if n.tier == tier]
-    # environment and region are cluster properties, so they are resolved
-    # through the cluster index rather than the namespace index
-    if environment:
-        rows = [n for n in rows if clusters.get(n.cluster_name) and
-                clusters[n.cluster_name].environment == environment]
-    if region:
-        rows = [n for n in rows if clusters.get(n.cluster_name) and
-                clusters[n.cluster_name].region == region]
-    apps = _group(_by_placement(rows), clusters)
-    if status:
-        apps = [a for a in apps if a["status"] == status]
-    if assigned is not None:
-        apps = [a for a in apps if a["assigned"] == assigned]
-    teams = sorted({a["team"] for a in apps if a["team"]})
-    return {"count": len(apps), "teams": teams,
-            "source": get_manifest().applications["source"], "applications": apps}
+    """Applications fleet-wide. The grouped list is computed once per fleet
+    generation and cached; rows carry `clusters` (names) and, only on request,
+    the full `placements`, which is what makes the list heavy at scale."""
+    def compute():
+        rows = store.namespaces(ns_class="application", team=team,
+                                clusters=[cluster] if cluster else None)
+        clusters = {c.name: c for c in store.clusters()}
+        if tier:
+            rows = [n for n in rows if n.tier == tier]
+        # environment and region are cluster properties, so they are resolved
+        # through the cluster index rather than the namespace index
+        if environment:
+            rows = [n for n in rows if clusters.get(n.cluster_name) and
+                    clusters[n.cluster_name].environment == environment]
+        if region:
+            rows = [n for n in rows if clusters.get(n.cluster_name) and
+                    clusters[n.cluster_name].region == region]
+        apps = _group(_by_placement(rows), clusters)
+        if status:
+            apps = [a for a in apps if a["status"] == status]
+        if assigned is not None:
+            apps = [a for a in apps if a["assigned"] == assigned]
+        return {"teams": sorted({a["team"] for a in apps if a["team"]}), "applications": apps}
+
+    key = cache_key("applications", team=team, tier=tier, environment=environment, region=region,
+                    cluster=cluster, status=status, assigned=assigned)
+    full = cached(store, key, compute)
+    apps = full["applications"]
+    total = len(apps)
+    page = apps[offset:offset + limit] if limit else apps[offset:]
+    if not placements:
+        page = [{k: v for k, v in a.items() if k != "placements"} for a in page]
+    return {"count": len(page), "total": total, "offset": offset, "teams": full["teams"],
+            "source": get_manifest().applications["source"], "applications": page}
 
 
 @router.get("/{app}")

@@ -351,6 +351,12 @@ class Keys:
     def progress(self, instance: str) -> str:
         return f"{self._fleet}:progress:{instance}"
 
+    def generation(self) -> str:
+        return f"{self._fleet}:generation"
+
+    def cache(self, name: str) -> str:
+        return f"{self._fleet}:cache:{name}"
+
     def progress_pattern(self) -> str:
         return f"{self._fleet}:progress:*"
 
@@ -415,6 +421,7 @@ class RedisStore(Store):
         if self.ttl_seconds:
             for key in k.expiring_keys(name):
                 pipe.expire(key, self.ttl_seconds)
+        pipe.incr(k.generation())        # any write invalidates the computed fleet views
         pipe.execute()
 
     def delete_cluster(self, name: str) -> None:
@@ -424,7 +431,17 @@ class RedisStore(Store):
         _reverse(pipe, previous)
         pipe.delete(*k.cluster_keys(name), k.lock(name))
         pipe.srem(k.clusters, name)
+        pipe.incr(k.generation())
         pipe.execute()
+
+    def generation(self) -> int:
+        return _int(self.r.get(self.keys.generation()))
+
+    def cache_get(self, key: str) -> dict | None:
+        return _unpack(self.r.get(self.keys.cache(key)))
+
+    def cache_set(self, key: str, value: dict, ttl_seconds: int) -> None:
+        self.r.set(self.keys.cache(key), _pack(value), ex=max(1, int(ttl_seconds)))
 
     def prune_vanished(self, seen: dict[str, set[str]]) -> list[str]:
         names = self.cluster_names()

@@ -8,6 +8,7 @@ from ..serialize import _iso
 from ..settings import settings
 from ..store import Store
 from .applications import application_counts
+from .cache import cache_key, cached
 from .deps import get_store_dep
 
 router = APIRouter(prefix="/api/health", tags=["health"])
@@ -34,6 +35,11 @@ def summary(group_by: str | None = Query(None, description="region|datacenter|en
             store: Store = Depends(get_store_dep)):
     if group_by not in _GROUP_FIELDS:
         group_by = settings.primary_dimension
+    return cached(store, cache_key("health-summary", group_by=group_by),
+                  lambda: _summary(store, group_by))
+
+
+def _summary(store: Store, group_by: str) -> dict:
     field = _GROUP_FIELDS[group_by]
     groups = defaultdict(_empty_counts)
     for c in store.clusters():

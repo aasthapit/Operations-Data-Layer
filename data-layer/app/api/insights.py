@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Query
 from ..manifest import get_manifest
 from ..serialize import pod_issue_dict, resource_dict
 from ..store import FLEET_INDEXED_KINDS, Store
+from .cache import cached
 from .deps import get_store_dep, order_key
 
 router = APIRouter(prefix="/api/insights", tags=["insights"])
@@ -53,7 +54,11 @@ def _resources(store: Store, key, cluster=None, namespace=None, status=None, ns_
 
 @router.get("/summary")
 def summary(store: Store = Depends(get_store_dep)):
-    """Counts for the overview tiles."""
+    """Counts for the overview tiles (computed once per fleet generation)."""
+    return cached(store, "insights-summary", lambda: _summary(store))
+
+
+def _summary(store: Store) -> dict:
     now = datetime.now(UTC)
     window = now + timedelta(days=get_manifest().threshold("certificate_expiry_days"))
     # `after` is an inclusive bound, so a certificate expiring in this exact

@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .api import (
@@ -109,6 +110,8 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
+# Fleet-wide JSON compresses 5 to 10x; the dashboard's fetches are the win.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )

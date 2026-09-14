@@ -102,6 +102,19 @@ class Store(ABC):
     @abstractmethod
     def unlock(self, name: str) -> None: ...
 
+    # ------------------------------------------------------- generation + cache
+    @abstractmethod
+    def generation(self) -> int:
+        """A counter that changes whenever any cluster is written or removed.
+        Computed fleet views are cached against it (see api/cache.py)."""
+
+    @abstractmethod
+    def cache_get(self, key: str) -> dict | None:
+        """A cached computed view {gen, body} or None."""
+
+    @abstractmethod
+    def cache_set(self, key: str, value: dict, ttl_seconds: int) -> None: ...
+
     # --------------------------------------------------------------- progress
     @abstractmethod
     def set_progress(self, instance: str, progress: dict, ttl_seconds: int) -> None:
