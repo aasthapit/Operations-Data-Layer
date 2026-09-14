@@ -17,6 +17,11 @@ export default function Applications({ initialApp, nav, onClearApp }) {
   const apps = data?.applications || [];
   const envs = [...new Set(apps.flatMap((a) => a.environments))].sort();
   const tiers = [...new Set(apps.map((a) => a.tier).filter(Boolean))].sort();
+  // With a mapping file the owner is a line of business, tier is not known,
+  // and each namespace carries its own environment.
+  const mapped = data?.source === "mapping";
+  const ownerLabel = mapped ? "LOB" : "Team";
+  const unassigned = apps.find((a) => !a.assigned);
 
   return (
     <div>
@@ -24,14 +29,16 @@ export default function Applications({ initialApp, nav, onClearApp }) {
         <div>
           <div className="section-title" style={{ margin: 0 }}>Applications</div>
           <div className="desc">
-            Every non-platform namespace belongs to an application: identity, team and tier come from namespace labels, or from the application mapping file when one is configured, in which case namespaces under no business application appear as (unassigned)
-            (falling back to the workloads' labels); OpenShift's own namespaces are grouped separately per cluster.
+            {mapped
+              ? <>Ownership comes from the application mapping file: every resource in a namespace belongs to that namespace's application, and namespaces the file does not list are grouped as <span className="mono">(unassigned)</span>{unassigned ? ` (${unassigned.cluster_count} namespaces)` : ""}. Labels are not used.</>
+              : <>Every non-platform namespace is an application. Identity, team and tier come from namespace labels (falling back to the workloads' labels); OpenShift's own namespaces are grouped separately per cluster.</>}
           </div>
         </div>
       </div>
       <div className="filters">
-        <FilterSelect label="Team" value={filters.team} options={data?.teams || []} onChange={(v) => set("team", v)} />
-        <FilterSelect label="Tier" value={filters.tier} options={tiers} onChange={(v) => set("tier", v)} />
+        <FilterSelect label={ownerLabel} value={filters.team} options={data?.teams || []} onChange={(v) => set("team", v)} />
+        {!mapped && <FilterSelect label="Tier" value={filters.tier} options={tiers} onChange={(v) => set("tier", v)} />}
+        {mapped && <FilterSelect label="Assigned" value={filters.assigned} options={["true", "false"]} onChange={(v) => set("assigned", v)} />}
         <FilterSelect label="Environment" value={filters.environment} options={envs} onChange={(v) => set("environment", v)} />
         <FilterSelect label="Status" value={filters.status} options={["healthy", "warning", "critical"]} onChange={(v) => set("status", v)} />
         {Object.values(filters).some(Boolean) && (
@@ -42,15 +49,17 @@ export default function Applications({ initialApp, nav, onClearApp }) {
         <div className="card flush">
           <table>
             <thead>
-              <tr><th>Application</th><th>Team</th><th>Tier</th><th>Status</th><th>Clusters</th><th>Environments</th>
+              <tr><th>Application</th><th>{ownerLabel}</th>{mapped ? <th>Namespace envs</th> : <th>Tier</th>}<th>Status</th><th>Clusters</th><th>Environments</th>
                 <th>Workloads</th><th>Replicas</th><th>Pod issues</th><th>CPU used</th><th>Memory used</th></tr>
             </thead>
             <tbody>
               {apps.map((a) => (
                 <tr key={a.app} className="clickable" onClick={() => setSelected(a.app)}>
-                  <td>{a.app}</td>
-                  <td className="muted">{a.team || "—"}</td>
-                  <td><Tier tier={a.tier} /></td>
+                  <td>{a.assigned ? a.app : <span className="muted">{a.app} <span style={{ fontSize: 11 }}>not under a business application</span></span>}</td>
+                  <td className="muted">{a.team || "-"}</td>
+                  {mapped
+                    ? <td>{(a.namespace_environments || []).map((e) => <span key={e} className="tag" style={{ marginRight: 4 }}>{e}</span>)}</td>
+                    : <td><Tier tier={a.tier} /></td>}
                   <td><Pill status={a.status} /></td>
                   <td>{a.cluster_count} <span className="muted">· {a.regions.join(", ")}</span></td>
                   <td>{a.environments.map((e) => <span key={e} className="tag" style={{ marginRight: 4 }}>{e}</span>)}</td>
@@ -81,23 +90,25 @@ function ApplicationDetail({ app, nav, onBack }) {
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
         <h2 style={{ margin: 0 }}>{a.app}</h2>
         <Pill status={a.status} />
-        <Tier tier={a.tier} />
-        {a.team && <span className="muted">team {a.team}</span>}
+        {a.tier && <Tier tier={a.tier} />}
+        {a.team && <span className="muted">{a.namespace_environments?.length ? "LOB" : "team"} {a.team}</span>}
+        {a.assigned === false && <span className="muted">namespaces not under a business application</span>}
       </div>
       <div className="grid" style={{ gap: 16 }}>
         <div className="card flush">
           <div className="card-head"><h3>Placements ({a.cluster_count} clusters)</h3></div>
           <table>
-            <thead><tr><th>Cluster</th><th>Region</th><th>Env</th><th>OCP</th><th>Cluster status</th><th>Namespace</th><th>App status</th><th>Workloads</th><th>Replicas</th><th>Pod issues</th><th>CPU</th><th>Memory</th></tr></thead>
+            <thead><tr><th>Cluster</th><th>Region</th><th>Env</th><th>OCP</th><th>Cluster status</th><th>Namespace</th><th>Namespace env</th><th>App status</th><th>Workloads</th><th>Replicas</th><th>Pod issues</th><th>CPU</th><th>Memory</th></tr></thead>
             <tbody>
               {a.placements.map((p) => (
-                <tr key={p.cluster} className="clickable" onClick={() => nav.openCluster(p.cluster)}>
+                <tr key={p.cluster + "/" + p.namespace} className="clickable" onClick={() => nav.openCluster(p.cluster)}>
                   <td className="mono">{p.cluster}</td>
                   <td>{p.region}</td>
                   <td><span className="tag">{p.environment}</span></td>
                   <td className="mono">{p.ocp_version}</td>
                   <td><Pill status={p.cluster_status} /></td>
                   <td className="mono">{p.namespace}</td>
+                  <td>{p.namespace_environment ? <span className="tag">{p.namespace_environment}</span> : <span className="muted">-</span>}</td>
                   <td><Pill status={p.status} /></td>
                   <td>{p.workloads}</td>
                   <td>{p.replicas_ready}/{p.replicas_desired}</td>
