@@ -17,6 +17,7 @@ import concurrent.futures
 import logging
 import threading
 import time
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -35,6 +36,39 @@ from .parsers import normalize_managedcluster
 log = logging.getLogger("odl.runner")
 _lock = threading.Lock()
 _last_run = {"at": None, "ok": False, "trigger": None}
+# The sweep in progress, for `/api/status` and the dashboard: a first sweep
+# of a large hub takes minutes and the picture fills in cluster by cluster.
+_progress = {"running": False, "trigger": None, "started_at": None,
+             "total": 0, "done": 0, "ok": 0, "failed": 0}
+_progress_lock = threading.Lock()
+
+
+def _shard() -> tuple[int, int] | None:
+    """(index, count) from COLLECT_SHARD="i/n", or None for the whole fleet."""
+    raw = (settings.collect_shard or "").strip()
+    if not raw:
+        return None
+    try:
+        i, n = (int(x) for x in raw.split("/", 1))
+    except ValueError as e:
+        raise ValueError(f"COLLECT_SHARD must look like 0/4, got {raw!r}") from e
+    if n < 1 or not 0 <= i < n:
+        raise ValueError(f"COLLECT_SHARD {raw!r}: index must be 0..n-1 and n >= 1")
+    return i, n
+
+
+def in_shard(name: str, shard: tuple[int, int] | None) -> bool:
+    """Whether an instance is responsible for a cluster. Stable across
+    processes and restarts: a name always lands in the same shard."""
+    if shard is None:
+        return True
+    i, n = shard
+    return zlib.crc32(name.encode()) % n == i
+
+
+def progress() -> dict:
+    with _progress_lock:
+        return dict(_progress)
 
 # How long a single-cluster refresh may hold its lock before another caller may
 # assume the holder died.
@@ -270,34 +304,45 @@ def run_collection(trigger="manual") -> dict:
         manifest = get_manifest()
         targets, hubs_total = _discover(store)
 
+        # Every instance sees the whole fleet (discovery is cheap) and prunes
+        # against it; only collection is partitioned across shards.
         _prune_vanished(store, targets)
+        shard = _shard()
+        mine = [t for t in targets if in_shard(t.meta["name"], shard)]
+        if shard:
+            log.info("shard %d/%d: collecting %d of %d clusters", shard[0], shard[1],
+                     len(mine), len(targets))
+        with _progress_lock:
+            _progress.update({"running": True, "trigger": trigger, "started_at": utcnow(),
+                              "total": len(mine), "done": 0, "ok": 0, "failed": 0})
 
+        # Each worker collects AND persists its cluster, so the write to Redis
+        # overlaps with other clusters' collection instead of queueing on this
+        # thread; the store is safe to share across threads.
         ok_count = failed = 0
-        workers = max(1, min(settings.collect_workers, len(targets) or 1))
+        workers = max(1, min(settings.collect_workers, len(mine) or 1))
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [ex.submit(_gather, t, manifest) for t in targets]
+            futures = [ex.submit(_collect_and_persist, t, manifest) for t in mine]
             for fut in concurrent.futures.as_completed(futures):
-                target, collected, ok = fut.result()
-                try:
-                    _persist(store, target, collected, manifest)
-                except Exception:  # noqa: BLE001
-                    log.exception("persist %s failed", collected.get("name"))
-                    ok = False
+                ok = fut.result()
                 ok_count += ok
                 failed += (not ok)
+                with _progress_lock:
+                    _progress.update({"done": ok_count + failed, "ok": ok_count, "failed": failed})
 
-        store.finalize_sweep()
+        if shard is None or shard[0] == 0:
+            store.finalize_sweep()       # refcount housekeeping: once per sweep, not per shard
         invalidate_query_snapshot()   # the SQL snapshot must not outlive the sweep it was built from
         duration_ms = int((time.time() - started) * 1000)
         store.finish_run(run_id, finished_at=utcnow(), duration_ms=duration_ms,
-                         hubs_total=hubs_total, clusters_total=len(targets),
+                         hubs_total=hubs_total, clusters_total=len(mine),
                          clusters_ok=ok_count, clusters_failed=failed)
         _last_run.update({"at": utcnow(), "ok": True, "trigger": trigger})
         log.info("sweep %s: %d clusters (%d ok, %d failed) in %dms",
-                 trigger, len(targets), ok_count, failed, duration_ms)
+                 trigger, len(mine), ok_count, failed, duration_ms)
         return {
             "ok": True, "trigger": trigger, "duration_ms": duration_ms,
-            "hubs": hubs_total, "clusters": len(targets),
+            "hubs": hubs_total, "clusters": len(mine),
             "clusters_ok": ok_count, "clusters_failed": failed,
         }
     except Exception as e:  # noqa: BLE001
@@ -307,7 +352,21 @@ def run_collection(trigger="manual") -> dict:
         _last_run.update({"at": utcnow(), "ok": False, "trigger": trigger})
         return {"ok": False, "error": str(e)}
     finally:
+        with _progress_lock:
+            _progress["running"] = False
         _lock.release()
+
+
+def _collect_and_persist(target: Target, manifest) -> bool:
+    """One cluster, end to end, on a worker thread. Never raises."""
+    store = get_store()
+    _, collected, ok = _gather(target, manifest)
+    try:
+        _persist(store, target, collected, manifest)
+    except Exception:  # noqa: BLE001
+        log.exception("persist %s failed", collected.get("name"))
+        return False
+    return ok
 
 
 def refresh_cluster(name: str) -> dict:

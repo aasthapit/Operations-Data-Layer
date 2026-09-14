@@ -148,7 +148,9 @@ The API is at http://localhost:18002/docs, the dashboard at http://localhost:517
 Onboarding real clusters (service account, RBAC, TLS) is in [docs/onboarding.md](docs/onboarding.md).
 
 If sweeps are slow: the log prints one line per cluster per sweep (`collect <name>: 4200ms (fetch 3900ms ...; slowest: secrets 1800ms, pods 900ms, ...)`), `GET /api/runs` shows whole-sweep durations, and `GET /api/manifest/availability` shows per cluster and per kind how long each list took.
-Then turn, in order: `COLLECT_FETCH_WORKERS` (kinds fetched in parallel within a cluster, default 6), `COLLECT_WORKERS` (clusters in parallel, default 4), `LIST_PAGE_SIZE` (default 500), and finally the manifest, where a heavy kind you do not need (`secrets`, `configmaps`, `events`) can be disabled or limited to application namespaces.
+Then turn, in order: `COLLECT_WORKERS` (clusters in flight per instance, default 8; each holds one cluster's raw objects in memory), `COLLECT_FETCH_WORKERS` (kinds fetched in parallel within a cluster, default 6), `LIST_PAGE_SIZE` (default 500), and finally the manifest, where a heavy kind you do not need (`secrets`, `configmaps`, `events`) can be disabled or limited to application namespaces.
+A sweep in progress is visible as `sweep` on `GET /api/status` and `GET /api/health/overview` (`done` of `total`), and every cluster appears in the UI as soon as it is written.
+For a hub with a hundred or more clusters, run several collector processes against the same Redis, each taking a slice of the fleet: `COLLECT_SHARD=0/3 DEV_API_PORT=18002 make local-api`, `COLLECT_SHARD=1/3 DEV_API_PORT=18003 make local-api`, and so on; every shard discovers the whole fleet, collects only its slice, and shard 0 does the end-of-sweep housekeeping.
 
 ### ACM test topology (real OCM + Tekton)
 

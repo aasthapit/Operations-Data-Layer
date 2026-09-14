@@ -35,8 +35,10 @@ def refresh(background: bool = True):
 @router.get("/status")
 def status():
     last = runner.last_run()
+    prog = runner.progress()
     return {"last_run": last and {
-        "at": _iso(last["at"]), "ok": last["ok"], "trigger": last["trigger"]}}
+        "at": _iso(last["at"]), "ok": last["ok"], "trigger": last["trigger"]},
+        "sweep": {**prog, "started_at": _iso(prog["started_at"])}}
 
 
 @router.get("/runs")

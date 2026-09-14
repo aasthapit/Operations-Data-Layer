@@ -274,3 +274,28 @@ def test_shared_access_never_reads_hub_secrets(store, monkeypatch):
 
     (target,), _ = runner._discover(store)
     assert target.connect() == ("endpoint", "https://api.imported-2.ocp.example.net:6443")
+
+
+def test_shards_partition_the_fleet_stably():
+    names = [f"cluster-{i}" for i in range(200)]
+    parts = [[n for n in names if runner.in_shard(n, (i, 4))] for i in range(4)]
+    assert sorted(sum(parts, [])) == sorted(names)          # every cluster exactly once
+    assert all(30 < len(p) < 70 for p in parts)               # roughly even
+    assert [n for n in names if runner.in_shard(n, (2, 4))] == parts[2]   # stable
+    assert all(runner.in_shard(n, None) for n in names)
+
+
+def test_a_shard_collects_only_its_clusters_but_prunes_against_the_whole_fleet(fleet, store, monkeypatch):
+    runner.run_collection("manual")
+    assert store.cluster_names() == [EAST, WEST]
+    # pick a shard count that separates the two fixture clusters
+    n = next(n for n in range(2, 12)
+             if any(runner.in_shard(EAST, (i, n)) != runner.in_shard(WEST, (i, n)) for i in range(n)))
+    shard_of_east = next(i for i in range(n) if runner.in_shard(EAST, (i, n)))
+    monkeypatch.setattr(runner.settings, "collect_shard", f"{shard_of_east}/{n}")
+    before = store.get_cluster(WEST).last_synced
+    result = runner.run_collection("manual")
+    assert result["clusters"] == 1                            # only EAST was collected
+    assert store.cluster_names() == [EAST, WEST]              # WEST was not pruned
+    assert store.get_cluster(WEST).last_synced == before
+    assert runner.progress()["running"] is False and runner.progress()["total"] == 1

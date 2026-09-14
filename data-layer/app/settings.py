@@ -37,7 +37,14 @@ class Settings:
     refresh_on_startup: bool = os.environ.get("REFRESH_ON_STARTUP", "true") == "true"
     # Clusters are collected in parallel; this bounds the fan-out (and the
     # number of concurrent connections to cluster API servers).
-    collect_workers: int = int(os.environ.get("COLLECT_WORKERS", "4"))
+    # Each worker holds one cluster's raw objects in memory while it parses
+    # them (tens of MB for a large cluster), which is what bounds this.
+    collect_workers: int = int(os.environ.get("COLLECT_WORKERS", "8"))
+    # Run several collector processes side by side: "i/n" makes this instance
+    # collect only the clusters whose name hashes to shard i of n (0-based).
+    # Every shard writes its own clusters to the shared Redis; shard 0 does
+    # the end-of-sweep housekeeping. Empty = the whole fleet.
+    collect_shard: str = os.environ.get("COLLECT_SHARD", "")
     # Within one cluster the manifest's resource kinds are fetched concurrently;
     # this bounds that fan-out. Against a real cluster over a network the
     # sequential sum of ~30 round trips (plus pages) is what makes a sweep slow,

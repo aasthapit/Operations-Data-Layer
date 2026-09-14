@@ -65,6 +65,7 @@ def overview(store: Store = Depends(get_store_dep)):
             upgrading += 1
 
     last = runner.last_run()
+    prog = runner.progress()
     recent_runs = store.runs(1)
     recent = recent_runs[0] if recent_runs else None
     return {
@@ -80,6 +81,7 @@ def overview(store: Store = Depends(get_store_dep)):
                  # the hub hash has no order of its own; name order keeps the
                  # overview stable between refreshes
                  for h in sorted(store.hubs(), key=lambda h: h.name or "")],
+        "sweep": {**prog, "started_at": _iso(prog["started_at"])},
         "last_run": last and {
             "at": _iso(last["at"]),
             "ok": last["ok"],
