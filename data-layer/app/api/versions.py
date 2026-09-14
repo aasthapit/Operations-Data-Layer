@@ -16,7 +16,7 @@ def version_distribution(store: Store = Depends(get_store_dep)):
     channels = defaultdict(int)
     for c in store.clusters():
         by_version[c.ocp_version or "unknown"].append({
-            "name": c.name, "region": c.region, "environment": c.environment,
+            "name": c.name, "hub": c.hub_name, "region": c.region, "environment": c.environment,
             "status": c.overall_status, "upgrading": c.upgrading})
         channels[c.channel or "unknown"] += 1
 

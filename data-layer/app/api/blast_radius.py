@@ -106,7 +106,7 @@ def blast_radius(
             entry["tier"] = entry["tier"] or n.tier
             entry["namespace"] = n.name
             entry["clusters"].append({
-                "cluster": c.name, "region": c.region,
+                "cluster": c.name, "hub": c.hub_name, "region": c.region,
                 "environment": c.environment, "status": c.overall_status,
                 "app_status": n.status})
 
@@ -126,10 +126,12 @@ def blast_radius(
                                if (w["cluster"], w["namespace"]) in platform})
 
     by_env = defaultdict(int)
+    by_hub = defaultdict(int)
     by_region = defaultdict(int)
     for c in clusters:
         by_env[c.environment or "unknown"] += 1
         by_region[c.region or "unknown"] += 1
+        by_hub[c.hub_name or "unknown"] += 1
     critical_apps = [a for a in impacted_apps if a["tier"] == "critical"]
 
     return {
@@ -144,10 +146,11 @@ def blast_radius(
             "workloads_impacted": len(workloads),
             "platform_namespaces_impacted": platform_hit,
             "by_environment": dict(by_env),
+            "by_hub": dict(by_hub),
             "by_region": dict(by_region),
         },
         "clusters": sorted(({
-            "name": c.name, "region": c.region, "datacenter": c.datacenter,
+            "name": c.name, "hub": c.hub_name, "region": c.region, "datacenter": c.datacenter,
             "environment": c.environment, "ocp_version": c.ocp_version,
             "status": c.overall_status, "reason": join_reasons(reasons[c.name]),
         } for c in clusters), key=lambda c: c["name"]),

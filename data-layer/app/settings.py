@@ -51,6 +51,12 @@ class Settings:
     # OCP versions below this floor fail the `version-supported` health check.
     supported_floor: str = os.environ.get("SUPPORTED_FLOOR", "4.15.0")
 
+    # The dimension the dashboard groups and filters by first: hub (ACM hub,
+    # the natural unit of a real estate), region, datacenter or environment.
+    primary_dimension: str = os.environ.get("ODL_PRIMARY_DIMENSION", "hub")
+    if primary_dimension not in ("hub", "region", "datacenter", "environment"):
+        raise ValueError("ODL_PRIMARY_DIMENSION must be hub, region, datacenter or environment")
+
     # Number of historical snapshots kept per cluster (for the timelines).
     snapshot_retention: int = int(os.environ.get("SNAPSHOT_RETENTION", "500"))
 

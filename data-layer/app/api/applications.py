@@ -53,6 +53,7 @@ def _group(rows, clusters_by_name):
             placements.append({
                 "cluster": n.cluster_name,
                 "namespace": n.name,
+                "hub": c.hub_name if c else None,
                 "region": c.region if c else None,
                 "environment": c.environment if c else None,
                 "cluster_status": c.overall_status if c else None,
@@ -78,6 +79,7 @@ def _group(rows, clusters_by_name):
             "environments": sorted({p["environment"] for p in placements if p["environment"]}),
             "namespace_environments": sorted({p["namespace_environment"] for p in placements
                                               if p["namespace_environment"]}),
+            "hubs": sorted({p["hub"] for p in placements if p["hub"]}),
             "regions": sorted({p["region"] for p in placements if p["region"]}),
             "workloads": sum(n.workloads_total or 0 for n in nss),
             "replicas_desired": sum(n.replicas_desired or 0 for n in nss),

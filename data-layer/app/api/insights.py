@@ -29,7 +29,8 @@ def _cluster_index(store: Store):
 
 
 def _placement(c):
-    return {"region": c.region, "environment": c.environment, "status": c.overall_status} if c else {}
+    return {"hub": c.hub_name, "region": c.region, "environment": c.environment,
+            "status": c.overall_status} if c else {}
 
 
 def _resources(store: Store, key, cluster=None, namespace=None, status=None, ns_class=None):

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query
 
 from ..collector import runner
 from ..serialize import _iso
+from ..settings import settings
 from ..store import Store
 from .deps import get_store_dep
 
@@ -27,10 +28,11 @@ def _empty_counts():
 
 
 @router.get("/summary")
-def summary(group_by: str = Query("region", description="region|datacenter|environment|hub|version"),
+def summary(group_by: str | None = Query(None, description="region|datacenter|environment|hub|version "
+                                                        "(default: ODL_PRIMARY_DIMENSION)"),
             store: Store = Depends(get_store_dep)):
     if group_by not in _GROUP_FIELDS:
-        group_by = "region"
+        group_by = settings.primary_dimension
     field = _GROUP_FIELDS[group_by]
     groups = defaultdict(_empty_counts)
     for c in store.clusters():
@@ -66,6 +68,7 @@ def overview(store: Store = Depends(get_store_dep)):
     recent_runs = store.runs(1)
     recent = recent_runs[0] if recent_runs else None
     return {
+        "primary_dimension": settings.primary_dimension,
         "clusters_total": total,
         "counts": counts,
         "upgrading": upgrading,
