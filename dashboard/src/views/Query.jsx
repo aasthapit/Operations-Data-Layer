@@ -8,11 +8,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
 import { DataTable, ErrorBanner, Pill, SkeletonLines, SkeletonTable, fmtTime } from "../components";
+import Chart, {
+  CHART_TYPES, categoryFields, emptyChart, inferFields, normalizeChart, resolveSpec,
+} from "../Chart";
 import {
-  AGGREGATES, aggAlias, aggNeedsColumn, aggNumericOnly, availableColumns, buildSql, canJoinClusters,
-  clampLimit, clusterContextDefaults, clusterContextOn, decodeState, defaultAggAlias,
-  defaultState, encodeState, loadSaved, maxRowsOf, operatorInput, operatorsFor, pruneState,
-  sortableColumns, stateForTable, storeSaved, tableOf, toCsv, toObjects,
+  AGGREGATES, TREND_EXAMPLES, aggAlias, aggNeedsColumn, aggNumericOnly, availableColumns, buildSql,
+  canJoinClusters, clampLimit, clusterContextDefaults, clusterContextOn, decodeState,
+  defaultAggAlias, defaultState, encodeState, loadSaved, maxRowsOf, operatorInput, operatorsFor,
+  pruneState, sortableColumns, stateForTable, storeSaved, tableOf, toCsv, toObjects,
 } from "../query/builder";
 
 const HASH_PREFIX = "#query=";
@@ -638,6 +641,8 @@ export default function Query({ nav, route }) {
             table={state.table}
             nav={nav}
             onFlash={flash}
+            chart={state.chart}
+            onChart={(chart) => patch({ chart })}
           />
         </div>
       </div>
@@ -898,6 +903,18 @@ function AskBox({ state, examples, onChange, onAsk, onExample }) {
           ))}
         </div>
       )}
+
+      {/* History questions, written out as SQL. They run without a model, and
+          each one comes back in a shape the chart under the table picks up. */}
+      <div className="q-examples">
+        <span className="muted">Trends:</span>
+        {TREND_EXAMPLES.map((ex) => (
+          <button type="button" className="tag q-example" key={ex.question}
+            title="Run this query - the result charts itself" onClick={() => onExample(ex)}>
+            {ex.question}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -941,7 +958,120 @@ function Cell({ name, value, link, nav }) {
   return text;
 }
 
-function Results({ result, running, mode, table, nav, onFlash }) {
+// --------------------------------------------------------------------------- //
+// the chart above the table
+// --------------------------------------------------------------------------- //
+// The shape is inferred from the result - a time axis makes a line, one
+// category makes bars, anything else makes no chart at all - and every part of
+// that inference is overridable here. The controls sit in one row above the
+// chart, and the table below is unchanged: it is still the whole answer.
+function ChartPanel({ result, chart, onChange }) {
+  const fields = useMemo(
+    () => inferFields(result.columns, result.column_types, result.rows),
+    [result]);
+  const spec = useMemo(() => resolveSpec(fields, result.rows, chart), [fields, result.rows, chart]);
+  const choice = normalizeChart(chart);
+
+  if (!result.row_count) return null;
+
+  const numbers = fields.filter((f) => f.kind === "number");
+  const cats = categoryFields(fields);
+  const times = fields.filter((f) => f.kind === "time");
+  const line = spec?.type === "line";
+  const xOptions = line ? times : [...cats, ...times];
+  const yOptions = numbers.filter((f) => f.name !== spec?.x);
+  const seriesOptions = cats.filter((f) => f.name !== spec?.x);
+
+  const set = (fragment) => onChange({ ...choice, ...fragment });
+  // Switching the type starts the picks over, which is also the way back to
+  // "let the chart decide".
+  const setType = (type) => onChange({ ...emptyChart(), type });
+  const toggleY = (name) => {
+    if (!spec) return;
+    // one measure per line when a series column already owns the colours
+    if (line && spec.series) { set({ y: [name] }); return; }
+    const on = spec.y.includes(name);
+    const next = on ? spec.y.filter((n) => n !== name) : [...spec.y, name];
+    if (next.length) set({ y: next });
+  };
+
+  return (
+    <div className="chart-panel">
+      <div className="chart-controls">
+        <label className="chart-ctl">
+          <span>Chart</span>
+          <select value={choice.type} onChange={(e) => setType(e.target.value)}>
+            {CHART_TYPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+          </select>
+        </label>
+
+        {spec && (
+          <>
+            <label className="chart-ctl">
+              <span>{line ? "Time" : "Category"}</span>
+              <select value={spec.x} onChange={(e) => set({ x: e.target.value })}>
+                {xOptions.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
+              </select>
+            </label>
+
+            {line && (
+              <label className="chart-ctl">
+                <span>Series</span>
+                <select
+                  value={spec.series}
+                  onChange={(e) => set({ series: e.target.value, y: spec.y.slice(0, 1) })}
+                >
+                  <option value="">none</option>
+                  {seriesOptions.map((f) => (
+                    <option key={f.name} value={f.name}>{f.name} ({f.distinct})</option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            <div className="chart-ctl">
+              <span>{line && spec.series ? "Measure" : "Measures"}</span>
+              <div className="chart-ys">
+                {yOptions.map((f) => (
+                  <button
+                    key={f.name}
+                    type="button"
+                    className={`q-mini${spec.y.includes(f.name) ? " active" : ""}`}
+                    aria-pressed={spec.y.includes(f.name)}
+                    onClick={() => toggleY(f.name)}
+                  >
+                    {f.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {line && (
+              <label className="q-check chart-ctl-check"
+                title="Stack the series into a running total - for counts, not for scores">
+                <input type="checkbox" checked={spec.stack}
+                  onChange={(e) => set({ stack: e.target.checked })} />
+                <span>Stack</span>
+              </label>
+            )}
+          </>
+        )}
+      </div>
+
+      {spec ? (
+        <Chart fields={fields} rows={result.rows} spec={spec} height={280} />
+      ) : choice.type === "none" ? null : (
+        <div className="chart-none">
+          {choice.type === "auto"
+            ? "No chart for this result - it has no time axis and no single category to group by."
+            : `A ${choice.type === "line" ? "line needs a time column and a number" : "bar chart needs a category and a number"}; this result has neither.`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Results({ result, running, mode, table, nav, onFlash, chart, onChart }) {
   const rows = useMemo(
     () => (result ? result.rows.map((values, i) => ({ i, values })) : []), [result]);
 
@@ -1014,6 +1144,7 @@ function Results({ result, running, mode, table, nav, onFlash }) {
           </div>
         </div>
       </div>
+      <ChartPanel result={result} chart={chart} onChange={onChart} />
       <DataTable
         id="query.results"
         columns={columns}

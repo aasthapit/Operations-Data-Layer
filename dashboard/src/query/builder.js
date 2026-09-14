@@ -8,6 +8,12 @@
 // `likeLiteral`), which is why the view never builds a fragment itself. The
 // server-side guard is still the security boundary - this is about producing
 // correct SQL, not about trusting the browser.
+//
+// The one piece of state here that is not about SQL is `chart`: which picture
+// the result is drawn as. It rides along so that a shared link and a saved
+// query restore the chart the author was looking at, not just its rows. The
+// chart's own vocabulary lives with the chart.
+import { emptyChart, normalizeChart } from "../Chart";
 
 export const STATE_VERSION = 1;
 export const JOIN_TABLE = "clusters";          // the one join the builder offers
@@ -269,6 +275,7 @@ export function stateForTable(schema, tableName, base = {}) {
     limit: clampLimit(base.limit ?? 200, schema),
     mode: "builder",
     sql: "",
+    chart: emptyChart(),
   };
 }
 
@@ -277,6 +284,72 @@ export function defaultState(schema) {
   const first = tableOf(schema, "clusters") ? "clusters" : (schema?.tables?.[0]?.name || "");
   return stateForTable(schema, first);
 }
+
+// --------------------------------------------------------------------------- //
+// ready-made trend queries
+// --------------------------------------------------------------------------- //
+// The questions people ask of history, written out. They are plain SQL rather
+// than builder state because a trend is a date_trunc and a GROUP BY, which the
+// builder does not write - and because they then run without needing a model.
+// Each one returns a shape the chart reads on its own: a time column plus a
+// measure (and often a category, which becomes one line per hub or cluster).
+export const TREND_EXAMPLES = [
+  {
+    question: "Crash loops per hub per hour, last 24 hours",
+    sql: `SELECT date_trunc('hour', s.snapshot_at) AS hour,
+       c.hub_name AS hub,
+       sum(s.crashloops) AS crashloops
+FROM health_snapshots s
+JOIN clusters c ON c.name = s.cluster_name
+WHERE s.resolution = 'hour'
+  AND s.snapshot_at >= now() - INTERVAL 1 DAY
+GROUP BY 1, 2
+ORDER BY 1, 2`,
+  },
+  {
+    question: "Warning events per day, last 30 days",
+    sql: `SELECT date_trunc('day', snapshot_at) AS day,
+       sum(warning_events) AS warning_events
+FROM health_snapshots
+WHERE resolution = 'day'
+  AND snapshot_at >= now() - INTERVAL 30 DAY
+GROUP BY 1
+ORDER BY 1`,
+  },
+  {
+    question: "Which checks fail most often",
+    sql: `SELECT title AS check_title,
+       count(*) FILTER (WHERE status = 'fail') AS failing,
+       count(*) FILTER (WHERE status = 'warn') AS warning
+FROM health_checks
+WHERE status IN ('fail', 'warn')
+GROUP BY 1
+ORDER BY failing DESC, warning DESC
+LIMIT 12`,
+  },
+  {
+    question: "Version changes in the last 7 days",
+    sql: `SELECT date_trunc('day', changed_at) AS day,
+       kind,
+       count(*) AS changes
+FROM changes
+WHERE kind LIKE '%version%'
+  AND changed_at >= now() - INTERVAL 7 DAY
+GROUP BY 1, 2
+ORDER BY 1, 2`,
+  },
+  {
+    question: "Top 10 clusters by restarts today",
+    sql: `SELECT cluster_name AS cluster,
+       max(restarts_total) - min(restarts_total) AS restarts
+FROM health_snapshots
+WHERE resolution = 'hour'
+  AND snapshot_at >= now() - INTERVAL 1 DAY
+GROUP BY 1
+ORDER BY restarts DESC
+LIMIT 10`,
+  },
+];
 
 // --------------------------------------------------------------------------- //
 // normalising untrusted state (a shared link, a saved query, an old format)
@@ -318,6 +391,9 @@ export function normalizeState(raw) {
     limit: Number.isFinite(Number(raw.limit)) ? Number(raw.limit) : 200,
     mode: raw.mode === "sql" ? "sql" : "builder",
     sql: asString(raw.sql),
+    // a link minted before charts existed, or one with a chart type this build
+    // does not know, simply comes back as Auto
+    chart: normalizeChart(raw.chart),
   };
 }
 

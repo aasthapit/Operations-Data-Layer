@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api } from "../api";
 import * as cache from "../cache";
 import { useFetch } from "../hooks";
+import Chart from "../Chart";
 import {
-  Pill, ErrorBanner, Sparkline, Dot, SubTabs, UsageBar, Tier, FilterSelect, DataTable,
+  Pill, ErrorBanner, Dot, SubTabs, UsageBar, Tier, FilterSelect, DataTable,
   Skeleton, SkeletonTable, fmtBytes, fmtCores, fmtTime, fmtAge, fmtDays,
 } from "../components";
 
@@ -76,8 +77,19 @@ function SectionSkeleton() {
 function OverviewSection({ c, nav }) {
   const tl = useFetch(() => api.timeline(c.name), [c.name]);
   const snaps = tl.data?.snapshots || [];
-  const scores = snaps.map((s) => s.health_score);
-  const cpuPct = snaps.map((s) => (s.cpu_used_cores != null && s.cpu_allocatable_cores ? 100 * s.cpu_used_cores / s.cpu_allocatable_cores : null));
+  // The timeline drawn by the same chart the Query page uses: two series that
+  // share one 0-100 scale, so there is one axis and no invented correlation.
+  const history = useMemo(() => ({
+    columns: ["at", "health_score", "cpu_percent"],
+    types: ["TIMESTAMP", "INTEGER", "DOUBLE"],
+    rows: snaps.map((s) => [
+      s.at,
+      s.health_score,
+      s.cpu_used_cores != null && s.cpu_allocatable_cores
+        ? (100 * s.cpu_used_cores) / s.cpu_allocatable_cores
+        : null,
+    ]),
+  }), [snaps]);
   const cap = c.capacity;
   const pc = c.platform_config;
   return (
@@ -115,17 +127,23 @@ function OverviewSection({ c, nav }) {
             pct={cap.memory.used_percent} reqPct={cap.memory.requests_percent} fmt={fmtBytes} />
           <CapacityRow label="Pods" used={cap.pods.running} alloc={cap.pods.capacity} pct={cap.pods.used_percent} fmt={(v) => `${v}`} />
           <h3 style={{ marginTop: 18 }}>History</h3>
-          <div className="row" style={{ gap: 24 }}>
-            <div>
-              <div className="dim" style={{ fontSize: 12 }}>Health score</div>
-              <Sparkline points={scores} width={220} height={50} />
+          {snaps.length > 1 ? (
+            <Chart
+              columns={history.columns}
+              columnTypes={history.types}
+              rows={history.rows}
+              spec={{ type: "line", x: "at", series: "", y: ["health_score", "cpu_percent"], stack: false }}
+              height={170}
+              tableBelow={false}
+            />
+          ) : (
+            <div className="muted" style={{ fontSize: 12 }}>
+              {tl.error ? "History is unavailable." : "Not enough sweeps yet for a trend."}
             </div>
-            <div>
-              <div className="dim" style={{ fontSize: 12 }}>CPU % of allocatable</div>
-              <Sparkline points={cpuPct} width={220} height={50} color="var(--warning)" />
-            </div>
+          )}
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            {snaps.length} sweeps · health score and CPU % of allocatable
           </div>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{snaps.length} sweeps</div>
         </div>
       </div>
 
