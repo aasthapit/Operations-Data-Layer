@@ -2,6 +2,13 @@ PY := fleet/.venv/bin/python
 DLPY := data-layer/.venv/bin/python
 HONCHO := data-layer/.venv/bin/honcho
 
+# Container engine: docker, else podman. `make redis-up` needs only the
+# engine; the compose stack needs `docker compose` or `podman compose`
+# (podman-compose or docker-compose installed). Override with COMPOSE=...
+ENGINE ?= $(shell command -v docker >/dev/null 2>&1 && echo docker || (command -v podman >/dev/null 2>&1 && echo podman))
+COMPOSE ?= $(ENGINE) compose
+REDIS_CONTAINER ?= odl-redis
+
 # Virtualenvs: uv when available (it also fetches Python 3.12 if the machine
 # lacks it), otherwise python3 -m venv. `uv venv` creates no pip inside the
 # venv, so every install goes through `uv pip install --python <venv>`.
@@ -66,7 +73,7 @@ help:
 	@echo "  make local-remote  the same against a live Redis (REDIS_URL in .env), no local redis-server"
 	@echo "  make local-api     just the API + collector on the host (REDIS_URL / ODL_CONFIG from .env)"
 	@echo "  make local-ui      just the Vite dashboard      make local-mcp   just the MCP server"
-	@echo "  make redis-up      just Redis, in a container (127.0.0.1:ODL_REDIS_PORT, persisted volume)"
+	@echo "  make redis-up      just Redis, in a container via docker or podman (127.0.0.1:ODL_REDIS_PORT, persisted volume)"
 	@echo "  make redis-down    stop it (data stays in the volume)"
 	@echo "  make redis-ping    check REDIS_URL from .env (auth, TLS) before starting anything"
 	@echo "  make collect       trigger a fleet sweep on the collector (ODL_API_PORT)"
@@ -106,19 +113,19 @@ acm-smoke:
 	$(PY) fleet/acm.py smoke
 
 up:
-	docker compose up -d --build
+	$(COMPOSE) up -d --build
 
 down:
-	docker compose down
+	$(COMPOSE) down
 
 rebuild:
-	docker compose up -d --build api dashboard
+	$(COMPOSE) up -d --build api dashboard
 
 logs:
-	docker compose logs -f api
+	$(COMPOSE) logs -f api
 
 ps:
-	docker compose ps
+	$(COMPOSE) ps
 
 reset: down fleet-down
 	@echo "stack and fleet torn down"
@@ -176,7 +183,7 @@ dev-mcp:
 	$(HONCHO) start mcp
 
 dev-down:
-	docker compose stop api redis
+	$(COMPOSE) stop api redis
 
 # ---- no Docker at all (Procfile.local) --------------------------------------
 local:
@@ -201,11 +208,14 @@ local-redis:
 # Redis alone, in a container: for `make local-remote` with
 # REDIS_URL=redis://localhost:$(ODL_REDIS_PORT)/0 when you have real clusters but no Redis.
 redis-up:
-	docker compose up -d redis
-	@echo "redis at redis://localhost:$(ODL_REDIS_PORT)/0  (make redis-cli to inspect)"
+	@test -n "$(ENGINE)" || (echo "docker or podman is required"; exit 1)
+	@$(ENGINE) start $(REDIS_CONTAINER) >/dev/null 2>&1 || $(ENGINE) run -d --name $(REDIS_CONTAINER) \
+		-p 127.0.0.1:$(ODL_REDIS_PORT):6379 -v $(REDIS_CONTAINER)-data:/data docker.io/library/redis:7-alpine \
+		redis-server --save 60 1 --appendonly no --maxmemory-policy noeviction >/dev/null
+	@echo "redis ($(ENGINE) container $(REDIS_CONTAINER)) at redis://localhost:$(ODL_REDIS_PORT)/0  (make redis-cli to inspect)"
 
 redis-down:
-	docker compose stop redis
+	$(ENGINE) stop $(REDIS_CONTAINER)
 
 # Verifies the connection string (password, ACL user, TLS) without printing it.
 redis-ping:
@@ -221,7 +231,7 @@ collect:
 	curl -s -X POST http://localhost:$(API_PORT)/api/refresh && echo
 
 redis-cli:
-	docker compose exec redis redis-cli
+	@$(ENGINE) exec -it $(REDIS_CONTAINER) redis-cli 2>/dev/null || $(COMPOSE) exec redis redis-cli
 
 # make sql Q="select name, overall_status from clusters order by 1"
 sql:
