@@ -77,6 +77,11 @@ class Store(ABC):
         health-check rows; `counts` has passed/warned/failed."""
 
     @abstractmethod
+    def update_summary(self, name: str, **fields) -> None:
+        """Set a few summary fields of an existing cluster without rewriting
+        it (e.g. `timings` measured after the write). No-op for an unknown cluster."""
+
+    @abstractmethod
     def delete_cluster(self, name: str) -> None:
         """Remove a cluster and every fleet index member it contributed."""
 

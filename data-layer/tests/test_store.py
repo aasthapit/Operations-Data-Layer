@@ -524,3 +524,16 @@ def test_member_separator_is_rejected(store, manifest, documents):
     doc["name"] = "bad|name"
     with pytest.raises(ValueError, match="contains"):
         _persist(store, manifest, doc)
+
+
+def test_update_summary_sets_fields_without_rewriting(store, manifest, documents):
+    doc = next(iter(documents.values()))
+    _persist(store, manifest, doc)
+    name = doc["name"]
+    before = store.get_cluster(name)
+    store.update_summary(name, timings={"fetch_ms": 12, "persist_ms": 3})
+    after = store.get_cluster(name)
+    assert after.timings == {"fetch_ms": 12, "persist_ms": 3}
+    assert after.ocp_version == before.ocp_version and after.last_synced == before.last_synced
+    store.update_summary("no-such-cluster", timings={})       # a no-op, not an error
+    assert store.get_cluster("no-such-cluster") is None

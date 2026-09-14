@@ -158,83 +158,83 @@ health_checks:
   # is the ONLY check that runs, so it cannot be disabled; its severity can be
   # lowered if an unreachable cluster should not count as critical.
   cluster-reachable:
-    # severity: critical
+    severity: critical
 
   # The hub's ManagedClusterConditionAvailable for this cluster.
   managed-available:
-    # enabled: true
-    # severity: critical
+    enabled: true
+    severity: critical
 
   # ClusterVersion is Available and not Failing.
   cluster-version-available:
-    # enabled: true
-    # severity: critical
+    enabled: true
+    severity: critical
 
   # Cluster operators the registry marks critical (etcd, kube-apiserver, ...)
   # reporting Available=False.
   #   unavailable (count)
   critical-operators-available:
-    # enabled: true
-    # severity: critical
-    # fail: { unavailable: 1 }
+    enabled: true
+    severity: critical
+    fail: { unavailable: 1 }
 
   # Cluster operators reporting Degraded=True.
   #   degraded (count)
   no-degraded-operators:
-    # enabled: true
-    # severity: critical
-    # fail: { degraded: 1 }
+    enabled: true
+    severity: critical
+    fail: { degraded: 1 }
 
   # Nodes whose Ready condition is not True. A cluster that reported no nodes at
   # all warns as informational - that is missing data, not a sick cluster.
   #   not_ready          (count)
   #   not_ready_percent  (percent of the cluster's nodes)
   nodes-ready:
-    # enabled: true
-    # severity: critical
-    # fail: { not_ready: 1 }
+    enabled: true
+    severity: critical
+    fail: { not_ready: 1 }
 
   # Nodes reporting a pressure condition (memory / disk / PID), and nodes that
   # are cordoned. By default pressure fails and a cordon warns.
   #   pressured  (count)
   #   cordoned   (count)
   nodes-pressure:
-    # enabled: true
-    # severity: warning
-    # warn: { cordoned: 1 }
-    # fail: { pressured: 1 }
+    enabled: true
+    severity: warning
+    warn: { cordoned: 1 }
+    fail: { pressured: 1 }
 
   # The cluster's OCP version against the supported floor. A version BELOW the
   # floor trips the band. The default floor is the SUPPORTED_FLOOR setting.
   #   floor (version)
   version-supported:
-    # enabled: true
-    # severity: warning
-    # fail: { floor: "4.15.0" }
+    enabled: true
+    severity: warning
+    fail: { floor: "4.15.0" }
 
   # Is ClusterVersion applying a new release? Informational by default: an
   # upgrade is expected work, not ill health.
   upgrade-in-progress:
-    # enabled: true
-    # severity: info
+    enabled: true
+    severity: info
 
   # Cluster operators reporting Progressing=True while the cluster is NOT
   # upgrading (an operator mid-rollout). Measures zero during an upgrade.
   #   progressing (count)
   operators-stable:
-    # enabled: true
-    # severity: warning
-    # warn: { progressing: 1 }
+    enabled: true
+    severity: warning
+    warn: { progressing: 1 }
 
   # MachineConfigPools degraded or still rolling out a machine config. An
   # updating pool is reported as informational - it is a transition, not a fault.
   #   degraded (count)
   #   updating (count)
   machine-config-pools:
-    # enabled: true
-    # severity: critical
-    # warn: { updating: 1 }
-    # fail: { degraded: 1 }
+    enabled: true
+    severity: critical
+    warn: { updating: 1 }
+    fail: { degraded: 1 }
 
   # Problem pods (crash-looping, OOM-killed, unschedulable, long-pending,
   # high-restart) in platform namespaces. What counts as a problem pod is
@@ -243,27 +243,27 @@ health_checks:
   #   issues          (count)
   #   issues_percent  (percent of the platform namespaces' pods)
   platform-pods:
-    # enabled: true
-    # severity: warning
-    # warn: { issues: 1 }
+    enabled: true
+    severity: warning
+    warn: { issues: 1 }
 
   # The same, in application namespaces. Informational by default: one
   # application's broken pod is not the cluster's problem.
   #   issues          (count)
   #   issues_percent  (percent of the application namespaces' pods)
   application-pods:
-    # enabled: true
-    # severity: info
-    # warn: { issues: 1 }
+    enabled: true
+    severity: info
+    warn: { issues: 1 }
 
   # Live usage against allocatable, whichever of CPU and memory is worse.
   # Reported as informational on a cluster that does not serve metrics.k8s.io.
   #   used_percent (percent of allocatable)
   capacity-headroom:
-    # enabled: true
-    # severity: warning
-    # warn: { used_percent: 85 }    # thresholds.capacity_warning_percent
-    # fail: { used_percent: 95 }    # thresholds.capacity_critical_percent
+    enabled: true
+    severity: warning
+    warn: { used_percent: 85 }    # thresholds.capacity_warning_percent
+    fail: { used_percent: 95 }    # thresholds.capacity_critical_percent
 
   # Certificates found in Secrets and ConfigMaps. `expiring_within_days` is the
   # band's window: each band counts the certificates expiring inside its own
@@ -274,32 +274,32 @@ health_checks:
   #   expiring              (count, inside the band's window)
   #   expiring_within_days  (days - the band's window, not a level)
   certificates-valid:
-    # enabled: true
-    # severity: warning
-    # warn: { expiring: 1, expiring_within_days: 30 }   # thresholds.certificate_expiry_days
-    # fail: { expired: 1 }
+    enabled: true
+    severity: warning
+    warn: { expiring: 1, expiring_within_days: 30 }   # thresholds.certificate_expiry_days
+    fail: { expired: 1 }
 
   # The most-consumed ResourceQuota in the cluster, against its hard limit.
   #   max_percent  (percent of a hard limit)
   #   namespaces   (count of quotas at or above the warn percent)
   quotas-headroom:
-    # enabled: true
-    # severity: info
-    # warn: { max_percent: 90 }     # thresholds.quota_warning_percent
+    enabled: true
+    severity: info
+    warn: { max_percent: 90 }     # thresholds.quota_warning_percent
 
   # ClusterServiceVersions not in the Succeeded phase. Skipped entirely on a
   # cluster without OLM.
   #   unhealthy (count)
   olm-operators-healthy:
-    # enabled: true
-    # severity: warning
-    # warn: { unhealthy: 1 }
+    enabled: true
+    severity: warning
+    warn: { unhealthy: 1 }
 
   # Does ClusterVersion offer a newer release? Only reported when there is one
   # and the cluster is not already upgrading.
   update-available:
-    # enabled: true
-    # severity: info
+    enabled: true
+    severity: info
 
 resources:
   # ---- cluster-scoped platform state --------------------------------------

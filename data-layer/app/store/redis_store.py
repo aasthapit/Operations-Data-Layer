@@ -609,6 +609,12 @@ class RedisStore(Store):
         return [_row(json.loads(item)) for item in raw]
 
     # ----------------------------------------------------------- hubs/clusters
+    def update_summary(self, name: str, **fields) -> None:
+        k = self.keys
+        if not fields or not self.r.exists(k.summary(name)):
+            return
+        self.r.hset(k.summary(name), mapping={f: _dumps(v) for f, v in fields.items()})
+
     def upsert_hub(self, name: str, **fields) -> None:
         raw = self.r.hget(self.keys.hubs, name)
         row = json.loads(raw) if raw else {}
@@ -872,6 +878,8 @@ def _summary_row(name: str, hub_name: str, collected: dict, overall: str, score:
         "reachable": collected.get("reachable", True),
         "last_error": collected.get("error"),
         "collect_ms": collected.get("collect_ms"),
+        # per-stage timings and volumes for the collector telemetry (dict or None)
+        "timings": collected.get("timings"),
         "last_synced": now,
     })
     return row
