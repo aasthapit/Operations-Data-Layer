@@ -2,6 +2,18 @@ PY := fleet/.venv/bin/python
 DLPY := data-layer/.venv/bin/python
 HONCHO := data-layer/.venv/bin/honcho
 
+# Virtualenvs: uv when available (it also fetches Python 3.12 if the machine
+# lacks it), otherwise python3 -m venv. `uv venv` creates no pip inside the
+# venv, so every install goes through `uv pip install --python <venv>`.
+UV := $(shell command -v uv 2>/dev/null)
+ifdef UV
+venv = $(UV) venv -q --python 3.12 $(1)
+pipi = $(UV) pip install -q --python $(1)/bin/python
+else
+venv = python3 -m venv $(1) && $(1)/bin/pip install -q --upgrade pip
+pipi = $(1)/bin/pip install -q
+endif
+
 # .env (copied from .env.example by `make dev-venv`) is read by docker compose,
 # by honcho, and here, so every port is defined once.
 -include .env
@@ -67,7 +79,7 @@ help:
 	@echo "   with .env in place the defaults above come from it)"
 
 fleet-venv:
-	python3 -m venv fleet/.venv && fleet/.venv/bin/pip install -q --upgrade pip pyyaml cryptography
+	$(call venv,fleet/.venv) && $(call pipi,fleet/.venv) pyyaml cryptography
 
 fleet-up:
 	$(PY) fleet/fleet.py up
@@ -112,8 +124,7 @@ reset: down fleet-down
 	@echo "stack and fleet torn down"
 
 dl-venv:
-	python3 -m venv data-layer/.venv && data-layer/.venv/bin/pip install -q --upgrade pip \
-		&& data-layer/.venv/bin/pip install -q -r data-layer/requirements-dev.txt
+	$(call venv,data-layer/.venv) && $(call pipi,data-layer/.venv) -r data-layer/requirements-dev.txt
 
 test:
 	cd data-layer && .venv/bin/python -m pytest -q
@@ -140,12 +151,12 @@ local local-remote local-api local-ui local-mcp local-redis: $(HONCHO)
 redis-ping sql ask test lint rbac: $(DLPY)
 
 dev-venv:
-	@command -v python3 >/dev/null || (echo "python3 (3.12+) is required"; exit 1)
+	@test -n "$(UV)" || command -v python3 >/dev/null || (echo "python3 (3.12+) or uv is required"; exit 1)
 	@command -v npm >/dev/null || (echo "node + npm (22+) are required for the dashboard"; exit 1)
 	@test -d data-layer/.venv || $(MAKE) dl-venv
-	data-layer/.venv/bin/pip install -q honcho
-	@test -d mcp-server/.venv || (python3 -m venv mcp-server/.venv && mcp-server/.venv/bin/pip install -q --upgrade pip)
-	mcp-server/.venv/bin/pip install -q -r mcp-server/requirements.txt
+	$(call pipi,data-layer/.venv) honcho
+	@test -d mcp-server/.venv || $(call venv,mcp-server/.venv)
+	$(call pipi,mcp-server/.venv) -r mcp-server/requirements.txt
 	cd dashboard && npm install --no-audit --no-fund
 	@test -f .env || (cp .env.example .env && echo "wrote .env from .env.example (edit the ports if they clash)")
 
