@@ -132,3 +132,46 @@ def test_every_generic_registry_key_has_a_parser():
     from app.collector.registry import REGISTRY
     generic = {k for k, spec in REGISTRY.items() if spec.store == "generic"}
     assert generic <= set(_GENERIC_PARSERS)
+
+
+def test_assemble_takes_ownership_from_the_mapping_not_from_labels(manifest, tmp_path):
+    """Mapping mode: registry wins, labels are ignored, unmapped namespaces are
+    under no application, and the cluster's environment comes from the registry
+    when ACM had none."""
+    import dataclasses
+    import json
+
+    from app import appmap as appmap_module
+
+    path = tmp_path / "app-map.json"
+    path.write_text(json.dumps([
+        {"cluster": "c1", "env": "nonprod", "app_id": "1aat", "environment": "development",
+         "lob": "wimt", "namespace": "payments"},
+    ]))
+    mapped = dataclasses.replace(manifest, applications={
+        "source": "mapping",
+        "mapping": {"path": str(path), "fields": dict(appmap_module.DEFAULT_FIELDS)}})
+    appmap_module.reset_cache()
+    raw = {
+        "namespaces": [_ns("payments", {"odl.io/app": "from-label", "odl.io/team": "label-team"}),
+                       _ns("scratch", {"odl.io/app": "scratch-app"}),
+                       _ns("openshift-monitoring")],
+        "deployments": [_dep("api", "payments", labels={"odl.io/tier": "critical"}),
+                        _dep("job", "scratch")],
+    }
+    doc = assemble({"name": "c1", "region": "us"}, raw, {}, mapped)
+    by = {n["name"]: n for n in doc["namespaces"]}
+    assert by["payments"]["app_name"] == "1aat" and by["payments"]["team"] == "wimt"
+    assert by["payments"]["environment"] == "development" and by["payments"]["assigned"] is True
+    assert by["payments"]["tier"] is None                     # labels are not consulted
+    assert by["scratch"]["app_name"] is None and by["scratch"]["assigned"] is False
+    assert by["scratch"]["ns_class"] == "application"        # still an application namespace
+    assert by["openshift-monitoring"]["assigned"] is False
+    assert doc["environment"] == "nonprod"
+
+    # labels mode is unchanged and never marks anything unassigned
+    appmap_module.reset_cache()
+    doc = assemble({"name": "c1", "region": "us"}, raw, {}, manifest)
+    by = {n["name"]: n for n in doc["namespaces"]}
+    assert by["payments"]["app_name"] == "from-label" and by["payments"]["assigned"] is True
+    assert by["scratch"]["app_name"] == "scratch-app" and by["payments"]["environment"] is None

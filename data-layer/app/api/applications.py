@@ -12,7 +12,8 @@ from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..serialize import namespace_dict, workload_dict
+from ..manifest import get_manifest
+from ..serialize import UNASSIGNED, namespace_dict, workload_dict
 from ..store import Store
 from .deps import get_store_dep, order_key
 
@@ -32,10 +33,18 @@ def _by_placement(rows):
     return sorted(rows, key=lambda n: order_key(n.cluster_name, n.name))
 
 
+def _app_key(n) -> str:
+    """Which application a namespace row belongs to. With a mapping file a
+    namespace can be under none (app_name NULL); those group as UNASSIGNED."""
+    if n.app_name:
+        return n.app_name
+    return n.name if n.assigned is None else UNASSIGNED
+
+
 def _group(rows, clusters_by_name):
     apps = defaultdict(list)
     for n in rows:
-        apps[n.app_name or n.name].append(n)
+        apps[_app_key(n)].append(n)
     out = []
     for app, nss in sorted(apps.items()):
         placements = []
@@ -55,16 +64,20 @@ def _group(rows, clusters_by_name):
                 "pod_issues": n.pod_issues,
                 "cpu_used_cores": n.cpu_usage,
                 "memory_used_bytes": n.memory_usage,
+                "namespace_environment": n.environment,
             })
         cpu = [n.cpu_usage for n in nss if n.cpu_usage is not None]
         mem = [n.memory_usage for n in nss if n.memory_usage is not None]
         out.append({
             "app": app,
+            "assigned": app != UNASSIGNED,
             "team": next((n.team for n in nss if n.team), None),
             "tier": next((n.tier for n in nss if n.tier), None),
             "status": _rollup([n.status for n in nss]),
             "cluster_count": len(nss),
             "environments": sorted({p["environment"] for p in placements if p["environment"]}),
+            "namespace_environments": sorted({p["namespace_environment"] for p in placements
+                                              if p["namespace_environment"]}),
             "regions": sorted({p["region"] for p in placements if p["region"]}),
             "workloads": sum(n.workloads_total or 0 for n in nss),
             "replicas_desired": sum(n.replicas_desired or 0 for n in nss),
@@ -86,6 +99,7 @@ def list_applications(
     region: str | None = None,
     cluster: str | None = None,
     status: str | None = Query(None, description="healthy|warning|critical"),
+    assigned: bool | None = Query(None, description="false: namespaces under no business application"),
 ):
     rows = store.namespaces(ns_class="application", team=team,
                             clusters=[cluster] if cluster else None)
@@ -103,13 +117,19 @@ def list_applications(
     apps = _group(_by_placement(rows), clusters)
     if status:
         apps = [a for a in apps if a["status"] == status]
+    if assigned is not None:
+        apps = [a for a in apps if a["assigned"] == assigned]
     teams = sorted({a["team"] for a in apps if a["team"]})
-    return {"count": len(apps), "teams": teams, "applications": apps}
+    return {"count": len(apps), "teams": teams,
+            "source": get_manifest().applications["source"], "applications": apps}
 
 
 @router.get("/{app}")
 def get_application(app: str, store: Store = Depends(get_store_dep)):
-    rows = store.namespaces(ns_class="application", app_name=app)
+    if app == UNASSIGNED:
+        rows = [n for n in store.namespaces(ns_class="application") if not n.app_name]
+    else:
+        rows = store.namespaces(ns_class="application", app_name=app)
     if not rows:
         # an application whose namespaces carry no app label is known by its
         # namespace name; that has no index of its own, hence the scan

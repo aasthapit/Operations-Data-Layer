@@ -50,6 +50,28 @@ namespaces:
     team: [odl.io/team, team, owner, app.kubernetes.io/managed-by-team]
     tier: [odl.io/tier, tier, criticality]
 
+# Where application ownership comes from.
+#   labels   (default) identity, team and tier from the `ownership` label keys
+#            above, app falling back to the namespace name
+#   mapping  a registry file maps (cluster, namespace) -> application, line of
+#            business, environment. Labels are ignored, every resource in a
+#            namespace belongs to that namespace's application, and a namespace
+#            absent from the file is "not under a business application"
+#            (app_name null, assigned false). JSON or YAML list of records;
+#            `fields` names the record keys. Re-read when the file changes.
+#            ODL_APP_MAP overrides the path.
+applications:
+  source: labels
+  mapping:
+    path: app-map.json          # relative to this manifest's directory
+    fields:
+      cluster: cluster
+      namespace: namespace
+      app: app_id
+      team: lob
+      environment: environment  # the namespace's environment (development, test, ...)
+      cluster_environment: env  # fills the cluster's environment when ACM has none
+
 # Annotations are dropped unless listed here. (kubectl's
 # last-applied-configuration annotation can embed an entire object, including
 # Secret data, so annotations default to closed.)

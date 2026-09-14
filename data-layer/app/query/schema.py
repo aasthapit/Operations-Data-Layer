@@ -195,10 +195,17 @@ NAMESPACES = _table(
         ("cluster_name", "VARCHAR", "Cluster the namespace is on."),
         ("name", "VARCHAR", "Namespace name."),
         ("ns_class", "VARCHAR", "'application' or 'platform' (OpenShift / Kubernetes own namespaces)."),
-        ("app_name", "VARCHAR", "Application identity, from the app label or the namespace name. "
+        ("app_name", "VARCHAR", "Application identity: from the application mapping file when one is "
+                                "configured (then NULL means the namespace is under no business "
+                                "application), otherwise from the app label or the namespace name. "
                                 "The same app_name on several clusters is the same application."),
-        ("team", "VARCHAR", "Owning team, from ownership labels. NULL when unlabelled."),
-        ("tier", "VARCHAR", "Criticality tier from labels, e.g. 'critical', 'standard'."),
+        ("team", "VARCHAR", "Owning team or line of business (the mapping's lob). NULL when unknown."),
+        ("tier", "VARCHAR", "Criticality tier from labels, e.g. 'critical', 'standard'; "
+                            "NULL with a mapping."),
+        ("environment", "VARCHAR", "Namespace-level environment from the mapping (e.g. development, "
+                                   "test, ist). NULL when unknown. clusters.environment is the cluster's."),
+        ("assigned", "BOOLEAN", "FALSE when the namespace is under no business application "
+                                "(only possible with a mapping file)."),
         ("labels", "JSON", "Namespace labels."),
         ("annotations", "JSON", "Allow-listed namespace annotations only."),
         ("requester", "VARCHAR", "openshift.io/requester annotation (who asked for the namespace)."),
@@ -450,8 +457,11 @@ NOTES: tuple[str, ...] = (
     "platform namespace has ns_class='application', and its app_name identifies the application "
     "across clusters. 'Applications per team' is therefore a query over namespaces, not over some "
     "applications table.",
-    "Ownership (app_name, team, tier) comes from labels and can be NULL; app_name falls back to the "
-    "namespace name, so it is never NULL for an application namespace.",
+    "Ownership comes either from labels (then app_name falls back to the namespace name and is never "
+    "NULL) or from an application mapping file (then app_name is the registry's application id, team "
+    "is the line of business, environment is the namespace's environment, and app_name IS NULL / "
+    "assigned = FALSE means the namespace is under no business application). Every resource in a "
+    "namespace belongs to that namespace's application.",
     "Join keys: every detail table has cluster_name = clusters.name. Namespaced rows additionally "
     "join on namespace = namespaces.name WITH the same cluster_name - a namespace name is only "
     "unique inside a cluster, so never join on namespace alone.",

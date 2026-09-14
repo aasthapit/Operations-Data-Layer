@@ -195,7 +195,7 @@ SECTION_FIELDS: dict[str, frozenset[str]] = {
         "replicas_ready", "pods_total", "pods_running", "pods_pending", "pods_failed",
         "pods_succeeded", "restarts_total", "pod_issues", "cpu_requests", "cpu_limits",
         "cpu_usage", "memory_requests", "memory_limits", "memory_usage", "resource_counts",
-        "images", "created_at"}),
+        "images", "created_at", "environment", "assigned"}),
     "workloads": frozenset({
         "namespace", "ns_class", "kind", "name", "replicas_desired", "replicas_ready",
         "replicas_available", "replicas_updated", "status", "containers", "images",

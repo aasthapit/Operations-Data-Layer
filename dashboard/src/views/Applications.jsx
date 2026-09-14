@@ -24,7 +24,7 @@ export default function Applications({ initialApp, nav, onClearApp }) {
         <div>
           <div className="section-title" style={{ margin: 0 }}>Applications</div>
           <div className="desc">
-            Every non-platform namespace is an application. Identity, team and tier come from namespace labels
+            Every non-platform namespace belongs to an application: identity, team and tier come from namespace labels, or from the application mapping file when one is configured, in which case namespaces under no business application appear as (unassigned)
             (falling back to the workloads' labels); OpenShift's own namespaces are grouped separately per cluster.
           </div>
         </div>

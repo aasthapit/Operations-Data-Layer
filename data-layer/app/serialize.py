@@ -11,6 +11,10 @@ from datetime import UTC, datetime
 
 from .settings import settings
 
+# The application name of a namespace that is under no business application
+# (only possible when ownership comes from a mapping file).
+UNASSIGNED = "(unassigned)"
+
 
 def _iso(dt):
     """ISO-8601 for a datetime; an already-encoded string passes through."""
@@ -155,6 +159,8 @@ def namespace_dict(n) -> dict:
         "app": n.app_name,
         "team": n.team,
         "tier": n.tier,
+        "environment": n.environment,
+        "assigned": True if n.assigned is None else bool(n.assigned),
         "status": n.status,
         "phase": n.phase,
         "requester": n.requester,
@@ -178,10 +184,12 @@ def namespace_dict(n) -> dict:
 def application_dict(n) -> dict:
     """An application namespace, in the shape blast radius and the app views use."""
     return {
-        "name": n.app_name or n.name,
+        "name": n.app_name or (n.name if n.assigned is None else UNASSIGNED),
         "namespace": n.name,
         "team": n.team,
         "tier": n.tier,
+        "environment": n.environment,
+        "assigned": True if n.assigned is None else bool(n.assigned),
         "status": n.status,
         "replicas_desired": n.replicas_desired,
         "replicas_ready": n.replicas_ready,

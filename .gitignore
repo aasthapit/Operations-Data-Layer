@@ -17,6 +17,7 @@ fleet/kubeconfigs/
 # Real cluster endpoints (copy of clusters.example.yaml)
 data-layer/config/clusters.yaml
 data-layer/config/acm.yaml
+data-layer/config/app-map.json
 
 # Local / editor
 .DS_Store

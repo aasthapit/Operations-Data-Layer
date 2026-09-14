@@ -26,6 +26,19 @@ A registry key that is missing from the manifest is disabled.
 Because every fetch is recorded per cluster, "what can this cluster answer?" is itself data: a cluster without OLM reports `clusterserviceversions: unavailable`, a cluster where RBAC was not applied reports `secrets: forbidden`, and a cluster without `metrics.k8s.io` reports `node_metrics: unavailable`.
 The dashboard's **Collected** tab shows this as a matrix.
 
+## Applications from a mapping file
+
+Estates that keep an application registry instead of labelling namespaces set `applications.source: mapping` in the manifest.
+A JSON or YAML file then maps `(cluster, namespace)` to the application id, the line of business and the namespace's environment (`data-layer/config/app-map.example.json`; the real file is git-ignored; `ODL_APP_MAP` overrides the path; `fields` in the manifest names the record keys).
+
+With a mapping:
+
+- labels are ignored for ownership; every resource in a namespace belongs to the namespace's application;
+- `app_name` is the registry's application id, `team` is the line of business, and each namespace carries its own `environment` (development, test, ist ...) next to the cluster's;
+- a namespace absent from the file is under no business application: `app_name` is null, `assigned` is false, and such namespaces group under `(unassigned)` in the applications and blast-radius views (`GET /api/applications?assigned=false` lists them);
+- when ACM carries no environment label for a cluster, the environment the mapping's records agree on for that cluster is used;
+- the file is re-read whenever it changes on disk, so a registry export can be refreshed without a restart.
+
 ## The manifest
 
 ```yaml

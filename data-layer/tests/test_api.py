@@ -761,3 +761,49 @@ def test_refresh_endpoints_answer_409_when_collector_disabled(client, monkeypatc
     monkeypatch.setattr(settings_module.settings, "collector_enabled", False)
     assert client.post("/api/refresh").status_code == 409
     assert client.post("/api/clusters/ocp-east-1/refresh").status_code == 409
+
+
+def test_unassigned_namespaces_group_separately(monkeypatch):
+    """With a mapping file, a namespace under no application is listed as
+    (unassigned), filterable, and never merged into a real application."""
+    from app.collector.collect import assemble
+    from app.collector.healthchecks import run_health_checks
+    from app.settings import settings
+
+    manifest = get_manifest()
+    st = RedisStore(fakeredis.FakeRedis())
+    collected = assemble({"name": "ocp-map-1", "region": "us-east-1", "environment": "prod",
+                          "managed_available": True}, _east_raw(), {}, manifest)
+    app_ns = [n for n in collected["namespaces"] if n["ns_class"] == "application"]
+    assert app_ns
+    app_ns[0].update({"app_name": "1aat", "team": "wimt", "environment": "development", "assigned": True})
+    # two namespaces the registry does not know: they are under no application
+    for name in ("scratch-a", "scratch-b"):
+        stray = dict(app_ns[0], name=name, app_name=None, team=None, environment=None, assigned=False)
+        collected["namespaces"].append(stray)
+        app_ns.append(stray)
+    checks, overall, score, counts = run_health_checks(
+        collected, settings.supported_floor, manifest.describe()["thresholds"])
+    st.persist_cluster("hub-east", collected, checks, overall, score, counts)
+
+    app = FastAPI()
+    app.include_router(applications.router)
+    app.include_router(blast_radius.router)
+    store_module.set_store(st)
+    try:
+        c = TestClient(app)
+        body = c.get("/api/applications").json()
+        names = {a["app"]: a for a in body["applications"]}
+        assert names["1aat"]["assigned"] is True and names["1aat"]["team"] == "wimt"
+        assert names["1aat"]["namespace_environments"] == ["development"]
+        assert names["(unassigned)"]["assigned"] is False
+        assert names["(unassigned)"]["cluster_count"] == len(app_ns) - 1
+        only = c.get("/api/applications", params={"assigned": "false"}).json()["applications"]
+        assert [a["app"] for a in only] == ["(unassigned)"]
+        detail = c.get("/api/applications/(unassigned)").json()
+        assert detail["assigned"] is False and len(detail["namespaces"]) == len(app_ns) - 1
+        assert c.get("/api/applications/1aat").json()["cluster_count"] == 1
+        blast = c.get("/api/blast-radius", params={"ocp_version": collected.get("version")}).json()
+        assert {a["app"] for a in blast["applications"]} >= {"1aat", "(unassigned)"}
+    finally:
+        store_module.set_store(None)

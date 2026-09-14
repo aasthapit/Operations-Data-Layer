@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 import yaml
 
+from .appmap import DEFAULT_FIELDS
 from .collector.registry import REGISTRY, SCRUB_POLICY, rbac_rules
 from .settings import settings
 
@@ -55,6 +56,9 @@ class Manifest:
     keep_annotations: tuple[str, ...]
     thresholds: dict = field(default_factory=dict)
     source: str = ""
+    # {source: labels|mapping, mapping: {path, fields}}; see app/appmap.py
+    applications: dict = field(default_factory=lambda: {
+        "source": "labels", "mapping": {"path": None, "fields": dict(DEFAULT_FIELDS)}})
 
     # -- resources ----------------------------------------------------------
     def enabled(self, key: str) -> bool:
@@ -112,6 +116,7 @@ class Manifest:
             },
             "keep_annotations": list(self.keep_annotations),
             "thresholds": {**_DEFAULT_THRESHOLDS, **self.thresholds},
+            "applications": self.applications,
         }
 
     def rbac_clusterrole(self, name="odl-collector-readonly") -> dict:
@@ -161,6 +166,19 @@ def parse_manifest(raw: dict, source: str = "") -> Manifest:
     for k in ("app", "team", "tier"):
         ownership.setdefault(k, [])
 
+    apps_raw = raw.get("applications") or {}
+    apps_source = apps_raw.get("source", "labels")
+    if apps_source not in ("labels", "mapping"):
+        raise ManifestError("applications.source must be labels or mapping")
+    mapping = apps_raw.get("mapping") or {}
+    bad = sorted(set(mapping.get("fields") or {}) - set(DEFAULT_FIELDS))
+    if bad:
+        raise ManifestError(f"applications.mapping.fields: unknown field(s): {', '.join(bad)} "
+                            f"(known: {', '.join(DEFAULT_FIELDS)})")
+    applications = {"source": apps_source,
+                    "mapping": {"path": mapping.get("path"),
+                                "fields": {**DEFAULT_FIELDS, **(mapping.get("fields") or {})}}}
+
     thresholds = dict(raw.get("thresholds") or {})
     bad = sorted(set(thresholds) - set(_DEFAULT_THRESHOLDS))
     if bad:
@@ -175,6 +193,7 @@ def parse_manifest(raw: dict, source: str = "") -> Manifest:
         keep_annotations=tuple(raw.get("keep_annotations") or []),
         thresholds=thresholds,
         source=source,
+        applications=applications,
     )
 
 

@@ -19,6 +19,7 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime
 
 from .. import kube
+from ..appmap import get_appmap
 from ..manifest import APPLICATION, Manifest
 from ..settings import settings
 from . import parsers as p
@@ -249,6 +250,8 @@ def assemble(meta: dict, raw: dict, status: dict, manifest: Manifest,
 
     # --- namespace rollups --------------------------------------------------
     own = manifest.ownership
+    appmap = get_appmap(manifest)
+    cluster_name = meta.get("name")
     for name in set(pods["namespaces"]) | set(wl_by_ns) | set(pod_metrics):
         ensure_ns(name)
     for name, ns in namespaces.items():
@@ -270,6 +273,16 @@ def assemble(meta: dict, raw: dict, status: dict, manifest: Manifest,
         ns["replicas_ready"] = sum(w["replicas_ready"] for w in wls)
         ns["resource_counts"] = dict(ns_counts.get(name, {}))
         ns["status"] = _ns_status(ns, wls)
+        if appmap is not None:
+            # ownership is the registry's, never labels: a namespace is under the
+            # application the mapping says, or under none at all
+            hit = appmap.lookup(cluster_name, name)
+            ns["app_name"] = hit.app if hit else None
+            ns["team"] = hit.team if hit else None
+            ns["tier"] = None
+            ns["environment"] = hit.environment if hit else None
+            ns["assigned"] = hit is not None
+            continue
         # ownership: namespace labels first, then the workloads' most common value
         for field in ("app_name", "team", "tier"):
             if ns.get(field):
@@ -278,7 +291,12 @@ def assemble(meta: dict, raw: dict, status: dict, manifest: Manifest,
             ns[field] = _most_common(p.pick_label(w["labels"], keys) for w in wls)
         if not ns.get("app_name"):
             ns["app_name"] = name
+        ns["environment"] = None
+        ns["assigned"] = True
     data["namespaces"] = sorted(namespaces.values(), key=lambda n: n["name"])
+    if appmap is not None and not data.get("environment"):
+        # ACM carried no environment for this cluster; the registry knows it
+        data["environment"] = appmap.cluster_environment(cluster_name)
     data["workloads"] = workloads
     data["workload_images"] = images_rows
     data["workload_refs"] = refs_rows

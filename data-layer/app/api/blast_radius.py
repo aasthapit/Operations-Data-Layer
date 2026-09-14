@@ -13,6 +13,7 @@ from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ..serialize import UNASSIGNED
 from ..store import Store
 from .deps import get_store_dep
 
@@ -100,7 +101,7 @@ def blast_radius(
         for n in sorted(by_cluster.get(c.name, []), key=lambda n: n.name):
             if image and not (olm_operator or operator or ocp_version) and (c.name, n.name) not in hit_ns:
                 continue   # an image only impacts the namespaces that run it
-            entry = apps[n.app_name or n.name]
+            entry = apps[n.app_name or (n.name if n.assigned is None else UNASSIGNED)]
             entry["team"] = entry["team"] or n.team
             entry["tier"] = entry["tier"] or n.tier
             entry["namespace"] = n.name
@@ -110,7 +111,7 @@ def blast_radius(
                 "app_status": n.status})
 
     impacted_apps = sorted(
-        ({"app": name, **info, "cluster_count": len(info["clusters"])}
+        ({"app": name, "assigned": name != UNASSIGNED, **info, "cluster_count": len(info["clusters"])}
          for name, info in apps.items()),
         key=lambda a: (a["tier"] != "critical", -a["cluster_count"], a["app"]))
 

@@ -64,6 +64,21 @@ def _require_fleet_config():
         "or set COLLECTOR_ENABLED=false to serve Redis read-only.")
 
 
+def _require_application_mapping(manifest):
+    """When ownership comes from a mapping file, it must be there at startup."""
+    from .appmap import get_appmap, resolve_path
+    if manifest.applications.get("source") != "mapping":
+        return
+    try:
+        appmap = get_appmap(manifest)
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f"application mapping not found: {resolve_path(manifest)!r}. The manifest sets "
+            "applications.source: mapping; provide the file (see config/app-map.example.json), "
+            "set ODL_APP_MAP, or switch applications.source back to labels.") from e
+    log.info("application mapping: %s", appmap.describe())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     m = get_manifest()      # fail fast on a bad manifest
@@ -73,6 +88,7 @@ async def lifespan(app: FastAPI):
         log.info("collector disabled (COLLECTOR_ENABLED=false): serving Redis read-only")
     else:
         _require_fleet_config()
+        _require_application_mapping(m)
         if settings.refresh_on_startup:
             threading.Thread(target=run_collection, args=("startup",),
                              daemon=True).start()
