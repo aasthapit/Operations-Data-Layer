@@ -18,6 +18,12 @@ The per-column descriptions are not documentation garnish: they are the
 semantics the model has to work from. A column whose meaning is not obvious
 from its name ("ns_class", "key", "critical") gets a sentence saying what the
 values are.
+
+Two tables are history rather than current state: `health_snapshots` (the same
+measurements over time, at three resolutions) and `changes` (one row per thing
+that changed between sweeps). Their descriptions carry the one rule that makes
+them usable - filter `health_snapshots` by `resolution`, or every aggregate
+counts the same moment three times.
 """
 from __future__ import annotations
 
@@ -398,25 +404,122 @@ HEALTH_CHECKS = _table(
 
 HEALTH_SNAPSHOTS = _table(
     "health_snapshots",
-    "Append-only per-sweep time series per cluster: health and utilization. The only table with "
-    "history - every other table is the current state.",
-    "store.snapshots(cluster)",
+    "The fleet's history: health, utilization and what was going wrong, per cluster over time. "
+    "Every other table is the current state; this one and `changes` are the past. It holds THREE "
+    "resolutions in one table (per sweep, per hour, per day) - ALWAYS filter on `resolution`, or "
+    "every aggregate counts the same moment three times.",
+    "store.snapshots_across(clusters, resolution) for each of 'sweep', 'hour', 'day'",
     [
         ("cluster_name", "VARCHAR", "Cluster the snapshot belongs to."),
-        ("overall_status", "VARCHAR", "Cluster status at that moment."),
-        ("health_score", "INTEGER", "Health score at that moment."),
-        ("checks_passed", "INTEGER", "Checks passing at that moment."),
-        ("checks_warned", "INTEGER", "Checks warning at that moment."),
-        ("checks_failed", "INTEGER", "Checks failing at that moment."),
-        ("ocp_version", "VARCHAR", "Version at that moment (compare consecutive rows to see an upgrade)."),
-        ("upgrading", "BOOLEAN", "Whether an upgrade was in progress."),
-        ("cpu_usage", "DOUBLE", "Live CPU usage then, in cores."),
-        ("cpu_allocatable", "DOUBLE", "Allocatable CPU then, in cores."),
-        ("memory_usage", "BIGINT", "Live memory usage then, in bytes."),
-        ("memory_allocatable", "BIGINT", "Allocatable memory then, in bytes."),
-        ("pods_running", "INTEGER", "Running pods then."),
-        ("pod_issues", "INTEGER", "Unhealthy pods then."),
-        ("snapshot_at", "TIMESTAMP", "When the sweep took this snapshot (UTC). Order by this."),
+        ("resolution", "VARCHAR",
+         "Which time series the row belongs to: 'sweep' (one row per collection, the last few "
+         "hours - use it for 'right now' and for the last couple of hours), 'hour' (one row per "
+         "hour, the last month - use it for a day or a week), 'day' (one row per day, up to two "
+         "years - use it for a month or more). EVERY query on this table must filter it, e.g. "
+         "WHERE resolution = 'hour'."),
+        ("snapshot_at", "TIMESTAMP",
+         "Start of the bucket the row covers, UTC (the sweep instant when resolution = 'sweep'). "
+         "Order and group by this; for an hourly series it is already truncated to the hour."),
+        ("samples", "INTEGER",
+         "How many sweeps the row is rolled up from (1 for resolution = 'sweep'). The newest "
+         "bucket of an hourly or daily series is still filling up, so it holds fewer samples "
+         "than a complete one - exclude it with snapshot_at < date_trunc('hour', now()) when a "
+         "partial bucket would mislead."),
+        # -- health
+        ("overall_status", "VARCHAR",
+         "Cluster status at the END of the bucket: 'healthy' | 'warning' | 'critical' | 'unknown'."),
+        ("health_score", "INTEGER", "Health score (0-100) at the end of the bucket."),
+        ("checks_passed", "INTEGER", "Checks passing at the end of the bucket."),
+        ("checks_warned", "INTEGER", "WORST number of warning checks in the bucket."),
+        ("checks_failed", "INTEGER", "WORST number of failing checks in the bucket."),
+        ("checks_failed_names", "JSON",
+         "List of the check ids that failed at any point in the bucket, e.g. "
+         "[\"no-degraded-operators\"]. Ask whether one check failed with "
+         "list_contains(CAST(checks_failed_names AS VARCHAR[]), 'no-degraded-operators'); "
+         "count them by name by unnesting in a subquery (UNNEST cannot sit beside a GROUP BY): "
+         "SELECT check_name, count(*) FROM (SELECT unnest(CAST(checks_failed_names AS VARCHAR[])) "
+         "AS check_name FROM health_snapshots WHERE resolution = 'hour') GROUP BY check_name."),
+        ("checks_warned_names", "JSON", "The same for checks that warned."),
+        ("operators_degraded", "INTEGER",
+         "Most cluster operators reporting Degraded=True at once in the bucket."),
+        # -- version
+        ("ocp_version", "VARCHAR",
+         "Version at the end of the bucket (compare consecutive rows, or use the `changes` "
+         "table, to see an upgrade)."),
+        ("upgrading", "BOOLEAN", "True when an upgrade was in progress at ANY point in the bucket."),
+        # -- utilization
+        ("cpu_usage", "DOUBLE",
+         "CPU usage in cores: the value at that sweep, or the MEAN over the bucket when rolled up. "
+         "NULL when the cluster served no metrics."),
+        ("cpu_usage_max", "DOUBLE", "Peak CPU usage in cores inside the bucket (equals cpu_usage "
+                                    "when resolution = 'sweep'). Use it for headroom questions - "
+                                    "a mean hides the spike."),
+        ("cpu_allocatable", "DOUBLE", "Allocatable CPU at the end of the bucket, in cores."),
+        ("memory_usage", "BIGINT", "Memory usage in bytes: the sweep's value, or the MEAN over "
+                                   "the bucket. NULL without metrics."),
+        ("memory_usage_max", "BIGINT", "Peak memory usage in bytes inside the bucket."),
+        ("memory_allocatable", "BIGINT", "Allocatable memory at the end of the bucket, in bytes."),
+        ("pods_running", "INTEGER", "Running pods at the end of the bucket."),
+        # -- what was going wrong
+        ("pod_issues", "INTEGER", "WORST number of unhealthy pods in the bucket (all reasons)."),
+        ("pod_issues_platform", "INTEGER", "The same for pods in platform namespaces."),
+        ("pod_issues_application", "INTEGER", "The same for pods in application namespaces."),
+        ("crashloops", "INTEGER",
+         "WORST number of pods in CrashLoopBackOff in the bucket. This is the crash-event series: "
+         "sum it across clusters, group it by snapshot_at."),
+        ("image_pull_errors", "INTEGER",
+         "Pods failing to pull an image (ImagePullBackOff, ErrImagePull, InvalidImageName)."),
+        ("oom_killed", "INTEGER", "Pods whose container was OOM-killed."),
+        ("pending_pods", "INTEGER", "Pods stuck Pending or Unschedulable."),
+        ("restarts_total", "INTEGER",
+         "Container restarts summed over every namespace of the cluster. It is a running total "
+         "kept by Kubernetes, so a trend is the DIFFERENCE between rows, not their sum."),
+        ("warning_events", "INTEGER",
+         "Kubernetes Warning events the cluster was holding (capped by the manifest's events "
+         "limit, so a very noisy cluster reads as exactly that cap)."),
+        ("events_by_reason", "JSON",
+         "Object of the ten commonest warning-event reasons in the bucket -> count, e.g. "
+         "{\"FailedMount\": 12, \"BackOff\": 4}. Read one reason with "
+         "CAST(json_extract(events_by_reason, '$.BackOff') AS BIGINT); expand all of them with "
+         "json_each(events_by_reason) (columns `key` and `value`), or with "
+         "unnest(json_keys(events_by_reason)) inside a subquery."),
+        # -- shape of the cluster
+        ("nodes_total", "INTEGER", "Nodes at the end of the bucket."),
+        ("nodes_ready", "INTEGER", "Nodes with Ready=True at the end of the bucket."),
+        ("namespaces_application", "INTEGER", "Application namespaces at the end of the bucket."),
+        ("applications_total", "INTEGER", "Distinct applications at the end of the bucket."),
+        ("workloads_total", "INTEGER", "Workloads at the end of the bucket."),
+        ("certs_expiring_total", "INTEGER",
+         "WORST number of expired or expiring certificates in the bucket."),
+    ],
+)
+
+CHANGES = _table(
+    "changes",
+    "What changed between one sweep and the next, per cluster: an append-only log of versions, "
+    "statuses, checks, operators, nodes, namespaces, applications, upgrades and reachability. "
+    "health_snapshots says what the fleet looked like; this says what happened to it.",
+    "store.changes_across(clusters)",
+    [
+        ("cluster_name", "VARCHAR", "Cluster the change happened on."),
+        ("changed_at", "TIMESTAMP", "When the sweep that noticed the change ran (UTC)."),
+        ("kind", "VARCHAR",
+         "What kind of thing changed: 'version' (ocp_version moved), 'status' (overall_status "
+         "moved), 'check' (a health check started failing or recovered), 'operator' (a cluster "
+         "operator became degraded or recovered), 'nodes' (nodes_total or nodes_ready moved), "
+         "'namespace' (an application namespace appeared or disappeared), 'application' "
+         "(applications_total moved), 'upgrade' (an upgrade started or finished), 'reachability' "
+         "(the collector lost or regained the cluster)."),
+        ("subject", "VARCHAR",
+         "What changed, named: the check id, the operator name, the namespace name, the target "
+         "version of an upgrade, or the column name for a scalar ('ocp_version', "
+         "'overall_status', 'nodes_ready', 'applications_total', 'reachable')."),
+        ("before", "VARCHAR",
+         "The value before, as text ('4.15.30', 'healthy', '4', 'true'). NULL when the subject "
+         "did not exist before (a namespace that appeared). A check or operator reads 'ok' or "
+         "'fail' / 'degraded'."),
+        ("after", "VARCHAR", "The value after, same encoding. NULL when the subject went away."),
+        ("message", "VARCHAR", "The change in one English sentence, ready to show a human."),
     ],
 )
 
@@ -441,7 +544,7 @@ COLLECTION_RUNS = _table(
 TABLES: tuple[Table, ...] = (
     HUBS, CLUSTERS, CLUSTER_OPERATORS, NODES, NAMESPACES, WORKLOADS, WORKLOAD_IMAGES,
     WORKLOAD_REFS, POD_ISSUES, RESOURCES, RESOURCE_STATUS, HEALTH_CHECKS, HEALTH_SNAPSHOTS,
-    COLLECTION_RUNS,
+    CHANGES, COLLECTION_RUNS,
 )
 TABLES_BY_NAME: dict[str, Table] = {t.name: t for t in TABLES}
 
@@ -502,8 +605,42 @@ NOTES: tuple[str, ...] = (
     "cluster_operators holds OpenShift's own operators; version drift is a name with more than one "
     "distinct version across clusters. OLM-installed operators are a different thing: resources rows "
     "with key='clusterserviceversions' (package and version inside summary).",
-    "health_snapshots is the only history: one row per cluster per sweep, ordered by snapshot_at. "
-    "Everything else is the state as of the last sweep.",
+    "History lives in two tables and nowhere else: health_snapshots (what the fleet looked like, "
+    "sampled over time) and changes (what happened to it, one row per event). Every other table "
+    "is the state as of the last sweep, so a question about last week cannot be answered from "
+    "clusters, namespaces or pod_issues - it is a health_snapshots or changes question.",
+    "health_snapshots holds three time series in one table and `resolution` says which: 'sweep' "
+    "(every collection, roughly the last six hours), 'hour' (one row per hour, roughly the last "
+    "month), 'day' (one row per day, up to two years). ALWAYS filter on resolution - without it "
+    "the same moment is counted once per series. Pick it from the span asked about: hours or "
+    "'right now' -> 'sweep', a day or a week -> 'hour', a month or more -> 'day'. When the span "
+    "is longer than the coarser series has, say so rather than silently answering from a shorter "
+    "one.",
+    "A trend is GROUP BY the bucket, never a row per sweep: "
+    "'crash events over time per hub' is SELECT date_trunc('hour', hs.snapshot_at) AS hour, "
+    "c.hub_name, sum(hs.crashloops) FROM health_snapshots hs JOIN clusters c ON c.name = "
+    "hs.cluster_name WHERE hs.resolution = 'hour' AND hs.snapshot_at >= now() - INTERVAL 24 HOUR "
+    "GROUP BY hour, c.hub_name ORDER BY hour. Join to clusters for hub / region / environment: "
+    "health_snapshots carries the cluster name only.",
+    "In a rolled-up health_snapshots row the counters (crashloops, image_pull_errors, oom_killed, "
+    "pending_pods, pod_issues, warning_events, checks_failed, operators_degraded) are the WORST "
+    "value inside the bucket, the gauges (health_score, nodes_total, ocp_version, "
+    "applications_total) are the value at its END, and cpu_usage / memory_usage are the MEAN with "
+    "the peak beside them in cpu_usage_max / memory_usage_max. So 'how bad did it get' is max(), "
+    "'how many at once across the fleet' is sum() over one bucket, and neither is a sum over "
+    "sweeps - the same crash-looping pod is counted again by every sweep.",
+    "events_by_reason is a JSON object (reason -> count), not a list: read one reason with "
+    "CAST(json_extract(events_by_reason, '$.FailedMount') AS BIGINT) and expand all of them with "
+    "json_each(events_by_reason). checks_failed_names and checks_warned_names are JSON arrays of "
+    "check ids: list_contains(CAST(checks_failed_names AS VARCHAR[]), 'nodes-ready') tests one, "
+    "and unnest(CAST(checks_failed_names AS VARCHAR[])) turns them into rows - but DuckDB refuses "
+    "UNNEST beside a GROUP BY, so unnest in a subquery and group over it.",
+    "changes answers 'what happened': filter it by kind (version, status, check, operator, nodes, "
+    "namespace, application, upgrade, reachability) and by changed_at. 'Which clusters were "
+    "upgraded last week' is kind = 'version' over the last 7 days, with before and after holding "
+    "the two versions. A cluster the collector could not reach records only its reachability "
+    "change for that gap, so a silent cluster never looks like a cluster whose checks all "
+    "recovered.",
     "Names are case-sensitive; use ILIKE '%needle%' for fuzzy matching on images, hosts and names.",
     "All timestamps are UTC and comparable with now() and INTERVAL arithmetic, e.g. "
     "expires_at <= now() + INTERVAL 30 DAY.",
@@ -596,6 +733,29 @@ EXAMPLES: tuple[Example, ...] = (
         "WHERE r.key = 'resourcequotas'\n"
         "  AND CAST(json_extract(r.summary, '$.max_percent') AS DOUBLE) >= 90\n"
         "ORDER BY max_percent DESC",
+    ),
+    Example(
+        "How many pods were crash-looping per hub, hour by hour, over the last day?",
+        "SELECT date_trunc('hour', hs.snapshot_at) AS hour,\n"
+        "       c.hub_name,\n"
+        "       sum(hs.crashloops) AS crashloops,\n"
+        "       sum(hs.image_pull_errors) AS image_pull_errors\n"
+        "FROM health_snapshots AS hs\n"
+        "JOIN clusters AS c ON c.name = hs.cluster_name\n"
+        "WHERE hs.resolution = 'hour'\n"
+        "  AND hs.snapshot_at >= now() - INTERVAL 24 HOUR\n"
+        "GROUP BY hour, c.hub_name\n"
+        "ORDER BY hour, c.hub_name",
+    ),
+    Example(
+        "Which clusters were upgraded in the last week, and from which version?",
+        "SELECT ch.cluster_name, c.region, c.environment,\n"
+        "       ch.changed_at, ch.before AS from_version, ch.after AS to_version\n"
+        "FROM changes AS ch\n"
+        "JOIN clusters AS c ON c.name = ch.cluster_name\n"
+        "WHERE ch.kind = 'version'\n"
+        "  AND ch.changed_at >= now() - INTERVAL 7 DAY\n"
+        "ORDER BY ch.changed_at DESC",
     ),
     Example(
         "How many applications does each team run in production?",

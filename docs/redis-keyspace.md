@@ -24,11 +24,57 @@ All keys start with the prefix `odl` (`REDIS_PREFIX`). `<name>` is the cluster n
 |---|---|---|
 | `odl:{c:<name>}:summary` | HASH | Every field of the former `clusters` row (placement, version, capacity, rollups, health, `last_synced`, `collect_ms`, `reachable`, `last_error`, `hub_name`). Scalars as strings, lists/dicts as JSON. |
 | `odl:{c:<name>}:sec:<section>` | STRING | Compressed JSON list of rows for one section. Sections: `operators`, `nodes`, `namespaces`, `workloads`, `workload_images`, `workload_refs`, `pod_issues`, `resources`, `resource_status`, `health_checks`. Rows carry the same field names as the former ORM columns, plus `value` and `levels` on a `health_checks` row (what the check measured and the levels that applied). |
-| `odl:{c:<name>}:snapshots` | ZSET | Health/utilization history. Score = epoch seconds, member = JSON snapshot (includes `snapshot_at`). Trimmed to `SNAPSHOT_RETENTION`. |
+| `odl:{c:<name>}:snapshots` | ZSET | Per-sweep history. Score = epoch seconds, member = JSON snapshot row (health, utilization, what was going wrong, `snapshot_at`, `resolution: "sweep"`). Trimmed to the last `SNAPSHOT_RAW_HOURS` (48h) by score, and to `SNAPSHOT_RETENTION` rows as a safety net. |
+| `odl:{c:<name>}:snapshots:hourly` | ZSET | The same rows rolled up per hour. Score = epoch seconds of the hour start, one member per hour. Trimmed to `SNAPSHOT_HOURLY_DAYS` (90d). |
+| `odl:{c:<name>}:snapshots:daily` | ZSET | The same rolled up per day. Score = epoch seconds of midnight UTC. Trimmed to `SNAPSHOT_DAILY_DAYS` (730d). |
+| `odl:{c:<name>}:changes` | STREAM | What changed between sweeps, one entry per change: fields `at`, `kind`, `subject`, `before`, `after`, `message`, each JSON-encoded so types survive. `XADD MAXLEN ~ 5000`. |
 | `odl:{c:<name>}:ledger` | STRING | Compressed JSON list of `[op, key, member]` describing every fleet-index member this cluster contributed on its last write (`op` in `sadd`, `hset`, `zadd`, `hincr`). Read and reversed before the next write. Never expires: when the cluster's other keys age out, the ledger is what lets `prune_vanished` unpublish its fleet-index members. |
 | `odl:{c:<name>}:lock` | STRING | `SET NX PX` single-flight lock for on-demand refresh of one cluster. |
 
 Sections are independent keys so `/api/clusters/{name}/nodes` never decompresses the resources section.
+
+### History: three tiers and a change log
+
+Everything above is the state as of the last sweep.
+The history keys are the exception, and they are what answers "was it like this yesterday?".
+
+**Snapshots are tiered by time, not capped by row count.**
+A trend question asks for a span, and how many rows a span holds is a consequence of the sweep interval, not something a caller should have to know.
+So each tier is trimmed by its own window: every sweep for two days, every hour for three months, every day for two years.
+`SNAPSHOT_RETENTION` remains only as a safety net on the per-sweep tier, so a pathologically short sweep interval cannot grow one cluster without bound.
+
+The rollup rules are in `data-layer/app/store/history.py` and are chosen per field, because a mean and a max say different things:
+
+| Field group | Rule | Why |
+|---|---|---|
+| Counters (`crashloops`, `image_pull_errors`, `oom_killed`, `pending_pods`, `pod_issues`, `warning_events`, `checks_failed`, `operators_degraded`, `restarts_total`, `certs_expiring_total`) | max over the bucket | A ten-minute spike must survive into the daily row; an average would hide it. |
+| Gauges (`health_score`, `overall_status`, `ocp_version`, `nodes_total`, `nodes_ready`, `pods_running`, `applications_total`, ...) | last in the bucket | "What was it on Tuesday" means where it ended up. |
+| Utilization (`cpu_usage`, `memory_usage`) | mean, plus `cpu_usage_max` / `memory_usage_max` | Capacity planning wants the typical value and the peak. A mean alone makes every cluster look idle. |
+| Name lists (`checks_failed_names`, `checks_warned_names`) | union | "Which checks failed at any point today" is the useful question. |
+| `events_by_reason` | max per reason, top 10 kept | Each sweep re-counts the same events, so summing would multiply them by the sweep rate. |
+| `upgrading` | true if true anywhere in the bucket | An upgrade that starts and finishes inside one day still happened that day. |
+
+Rolling hourly rows into a daily one applies the same rules, with the mean weighted by each row's `samples`, so a daily mean is the true mean of the raw samples and not a mean of means.
+Every row carries `resolution` and `samples`, so a reader can always tell a rollup from a sweep and how much is behind it.
+
+The current bucket of each coarse tier is **provisional**: it is written as soon as the first sample of the hour or day lands, and recomputed when the bucket closes.
+A question about the last few minutes belongs to the per-sweep tier, which is exact.
+
+**Memory at 800 clusters**, at roughly 300 bytes per row:
+
+| Tier | Rows per cluster | Rows at 800 clusters | Approximate memory |
+|---|---|---|---|
+| sweep (48h at a 2-minute interval) | 1,440 | 1.15M | ~350 MB |
+| hourly (90 days) | 2,160 | 1.73M | ~520 MB |
+| daily (2 years) | 730 | 0.58M | ~175 MB |
+
+That is roughly 1 GB of history for the whole estate, against which the coarse tiers are what make the two-year window affordable at all: storing two years of sweeps would be 500x the daily tier.
+Shorten `SNAPSHOT_HOURLY_DAYS` first if that budget is too large; it is the biggest of the three.
+
+**Changes are a stream, not a ZSET**, because they are an append-only log with no natural key and `XADD MAXLEN ~` trims in whole nodes without a read.
+The entry id is Redis's own (`*`), and the record's `at` field is the truth about when the change happened, which is what a windowed read filters on.
+Change kinds are a fixed vocabulary: `version`, `status`, `check`, `operator`, `nodes`, `namespace`, `application`, `upgrade`, `reachability`.
+Two rules keep the log honest: a cluster seen for the first time records nothing (everything would read as "appeared"), and an unreachable sweep records only its reachability, because its sections are empty and every check would otherwise look recovered.
 
 ## Fleet keys (hash tag `{fleet}`)
 
@@ -63,10 +109,14 @@ Every other kind (`configmaps`, `secrets`, `services`, `ingresses`, `networkpoli
 
 ## Write protocol (one cluster)
 
-1. Assemble the new summary hash, the ten section blobs, the snapshot, and the list of fleet-index contributions.
-2. Read the previous ledger.
-3. In one `MULTI`: reverse every ledger entry (`SREM` / `HDEL` / `ZREM` / `HINCRBY -1`), write the summary (`DEL` + `HSET`), write the sections, `ZADD` the snapshot and `ZREMRANGEBYRANK` to retention, apply every new contribution, write the new ledger, `SADD` the cluster into `odl:{fleet}:clusters`, `EXPIRE` all per-cluster keys to `REDIS_TTL_SECONDS`, `EXEC`.
-4. A cluster that is unreachable is still written (summary with `reachable=false`, empty sections) so it stays visible; its previous fleet contributions are removed.
+1. Assemble the new summary hash, the ten section blobs, the snapshot row, and the list of fleet-index contributions.
+2. Read, in one pipeline, everything this write compares itself against: the ledger, the previous summary, the newest per-sweep row, the newest hourly row, whether the current hour and day buckets already exist, and the previous `operators` section.
+   The previous application namespaces are not read: they are recovered from the ledger, which already records the namespace-class and per-application set members this cluster published, so a large namespaces section is never decompressed just to notice that a namespace appeared.
+3. Decide what to roll up, and diff the summary against the previous one to produce change records.
+   When an hour or a day has closed, a second pipelined read fetches that bucket's source rows.
+   At a two-minute sweep that happens once an hour per cluster; the steady-state write does one read pipeline and one write pipeline.
+4. In one `MULTI`: reverse every ledger entry (`SREM` / `HDEL` / `ZREM` / `HINCRBY -1`), write the summary (`DEL` + `HSET`), write the sections, `ZADD` the snapshot, replace each recomputed hourly / daily bucket (`ZREMRANGEBYSCORE` on the bucket score, then `ZADD`), `ZREMRANGEBYSCORE` each tier to its window, `ZREMRANGEBYRANK` the per-sweep tier to `SNAPSHOT_RETENTION`, `XADD` every change record, apply every new contribution, write the new ledger, `SADD` the cluster into `odl:{fleet}:clusters`, `EXPIRE` all per-cluster keys to `REDIS_TTL_SECONDS`, `EXEC`.
+5. A cluster that is unreachable is still written (summary with `reachable=false`, empty sections) so it stays visible; its previous fleet contributions are removed and the only change record it produces is its reachability.
 
 Deleting a cluster (`prune_vanished`) reverses its ledger and deletes its keys in one `MULTI`.
 At the end of a sweep the refcount hashes (`idx:ops`, `idx:images`) are swept of entries at or below zero, and `idx:image:names` loses the same fields.
@@ -78,7 +128,9 @@ At the end of a sweep the refcount hashes (`idx:ops`, `idx:images`) are swept of
 | Fleet overview, health by dimension, versions, capacity | `SMEMBERS clusters` then pipelined `HGETALL summary` (one round trip). |
 | List clusters with filters | `SINTER` of the dimension sets, then pipelined `HGETALL`. |
 | Cluster detail / nodes / namespaces / workloads / resources | `HGETALL summary` + `GET` of the needed sections. |
-| Timeline | `ZRANGE snapshots -N -1`. |
+| Timeline (last N sweeps) | `ZRANGE snapshots -N -1`. |
+| Timeline over a window, at any tier | `ZRANGEBYSCORE snapshots[:hourly|:daily] <since> <until>`; fleet-wide, one pipelined call per cluster (`snapshots_across`). |
+| Change log | `XREVRANGE changes + - COUNT n`, filtered on each record's `at`; fleet-wide, one pipelined `XREVRANGE` per cluster, merged newest first. |
 | Applications (fleet) | `SMEMBERS idx:ns:class:application` (or team / app set) + `HMGET ns`. |
 | Blast radius | `SMEMBERS idx:cluster:version:X`, `HGETALL idx:op:X`, `HGETALL res:clusterserviceversions`, `HSCAN idx:images MATCH`, `SMEMBERS idx:image:<sha1>`; then `HGETALL summary` and the namespaces of the matched clusters. |
 | Certificates | `ZRANGEBYSCORE idx:cert:expires` + `HMGET certs`. |
@@ -95,4 +147,5 @@ The design choices that matter at that scale:
 - Sections are compressed blobs, so the dominant cost (inventory rows) is ~10x smaller than one-key-per-object and one round trip per section.
 - Fleet hashes for `ns`, `nodes`, `routes`, `events` reach 10^5 to 10^6 entries. Reads that `HGETALL` them must paginate (`HSCAN`) and endpoints that list them fleet-wide need `limit` + cursor parameters; the counters come from `SCARD` / `HLEN` / `ZCOUNT`, never from loading the hash.
 - The collector is sharded by hub; each shard writes its own clusters' keys. Fleet indexes are shared and only ever touched through ledgers, so shards never conflict.
-- History belongs in the per-cluster ZSET only at cluster granularity. Per-namespace utilization history is a metrics-plane question and is not stored in Redis.
+- History belongs in the per-cluster ZSETs only at cluster granularity, and is tiered by time (see above), so two years of it costs about 1 GB across the estate. Per-namespace utilization history is a metrics-plane question and is not stored in Redis.
+- History rolls up inside the write that notices the boundary, not in a background job. Nothing has to be scheduled, a collector that stops leaves the tiers consistent, and the extra read happens once an hour per cluster rather than once per sweep.

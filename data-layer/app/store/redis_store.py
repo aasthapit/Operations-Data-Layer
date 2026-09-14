@@ -39,7 +39,9 @@ import redis
 
 from ..collector.parsers import split_image
 from ..settings import settings
+from . import history
 from .base import CLUSTER_DIMENSIONS, DATETIME_FIELDS, FLEET_INDEXED_KINDS, SECTIONS, Row, Store
+from .history import DAY, HOUR, SWEEP
 
 log = logging.getLogger("odl.store")
 
@@ -49,6 +51,10 @@ SEP = "|"
 
 # How many collection runs are kept in the `runs` list.
 RUNS_KEPT = 200
+
+# How many change records are kept per cluster (XADD MAXLEN ~, so Redis trims
+# on whole stream nodes and the real length drifts a little above this).
+CHANGES_KEPT = 5000
 
 # Kinds whose rows may carry certificate expiry.
 _CERT_KEYS = ("secrets", "configmaps")
@@ -151,6 +157,77 @@ def _epoch(value) -> float | None:
     return dt.timestamp() if dt else None
 
 
+# --------------------------------------------------------------------------- #
+# history helpers
+# --------------------------------------------------------------------------- #
+def _scored(entries) -> tuple[Row | None, datetime | None]:
+    """The single (member, score) a `ZREVRANGE key 0 0 WITHSCORES` returns."""
+    if not entries:
+        return None, None
+    member, score = entries[0]
+    return _row(json.loads(member)), datetime.fromtimestamp(float(score), UTC)
+
+
+def _snapshot_rows(members) -> list[Row]:
+    """ZSET members back into snapshot rows (with `snapshot_at` as a datetime)."""
+    return [_row(json.loads(member)) for member in (members or [])]
+
+
+def _bucket_range(when: datetime, resolution: str) -> tuple[float, float]:
+    """The ZCOUNT bounds that ask "does this bucket exist?"."""
+    score = history.bucket_start(when, resolution).timestamp()
+    return score, score
+
+
+def _range_of(start: datetime, resolution: str) -> tuple[float, str]:
+    """The ZRANGEBYSCORE bounds of one bucket: inclusive start, exclusive end."""
+    return start.timestamp(), f"({history.bucket_end(start, resolution).timestamp()}"
+
+
+def _bound(value) -> float | None:
+    """A `since` / `until` argument as epoch seconds: a datetime, an epoch
+    number or an ISO 8601 string, all of which an API query string can carry."""
+    if value is None:
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    return _epoch(value)
+
+
+_EPOCH_START = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def _since(rows: list[Row], since) -> list[Row]:
+    """Change records at or after `since`.
+
+    Filtered on the record's own `at` rather than on the stream id: the id is
+    assigned by Redis from its clock, and a record's `at` is the instant the
+    sweep is recorded at, which a backfill or a test may set to anything. Only
+    `at` is the truth, and reading `limit` records and filtering them is what a
+    windowed read costs either way.
+    """
+    epoch = _bound(since)
+    if epoch is None:
+        return rows
+    return [row for row in rows if row["at"].timestamp() >= epoch]
+
+
+def _change_row(cluster_name: str, fields: dict) -> Row:
+    """One stream entry back into a change record. Every value is JSON, so an
+    int stays an int and a boolean a boolean."""
+    row = _row({_text(field): json.loads(value) for field, value in fields.items()})
+    row["cluster_name"] = cluster_name
+    if not isinstance(row.get("at"), datetime):
+        row["at"] = _EPOCH_START
+    return row
+
+
+def _application_namespaces(rows: Iterable[dict]) -> dict[str, str | None]:
+    """{namespace: app_name} for the application-class namespaces of one cluster."""
+    return {row["name"]: row.get("app_name") for row in rows
+            if row.get("name") and row.get("ns_class") == "application"}
+
+
 _GLOB_SPECIALS = str.maketrans({c: f"\\{c}" for c in "*?[]\\"})
 
 
@@ -229,6 +306,9 @@ _OPERATOR_INDEX_FIELDS = ("version", "available", "progressing", "degraded", "cr
 # --------------------------------------------------------------------------- #
 # keys
 # --------------------------------------------------------------------------- #
+_SNAPSHOT_SUFFIX = {SWEEP: "snapshots", HOUR: "snapshots:hourly", DAY: "snapshots:daily"}
+
+
 class Keys:
     """Key builders. Per-cluster keys share the hash tag `{c:<name>}` and fleet
     keys `{fleet}`, so a cluster's own write is single-slot under Redis Cluster."""
@@ -247,8 +327,13 @@ class Keys:
     def section(self, name: str, section: str) -> str:
         return f"{self.cluster(name)}:sec:{section}"
 
-    def snapshots(self, name: str) -> str:
-        return f"{self.cluster(name)}:snapshots"
+    def snapshots(self, name: str, resolution: str = SWEEP) -> str:
+        """The history ZSET of one tier. The per-sweep tier keeps the original
+        key name, so nothing that already reads it has to change."""
+        return f"{self.cluster(name)}:{_SNAPSHOT_SUFFIX[resolution]}"
+
+    def changes(self, name: str) -> str:
+        return f"{self.cluster(name)}:changes"
 
     def ledger(self, name: str) -> str:
         return f"{self.cluster(name)}:ledger"
@@ -263,8 +348,12 @@ class Keys:
     def expiring_keys(self, name: str) -> list[str]:
         """The keys REDIS_TTL_SECONDS applies to. The ledger is deliberately not
         one of them: it is what lets `prune_vanished` unpublish an expired
-        cluster's fleet-index members, so it must outlive the data it describes."""
-        return [self.summary(name), self.snapshots(name),
+        cluster's fleet-index members, so it must outlive the data it describes.
+
+        History expires with the cluster it describes: a cluster nobody collects
+        any more is gone, and so is its past."""
+        return [self.summary(name), self.changes(name),
+                *(self.snapshots(name, r) for r in history.RESOLUTIONS),
                 *(self.section(name, s) for s in SECTIONS)]
 
     # -- fleet
@@ -291,7 +380,13 @@ class Keys:
         return f"{self._fleet}:ns"
 
     def ns_app(self, app: str) -> str:
-        return f"{self._fleet}:idx:ns:app:{app}"
+        return f"{self.ns_app_prefix}{app}"
+
+    @property
+    def ns_app_prefix(self) -> str:
+        """The prefix of every per-application namespace set, so a ledger entry
+        can be read back as "this namespace belonged to that application"."""
+        return f"{self._fleet}:idx:ns:app:"
 
     def ns_team(self, team: str) -> str:
         return f"{self._fleet}:idx:ns:team:{team}"
@@ -372,18 +467,28 @@ class RedisStore(Store):
     """The store contract over a single Redis (or Redis Cluster) endpoint."""
 
     def __init__(self, client: redis.Redis, prefix: str = "odl", ttl_seconds: int = 0,
-                 snapshot_retention: int = 500):
+                 snapshot_retention: int = 2000, raw_hours: int = 48,
+                 hourly_days: int = 90, daily_days: int = 730):
         self.r = client
         self.keys = Keys(prefix)
         self.ttl_seconds = max(0, int(ttl_seconds))
+        # The per-sweep tier is bounded twice: by its time window, which is the
+        # contract, and by this row cap, which is the safety net against a very
+        # short sweep interval.
         self.snapshot_retention = max(1, int(snapshot_retention))
+        self.windows = {SWEEP: max(1, int(raw_hours)) * 3600,
+                        HOUR: max(1, int(hourly_days)) * 86400,
+                        DAY: max(1, int(daily_days)) * 86400}
 
     @classmethod
     def from_settings(cls) -> RedisStore:
         client = redis.Redis.from_url(settings.redis_url, decode_responses=False)
         return cls(client, prefix=settings.redis_prefix,
                    ttl_seconds=settings.redis_ttl_seconds,
-                   snapshot_retention=settings.snapshot_retention)
+                   snapshot_retention=settings.snapshot_retention,
+                   raw_hours=settings.snapshot_raw_hours,
+                   hourly_days=settings.snapshot_hourly_days,
+                   daily_days=settings.snapshot_daily_days)
 
     def ping(self) -> bool:
         """Liveness, used by the API's startup wait."""
@@ -391,26 +496,40 @@ class RedisStore(Store):
 
     # ------------------------------------------------------------------ write
     def persist_cluster(self, hub_name: str, collected: dict, checks: list[dict],
-                        overall: str, score: int, counts: dict) -> None:
+                        overall: str, score: int, counts: dict,
+                        now: datetime | None = None) -> None:
         name = collected["name"]
         _member(name)                       # fail fast on a name we cannot index
-        now = datetime.now(UTC)
+        now = now or datetime.now(UTC)
         k = self.keys
 
         summary = _summary_row(name, hub_name, collected, overall, score, counts, now)
         sections = _section_rows(name, collected, checks)
-        snapshot = _snapshot_row(name, summary, collected, now)
+        snapshot = history.snapshot_row(name, summary, collected, checks, now)
         entries, image_names = self._contributions(name, summary, sections)
 
-        previous = _unpack(self.r.get(k.ledger(name))) or []
+        # One pipelined read of everything this write has to compare against:
+        # the ledger to reverse, the previous summary and history to diff, the
+        # previous operators to see which became degraded.
+        state = self._previous_state(name, now)
+        previous = state["ledger"]
+        changes = history.diff_changes(
+            at=now, previous_summary=state["summary"], summary=summary,
+            previous_checks_failed=(state["snapshot"] or {}).get("checks_failed_names") or (),
+            checks_failed=snapshot["checks_failed_names"],
+            previous_degraded_operators=state["degraded_operators"],
+            degraded_operators=[o["name"] for o in sections["operators"] if o.get("degraded")],
+            previous_namespaces=state["namespaces"],
+            namespaces=_application_namespaces(sections["namespaces"]))
+        rollups = self._rollups(name, snapshot, state, now)
+
         pipe = self.r.pipeline(transaction=True)
         _reverse(pipe, previous)
         pipe.delete(k.summary(name))
         pipe.hset(k.summary(name), mapping={f: _dumps(v) for f, v in summary.items()})
         for section, rows in sections.items():
             pipe.set(k.section(name, section), _pack(rows))
-        pipe.zadd(k.snapshots(name), {_dumps(snapshot): now.timestamp()})
-        pipe.zremrangebyrank(k.snapshots(name), 0, -self.snapshot_retention - 1)
+        self._write_history(pipe, name, snapshot, rollups, changes, now)
         _apply(pipe, entries)
         if image_names:
             # Not ledgered: the lowercase field is shared by every cluster using
@@ -423,6 +542,162 @@ class RedisStore(Store):
                 pipe.expire(key, self.ttl_seconds)
         pipe.incr(k.generation())        # any write invalidates the computed fleet views
         pipe.execute()
+
+    # ---------------------------------------------------------------- history
+    def _previous_state(self, name: str, now: datetime) -> dict:
+        """Everything the next write has to compare itself against, in one
+        pipelined read.
+
+        What it reads, and nothing more: the ledger (to reverse), the previous
+        summary (what changed), the newest per-sweep row (which hour is
+        finished, and which checks were failing), the newest hourly row (which
+        day is finished), whether the current hour and day buckets already
+        exist, and the previous operators section (which operators were
+        degraded). The previous *application namespaces* come out of the ledger
+        itself - it already records the namespace-class and per-application set
+        members this cluster published - so a large namespaces section is never
+        decompressed just to notice that a namespace appeared.
+        """
+        k = self.keys
+        pipe = self.r.pipeline(transaction=False)
+        pipe.get(k.ledger(name))
+        pipe.hgetall(k.summary(name))
+        pipe.zrevrange(k.snapshots(name, SWEEP), 0, 0, withscores=True)
+        pipe.zrevrange(k.snapshots(name, HOUR), 0, 0, withscores=True)
+        pipe.zcount(k.snapshots(name, HOUR), *_bucket_range(now, HOUR))
+        pipe.zcount(k.snapshots(name, DAY), *_bucket_range(now, DAY))
+        pipe.get(k.section(name, "operators"))
+        (ledger, summary, newest_sweep, newest_hour,
+         has_hour, has_day, operators) = pipe.execute()
+
+        ledger = _unpack(ledger) or []
+        row, at = _scored(newest_sweep)
+        _, hour_at = _scored(newest_hour)
+        return {
+            "ledger": ledger,
+            "summary": _summary(summary),
+            "snapshot": row,
+            "snapshot_at": at,
+            "hourly_at": hour_at,
+            "has_hour": bool(has_hour),
+            "has_day": bool(has_day),
+            "degraded_operators": [o["name"] for o in (_unpack(operators) or [])
+                                   if o.get("degraded") and o.get("name")],
+            "namespaces": self._ledgered_namespaces(name, ledger),
+        }
+
+    def _ledgered_namespaces(self, name: str, ledger: list) -> dict[str, str | None]:
+        """The application namespaces the previous write published, and the
+        application each belonged to, read back out of the ledger."""
+        k = self.keys
+        class_key, app_prefix = k.ns_class("application"), k.ns_app_prefix
+        namespaces: dict[str, str | None] = {}
+        apps: dict[str, str] = {}
+        for entry in ledger:
+            if len(entry) < 3 or entry[0] != "sadd":
+                continue
+            key, member = str(entry[1]), entry[2]
+            parts = _split(member, 2)
+            if not parts or parts[0] != name:
+                continue
+            namespace = parts[1]
+            if key == class_key:
+                namespaces.setdefault(namespace, None)
+            elif key.startswith(app_prefix):
+                apps[namespace] = key[len(app_prefix):]
+        return {ns: apps.get(ns) for ns in namespaces}
+
+    def _rollups(self, name: str, snapshot: dict, state: dict,
+                 now: datetime) -> list[tuple[str, float, dict]]:
+        """The coarser rows this write must (re)compute, as (resolution, score, row).
+
+        An hourly row is written when the hour the previous sweep fell in is
+        over - that hour is now complete and will never gain another sample -
+        and when the current hour has no row yet, so a fresh cluster is
+        queryable at hourly resolution immediately instead of in an hour's
+        time. The same two rules take hourly rows into daily ones, plus one
+        more: whenever an hourly row inside today is (re)built, today's daily
+        row is rebuilt from it, so "today" never answers from a row frozen at
+        midnight. A bucket is always rewritten rather than appended to (see
+        `_write_history`), so recomputing an incomplete bucket is harmless.
+
+        The current bucket of each coarse tier is therefore provisional: it
+        holds the samples taken so far and is recomputed when the bucket
+        closes. A question about the last few minutes belongs to the per-sweep
+        tier, which is exact.
+        """
+        hours = self._buckets_to_build(state["snapshot_at"], state["has_hour"], now, HOUR)
+        days = self._buckets_to_build(state["hourly_at"], state["has_day"], now, DAY)
+        today = history.bucket_start(now, DAY)
+        if hours and today not in days:
+            days.append(today)
+        if not hours and not days:
+            return []
+
+        # One pipelined read of the source rows of every bucket in play; at a
+        # two-minute sweep this happens once an hour per cluster.
+        pipe = self.r.pipeline(transaction=False)
+        for start in hours:
+            pipe.zrangebyscore(self.keys.snapshots(name, SWEEP),
+                               *_range_of(start, HOUR))
+        for start in days:
+            pipe.zrangebyscore(self.keys.snapshots(name, HOUR), *_range_of(start, DAY))
+        results = pipe.execute()
+
+        out: list[tuple[str, float, dict]] = []
+        built: list[dict] = []
+        for start, raw in zip(hours, results[:len(hours)], strict=True):
+            rows = _snapshot_rows(raw)
+            if start == history.bucket_start(now, HOUR):
+                rows.append(snapshot)        # the row this write is about to add
+            row = history.aggregate_snapshots(rows, start, HOUR)
+            if row:
+                built.append(row)
+                out.append((HOUR, start.timestamp(), row))
+        for start, raw in zip(days, results[len(hours):], strict=True):
+            end = history.bucket_end(start, DAY)
+            fresh = [r for r in built if start <= r["snapshot_at"] < end]
+            stored = [r for r in _snapshot_rows(raw)
+                      if not any(f["snapshot_at"] == r.get("snapshot_at") for f in fresh)]
+            row = history.aggregate_snapshots(stored + fresh, start, DAY)
+            if row:
+                out.append((DAY, start.timestamp(), row))
+        return out
+
+    @staticmethod
+    def _buckets_to_build(previous_at: datetime | None, has_current: bool,
+                          now: datetime, resolution: str) -> list[datetime]:
+        current = history.bucket_start(now, resolution)
+        buckets = []
+        if previous_at is not None:
+            finished = history.bucket_start(previous_at, resolution)
+            if finished < current:
+                buckets.append(finished)
+        if not has_current:
+            buckets.append(current)
+        return buckets
+
+    def _write_history(self, pipe, name: str, snapshot: dict,
+                       rollups: list[tuple[str, float, dict]], changes: list[dict],
+                       now: datetime) -> None:
+        """Append the sweep, replace the coarser buckets, trim every tier, and
+        record what changed. All inside the caller's transaction."""
+        k = self.keys
+        pipe.zadd(k.snapshots(name, SWEEP), {_dumps(snapshot): now.timestamp()})
+        for resolution, score, row in rollups:
+            # A bucket has exactly one row: the member is the JSON, so replacing
+            # it means clearing the score first rather than ZADDing beside it.
+            pipe.zremrangebyscore(k.snapshots(name, resolution), score, score)
+            pipe.zadd(k.snapshots(name, resolution), {_dumps(row): score})
+        for resolution, window in self.windows.items():
+            pipe.zremrangebyscore(k.snapshots(name, resolution), "-inf",
+                                  f"({now.timestamp() - window}")
+        # The row cap applies to the per-sweep tier only; the coarser tiers are
+        # bounded by their own windows and by arithmetic (24 rows a day, 365 a year).
+        pipe.zremrangebyrank(k.snapshots(name, SWEEP), 0, -self.snapshot_retention - 1)
+        for change in changes:
+            pipe.xadd(k.changes(name), {f: _dumps(v) for f, v in change.items()},
+                      maxlen=CHANGES_KEPT, approximate=True)
 
     def delete_cluster(self, name: str) -> None:
         k = self.keys
@@ -734,9 +1009,64 @@ class RedisStore(Store):
             out[name] = _rows(_unpack(blob))
         return out
 
-    def snapshots(self, name: str, limit: int = 100) -> list[Row]:
-        raw = self.r.zrange(self.keys.snapshots(name), -max(1, limit), -1)
-        return [_row(json.loads(item)) for item in raw]
+    # ---------------------------------------------------------------- history
+    def snapshots(self, name: str, limit: int = 100, resolution: str = SWEEP,
+                  since=None, until=None) -> list[Row]:
+        raw = self._snapshot_members(name, limit, resolution, since, until)
+        return _snapshot_rows(raw)
+
+    def snapshots_across(self, names: Iterable[str], resolution: str = SWEEP,
+                         since=None, until=None,
+                         limit_per_cluster: int = 2000) -> dict[str, list[Row]]:
+        wanted = sorted(names) if names is not None else self.cluster_names()
+        if not wanted:
+            return {}
+        pipe = self.r.pipeline(transaction=False)
+        for name in wanted:
+            self._snapshot_members(name, limit_per_cluster, resolution, since, until, pipe)
+        out = {}
+        for name, raw in zip(wanted, pipe.execute(), strict=True):
+            rows = _snapshot_rows(raw)
+            if rows:
+                out[name] = rows[-limit_per_cluster:] if limit_per_cluster else rows
+        return out
+
+    def _snapshot_members(self, name: str, limit: int, resolution: str,
+                          since, until, pipe=None):
+        """The raw ZSET members of one tier, oldest first.
+
+        Without a window this is the last `limit` rows (`ZRANGE key -N -1`);
+        with one it is the window (`ZRANGEBYSCORE`), trimmed to `limit` by the
+        caller - Redis has no "last N of a score range" in one command and the
+        windows a trend asks for are bounded by the tier's own retention.
+        """
+        client = pipe if pipe is not None else self.r
+        key = self.keys.snapshots(name, resolution)
+        if since is None and until is None:
+            return client.zrange(key, -max(1, limit), -1)
+        return client.zrangebyscore(key, _lo(_bound(since)), _hi(_bound(until)))
+
+    def changes(self, name: str, limit: int = 200, since=None) -> list[Row]:
+        """The cluster's change log, newest first (see `docs/redis-keyspace.md`)."""
+        entries = self.r.xrevrange(self.keys.changes(name), count=max(1, limit))
+        return _since([_change_row(name, fields) for _id, fields in entries], since)
+
+    def changes_across(self, names: Iterable[str] | None = None, since=None,
+                       limit_per_cluster: int = 200) -> list[Row]:
+        """The fleet's change log, newest first. Each cluster contributes at
+        most `limit_per_cluster` records, so one noisy cluster cannot crowd the
+        others out of the answer."""
+        wanted = sorted(names) if names is not None else self.cluster_names()
+        if not wanted:
+            return []
+        pipe = self.r.pipeline(transaction=False)
+        for name in wanted:
+            pipe.xrevrange(self.keys.changes(name), count=max(1, limit_per_cluster))
+        rows = [_change_row(name, fields)
+                for name, entries in zip(wanted, pipe.execute(), strict=True)
+                for _id, fields in entries]
+        rows.sort(key=lambda r: (r["at"], r.get("cluster_name") or ""), reverse=True)
+        return _since(rows, since)
 
     # ----------------------------------------------------------- fleet views
     def namespaces(self, ns_class: str | None = None, team: str | None = None,
@@ -954,27 +1284,6 @@ def _section_rows(name: str, collected: dict, checks: list[dict]) -> dict[str, l
                          **{f: v for f, v in row.items() if f in allowed}}
                         for row in (items or [])]
     return out
-
-
-def _snapshot_row(name: str, summary: dict, collected: dict, now: datetime) -> dict:
-    cap = collected.get("capacity") or {}
-    return {
-        "cluster_name": name,
-        "overall_status": summary["overall_status"],
-        "health_score": summary["health_score"],
-        "checks_passed": summary["checks_passed"],
-        "checks_warned": summary["checks_warned"],
-        "checks_failed": summary["checks_failed"],
-        "ocp_version": summary["ocp_version"],
-        "upgrading": summary["upgrading"],
-        "cpu_usage": cap.get("cpu_usage"),
-        "cpu_allocatable": cap.get("cpu_allocatable"),
-        "memory_usage": cap.get("memory_usage"),
-        "memory_allocatable": cap.get("memory_allocatable"),
-        "pods_running": summary["pods_running"],
-        "pod_issues": summary["pod_issues_total"],
-        "snapshot_at": now,
-    }
 
 
 def _summary(raw: dict) -> Row | None:

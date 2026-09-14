@@ -1,16 +1,18 @@
 """
 One cluster at a time: the fleet list, the full detail document, each detail
-section on its own, and the health/utilization history.
+section on its own, the health/utilization history, and the change log.
 
 Every section is a separate key in the store, so an endpoint reads only the
 section it answers from (`/nodes` never decompresses the inventory) and filters
 in process.
 """
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..collector import runner
 from ..serialize import (
-    _iso,
+    change_dict,
     check_dict,
     cluster_detail,
     cluster_summary,
@@ -19,12 +21,21 @@ from ..serialize import (
     operator_dict,
     pod_issue_dict,
     resource_dict,
+    snapshot_dict,
     workload_dict,
 )
 from ..store import Row, Store
 from .admin import require_collector
 from .applications import application_rows
-from .deps import get_store_dep, order_key
+from .deps import (
+    KIND_DOC,
+    RESOLUTION_DOC,
+    get_store_dep,
+    order_key,
+)
+from .deps import (
+    resolution as resolution_of,
+)
 
 router = APIRouter(prefix="/api/clusters", tags=["clusters"])
 
@@ -182,24 +193,31 @@ def get_resources(name: str, store: Store = Depends(get_store_dep),
 
 @router.get("/{name}/timeline")
 def get_timeline(name: str, limit: int = 100,
+                 resolution: str = Query("sweep", description=RESOLUTION_DOC),
+                 since: datetime | None = None, until: datetime | None = None,
                  store: Store = Depends(get_store_dep)):
-    # Snapshots come back oldest first, which is the order a chart wants.
-    return {
-        "cluster": name,
-        "snapshots": [{
-            "at": _iso(r.snapshot_at),
-            "overall_status": r.overall_status,
-            "health_score": r.health_score,
-            "passed": r.checks_passed,
-            "warned": r.checks_warned,
-            "failed": r.checks_failed,
-            "ocp_version": r.ocp_version,
-            "upgrading": r.upgrading,
-            "cpu_used_cores": r.cpu_usage,
-            "cpu_allocatable_cores": r.cpu_allocatable,
-            "memory_used_bytes": r.memory_usage,
-            "memory_allocatable_bytes": r.memory_allocatable,
-            "pods_running": r.pods_running,
-            "pod_issues": r.pod_issues,
-        } for r in store.snapshots(name, limit)],
-    }
+    """One cluster's history, oldest first (the order a chart wants).
+
+    `resolution` picks the tier: every sweep for the last couple of days, one
+    row per hour for months, one row per day for years. `since` / `until` are
+    ISO 8601 instants; without them the last `limit` rows come back.
+    """
+    rows = store.snapshots(name, limit, resolution=resolution_of(resolution),
+                           since=since, until=until)
+    return {"cluster": name, "resolution": resolution, "count": len(rows),
+            "snapshots": [snapshot_dict(r) for r in rows]}
+
+
+@router.get("/{name}/changes")
+def get_changes(name: str, limit: int = Query(200, le=2000),
+                since: datetime | None = None,
+                kind: str | None = Query(None, description=KIND_DOC),
+                store: Store = Depends(get_store_dep)):
+    """What changed on this cluster, newest first: version and status moves,
+    checks that started failing or recovered, operators that degraded, nodes
+    and namespaces coming and going, upgrades, reachability."""
+    rows = store.changes(name, limit=limit, since=since)
+    if kind:
+        rows = [r for r in rows if r.kind == kind]
+    return {"cluster": name, "count": len(rows),
+            "changes": [change_dict(r) for r in rows]}

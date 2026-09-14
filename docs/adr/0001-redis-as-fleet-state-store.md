@@ -90,6 +90,7 @@ Negative and mitigations:
 - **Hand-maintained indexes are a correctness burden.** The ledger makes removal exact and the store tests assert that stale members disappear; `finalize_sweep` cleans refcounts. If RediSearch becomes available, the fleet resource hashes and the image / namespace lookups can move to declared indexes with no API change.
 - **Filtering happens in process for section reads.** A cluster with 16k resources decompresses ~0.5 MB and filters in Python in a few ms; that is acceptable per request and bounded by cluster size, not fleet size.
 - **History is capped.** `SNAPSHOT_RETENTION` per cluster (default 500 sweeps) in a ZSET; longer retention or per-namespace history belongs in the metrics plane or an object-store export, not in Redis.
+  (Superseded: history is now three time-trimmed tiers per cluster - every sweep for `SNAPSHOT_RAW_HOURS`, hourly for `SNAPSHOT_HOURLY_DAYS`, daily for `SNAPSHOT_DAILY_DAYS` - plus a change-log stream, which buys two years of cluster-level trend at about 1 GB for 800 clusters. `SNAPSHOT_RETENTION` remains only as a row cap on the per-sweep tier. See [redis-keyspace.md](../redis-keyspace.md). Per-namespace history is still out of scope.)
 - **The patching system of record still uses Postgres.** It is a separate service with an audit log; moving it needs its own decision (Redis Streams for the append-only audit, HASHes for jobs, AOF persistence, since it is a system of record and not a cache).
 
 ## Verification

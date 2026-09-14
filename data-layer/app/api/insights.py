@@ -6,6 +6,10 @@ The kinds that carry fleet questions (quotas, MCPs, CSVs, storage, routes,
 events, role bindings) have a fleet index each, so they are one hash read plus
 in-process filtering. The counters on `/summary` come from HLEN / SCARD / ZCOUNT
 and never load a row.
+
+`/changes` is the exception to "computed over the inventory": it reads the
+per-cluster change logs the collector appends to on every sweep, so it answers
+what happened rather than what is.
 """
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
@@ -13,11 +17,11 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, Query
 
 from ..manifest import get_manifest
-from ..serialize import pod_issue_dict, resource_dict
+from ..serialize import change_dict, pod_issue_dict, resource_dict
 from ..store import FLEET_INDEXED_KINDS, Store
 from .applications import application_rows
 from .cache import cached
-from .deps import get_store_dep, order_key
+from .deps import KIND_DOC, get_store_dep, order_key
 
 router = APIRouter(prefix="/api/insights", tags=["insights"])
 
@@ -287,6 +291,34 @@ def events(store: Store = Depends(get_store_dep), cluster: str | None = None,
     for e in rows:
         by_reason[e.get("reason")] += 1
     return {"count": len(rows), "by_reason": dict(by_reason), "events": rows[:limit]}
+
+
+@router.get("/changes")
+def changes(store: Store = Depends(get_store_dep), cluster: str | None = None,
+            kind: str | None = Query(None, description=KIND_DOC),
+            since: datetime | None = Query(None, description="ISO 8601; default 24 hours ago"),
+            limit: int = Query(200, le=2000)):
+    """What changed across the fleet, newest first.
+
+    The change log is what a timeline cannot show: a version that moved, a
+    check that started failing, an operator that degraded, a namespace that
+    appeared. Each cluster contributes at most `limit` records before the merge,
+    so one noisy cluster cannot crowd the others out of the answer.
+
+    `by_kind` counts the whole window before `kind` and `limit` are applied, so
+    it stays a facet of "what happened" rather than of what was returned.
+    """
+    since = since or (datetime.now(UTC) - timedelta(days=1))
+    rows = store.changes_across([cluster] if cluster else None, since=since,
+                                limit_per_cluster=limit)
+    by_kind = defaultdict(int)
+    for r in rows:
+        by_kind[r.kind] += 1
+    if kind:
+        rows = [r for r in rows if r.kind == kind]
+    rows = rows[:limit]
+    return {"since": since.isoformat(), "count": len(rows), "by_kind": dict(by_kind),
+            "changes": [change_dict(r) for r in rows]}
 
 
 @router.get("/images")

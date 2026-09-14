@@ -9,13 +9,19 @@ the same contract; keep the two in step.
 Rows are plain dicts with attribute access (`Row`), carrying the same field
 names the former ORM columns had, so serializers keep working unchanged.
 Datetime-valued fields (`created_at`, `started_at`, `expires_at`,
-`last_synced`, `snapshot_at`, `finished_at`) are restored to timezone-aware
-datetimes on read.
+`last_synced`, `snapshot_at`, `finished_at`, `at`) are restored to
+timezone-aware datetimes on read.
+
+History is the one part of the store that is not "the state as of the last
+sweep": `snapshots` keeps a per-cluster time series at three resolutions and
+`changes` an append-only log of what changed between sweeps. See
+`store/history.py` for the model and `docs/redis-keyspace.md` for the keys.
 """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
+from datetime import datetime
 
 # Per-cluster detail sections. Each is stored as one compressed blob.
 SECTIONS = (
@@ -35,6 +41,7 @@ CLUSTER_DIMENSIONS = ("region", "datacenter", "environment", "hub", "version", "
 
 DATETIME_FIELDS = frozenset({
     "created_at", "started_at", "expires_at", "last_synced", "snapshot_at", "finished_at",
+    "at",
 })
 
 
@@ -70,11 +77,14 @@ class Store(ABC):
 
     @abstractmethod
     def persist_cluster(self, hub_name: str, collected: dict, checks: list[dict],
-                        overall: str, score: int, counts: dict) -> None:
+                        overall: str, score: int, counts: dict,
+                        now: datetime | None = None) -> None:
         """Atomically replace one cluster: summary, every section, its fleet
-        index contributions, and append a health snapshot (trimmed to
-        retention). `collected` is the collector document; `checks` the
-        health-check rows; `counts` has passed/warned/failed."""
+        index contributions, a health snapshot appended to each history tier,
+        and a change record for everything that differs from the last sweep.
+        `collected` is the collector document; `checks` the health-check rows;
+        `counts` has passed/warned/failed. `now` is the instant the sweep is
+        recorded at, which a test or a backfill may supply."""
 
     @abstractmethod
     def update_summary(self, name: str, **fields) -> None:
@@ -171,8 +181,34 @@ class Store(ABC):
         round trip. Each row carries `cluster_name`."""
 
     @abstractmethod
-    def snapshots(self, name: str, limit: int = 100) -> list[Row]:
-        """Health/utilization history, oldest first, last `limit` entries."""
+    def snapshots(self, name: str, limit: int = 100, resolution: str = "sweep",
+                  since=None, until=None) -> list[Row]:
+        """One cluster's history, oldest first.
+
+        `resolution` picks the tier: 'sweep' (every collection, kept hours),
+        'hour' or 'day' (rolled up, kept months and years - see
+        `store/history.py`). Without `since` / `until` the last `limit` rows
+        come back; with them, the rows inside that window. Bounds may be
+        datetimes, epoch seconds or ISO 8601 strings."""
+
+    @abstractmethod
+    def snapshots_across(self, names: Iterable[str], resolution: str = "sweep",
+                         since=None, until=None,
+                         limit_per_cluster: int = 2000) -> dict[str, list[Row]]:
+        """The same history for many clusters in one round trip: cluster name
+        -> rows, oldest first. Clusters with no history are left out."""
+
+    @abstractmethod
+    def changes(self, name: str, limit: int = 200, since=None) -> list[Row]:
+        """One cluster's change log, newest first: rows of
+        {cluster_name, at, kind, subject, before, after, message} where `kind`
+        is one of `history.KINDS`."""
+
+    @abstractmethod
+    def changes_across(self, names: Iterable[str] | None = None, since=None,
+                       limit_per_cluster: int = 200) -> list[Row]:
+        """The fleet's change log, newest first, at most `limit_per_cluster`
+        records per cluster (all known clusters when `names` is None)."""
 
     # ----------------------------------------------------------- fleet views
     @abstractmethod

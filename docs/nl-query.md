@@ -48,8 +48,58 @@ The snapshot is built lazily on the first query and then reused.
 It is dropped when the collector calls `app.query.snapshot.invalidate()` at the end of a sweep, and, as a safety net, whenever the store reports a collection run newer than the one the snapshot was built from.
 `POST /api/query/refresh-snapshot` forces a rebuild.
 
-Building it is one pass over the store: `clusters()`, `hubs()`, `section_across()` for the ten per-cluster sections, `snapshots()` per cluster, `runs()`.
+Building it is one pass over the store: `clusters()`, `hubs()`, `section_across()` for the ten per-cluster sections, `snapshots_across()` once per history tier, `changes_across()`, `runs()`.
 Rows are coerced to the declared column types, packed into Arrow columns, and loaded with `INSERT INTO <table> SELECT ... FROM <arrow>`; JSON columns travel as text and DuckDB casts them, so `json_extract(...)` works without a second encode step.
+
+## Trends: history in SQL
+
+Two of the tables are history rather than current state, and they are what makes "is this getting worse?" a question SQL can answer.
+
+**`health_snapshots`** is the fleet measured over time: health score and status, CPU and memory, and what was going wrong (crash loops, image pull errors, OOM kills, pending pods, container restarts, warning events with their reasons, which checks were failing by name, degraded operators).
+It holds three time series in one table, told apart by `resolution`:
+
+| `resolution` | One row per | Span the snapshot loads | Ask it about |
+|---|---|---|---|
+| `sweep` | collection sweep | the last 6 hours | right now, the last few hours |
+| `hour` | hour | the last 30 days | a day, a week |
+| `day` | day | the last 2 years | a month, a quarter, a year |
+
+The store keeps more than the snapshot loads (48 hours of sweeps, 90 days of hours, 2 years of days); the windows above are what one question is allowed to scan, and they are what keeps a rebuild bounded.
+`GET /api/clusters/{name}/timeline?resolution=&since=&until=` reads the store directly when a question needs to reach further back.
+
+**Every query on `health_snapshots` must filter `resolution`.**
+Without it the same moment is counted once per series, and an aggregate over the table is meaningless.
+The schema says so in the table description, in the column description and in the notes, because it is the one mistake that produces a plausible wrong number rather than an error.
+
+In a rolled-up row the counters are the **worst** value inside the bucket, the gauges are the value at its **end**, and `cpu_usage` / `memory_usage` are the **mean** with the peak beside them in `cpu_usage_max` / `memory_usage_max`.
+So "how bad did it get" is `max()`, "how many at once across the fleet" is `sum()` over one bucket, and neither is a sum over sweeps: the same crash-looping pod is counted again by every sweep.
+`samples` says how many sweeps are behind a row, which is also how you spot the newest bucket still filling up.
+
+**`changes`** is what happened, one row per event: `cluster_name`, `changed_at`, `kind`, `subject`, `before`, `after`, `message`.
+`kind` is a fixed vocabulary of `version`, `status`, `check`, `operator`, `nodes`, `namespace`, `application`, `upgrade`, `reachability`, and `subject` names the thing that changed (the check id, the operator name, the namespace, the target version, or the column name for a scalar).
+`before` and `after` are text, whatever they were recorded as, so `'4.15.30' -> '4.16.7'` and `'4' -> '3'` read the same way.
+The column is `changed_at` rather than `at` because `at` is a reserved word in DuckDB, and a column nobody can write in SQL is not a column.
+
+Two shapes cover most trend questions:
+
+```sql
+-- crash events over time, per hub
+SELECT date_trunc('hour', hs.snapshot_at) AS hour, c.hub_name, sum(hs.crashloops) AS crashloops
+FROM health_snapshots AS hs
+JOIN clusters AS c ON c.name = hs.cluster_name
+WHERE hs.resolution = 'hour' AND hs.snapshot_at >= now() - INTERVAL 24 HOUR
+GROUP BY hour, c.hub_name
+ORDER BY hour;
+
+-- what changed last week
+SELECT cluster_name, changed_at, kind, subject, before, after, message
+FROM changes
+WHERE changed_at >= now() - INTERVAL 7 DAY AND kind = 'version'
+ORDER BY changed_at DESC;
+```
+
+`events_by_reason` is a JSON object (reason to count), so one reason is `CAST(json_extract(events_by_reason, '$.BackOff') AS BIGINT)` and all of them are `json_each(events_by_reason)`.
+`checks_failed_names` is a JSON array: `list_contains(CAST(checks_failed_names AS VARCHAR[]), 'nodes-ready')` tests one, and counting them by name needs `unnest` in a subquery because DuckDB refuses `UNNEST` beside a `GROUP BY`.
 
 ## The guard
 
@@ -79,7 +129,7 @@ It holds three things:
    The descriptions are not garnish: they are the semantics.
    `ns_class`, `key`, `critical` and `status` mean nothing without them.
 2. **Curated notes.**
-   What a newcomer would have to be told before their first query is right: an application is an application-class namespace, `app_name` identifies it across clusters, namespace names are only unique within a cluster, utilization is NULL without metrics, `resources` is filtered by `key` and read through its JSON `summary`, `health_snapshots` is the only history.
+   What a newcomer would have to be told before their first query is right: an application is an application-class namespace, `app_name` identifies it across clusters, namespace names are only unique within a cluster, utilization is NULL without metrics, `resources` is filtered by `key` and read through its JSON `summary`, `health_snapshots` and `changes` are the only history and the first of them must always be filtered by `resolution`.
 3. **Worked examples**, question to SQL, covering the eight shapes people actually ask for.
 
 `schema_text()` renders all of it into the system prompt, which is marked for prompt caching, so every question after the first pays for the question only.
@@ -99,6 +149,10 @@ They are fleet data, which means they are untrusted text: they are labelled as d
 | `POST /api/query/sql` | Run one SELECT yourself. Body `{sql, limit?}`. 400 if the guard refuses it or DuckDB errors, 504 on timeout |
 | `POST /api/query/ask` | Ask a question. Body `{question, limit?}`. Returns the SQL, the explanation, the assumptions, the confidence and the rows. 503 without model credentials, 422 when both attempts fail (the body carries each attempt's SQL and error) |
 | `POST /api/query/refresh-snapshot` | Rebuild the snapshot now |
+
+Both query responses carry `columns` and `column_types` alongside the rows.
+The types are DuckDB's own names (`TIMESTAMP`, `BIGINT`, `DOUBLE`, `VARCHAR`, `BOOLEAN`), and they are what lets a caller pick a rendering: a TIMESTAMP first column with a numeric second one is a time series, two VARCHARs are a table.
+Nothing in the values says which, because JSON has no types and a timestamp arrives as a string.
 
 The MCP server exposes the same three as `ask_fleet`, `run_fleet_sql` and `fleet_schema`.
 Their descriptions tell an agent to prefer the purpose-built tools for questions those already answer, to use SQL for ad-hoc joins and aggregations, and to always show the user the SQL.
@@ -174,7 +228,8 @@ The generation counter in every response says which build answered.
 
 **Rebuild cost grows with the fleet.**
 The whole store is read and loaded on every rebuild, once per sweep.
-On the two-cluster test fixture that is a few milliseconds; at 900 clusters it is a full read of every section blob, and the per-cluster `snapshots()` call becomes 900 round trips.
+On the two-cluster test fixture that is a few milliseconds; at 900 clusters it is a full read of every section blob, plus the three history tiers and the change log (each one pipelined call for the whole fleet, but still hundreds of thousands of rows within the windows above).
+History is the part that grows fastest, so it is the first thing to shorten: the windows live in `HISTORY_WINDOWS` in `app/query/snapshot.py`, and the REST timeline reaches further back without touching the snapshot.
 The fix, when we get there, is to build incrementally: one Parquet partition per cluster written by the collector as it persists that cluster, with DuckDB reading the partitions it needs, so a sweep touches only the clusters that changed.
 See ADR-0002 for the scale analysis.
 

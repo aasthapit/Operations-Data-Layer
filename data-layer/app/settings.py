@@ -73,8 +73,19 @@ class Settings:
     if primary_dimension not in ("hub", "region", "datacenter", "environment"):
         raise ValueError("ODL_PRIMARY_DIMENSION must be hub, region, datacenter or environment")
 
-    # Number of historical snapshots kept per cluster (for the timelines).
-    snapshot_retention: int = int(os.environ.get("SNAPSHOT_RETENTION", "500"))
+    # History is kept in three tiers per cluster, each trimmed by time rather
+    # than by row count: every sweep for SNAPSHOT_RAW_HOURS, one row per hour
+    # for SNAPSHOT_HOURLY_DAYS, one row per day for SNAPSHOT_DAILY_DAYS. The
+    # windows are what a trend question asks for ("crash loops per hour over
+    # the last day", "warning events per day over the last month"); the row
+    # count a sweep interval produces is an implementation detail.
+    snapshot_raw_hours: int = int(os.environ.get("SNAPSHOT_RAW_HOURS", "48"))
+    snapshot_hourly_days: int = int(os.environ.get("SNAPSHOT_HOURLY_DAYS", "90"))
+    snapshot_daily_days: int = int(os.environ.get("SNAPSHOT_DAILY_DAYS", "730"))
+    # A hard safety cap on the raw tier only, so a pathologically short sweep
+    # interval cannot grow one cluster's per-sweep history without bound.
+    # Sized for the default window: 48h at a 2-minute sweep is 1440 rows.
+    snapshot_retention: int = int(os.environ.get("SNAPSHOT_RETENTION", "2000"))
 
 
 settings = Settings()

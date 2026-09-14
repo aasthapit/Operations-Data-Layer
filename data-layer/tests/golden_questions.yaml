@@ -173,11 +173,106 @@
     contains: {reason: CrashLoopBackOff, ns_class: application}
 
 - id: cluster-health-history
-  question: Show the health score of every cluster over time.
+  question: Show the health score of every cluster over the last few hours.
   sql: |
     SELECT cluster_name, snapshot_at, health_score, overall_status, pod_issues
     FROM health_snapshots
+    WHERE resolution = 'sweep'
     ORDER BY snapshot_at DESC, cluster_name
   expect:
-    row_count: 2
+    min_rows: 2
     columns: [cluster_name, snapshot_at, health_score]
+
+# ---- history: trends over time ------------------------------------------
+# These five are the reason the snapshot tiers and the change log exist. Each
+# one states the span it asks about, which is what picks the resolution.
+
+- id: crashloops-per-hub-hourly
+  question: How many pods were crash-looping on each hub, hour by hour, over the last 24 hours?
+  sql: |
+    SELECT date_trunc('hour', hs.snapshot_at) AS hour,
+           c.hub_name,
+           sum(hs.crashloops) AS crashloops,
+           sum(hs.image_pull_errors) AS image_pull_errors
+    FROM health_snapshots AS hs
+    JOIN clusters AS c ON c.name = hs.cluster_name
+    WHERE hs.resolution = 'hour'
+      AND hs.snapshot_at >= now() - INTERVAL 24 HOUR
+    GROUP BY hour, c.hub_name
+    ORDER BY hour, c.hub_name
+  expect:
+    min_rows: 6
+    columns: [hour, hub_name, crashloops]
+    contains:
+      - {hub_name: hub-east, crashloops: 3}
+      - {hub_name: hub-west, crashloops: 0}
+
+- id: warning-events-per-day
+  question: How many Kubernetes warning events did the fleet see per day over the last 30 days?
+  sql: |
+    SELECT CAST(snapshot_at AS DATE) AS day,
+           sum(warning_events) AS warning_events,
+           count(DISTINCT cluster_name) AS clusters
+    FROM health_snapshots
+    WHERE resolution = 'day'
+      AND snapshot_at >= now() - INTERVAL 30 DAY
+    GROUP BY day
+    ORDER BY day
+  expect:
+    row_count: 7
+    columns: [day, warning_events, clusters]
+    contains:
+      - {warning_events: 5, clusters: 2}
+      - {warning_events: 3, clusters: 2}
+
+- id: failing-checks-by-name
+  question: Which health checks fail most often across the fleet?
+  sql: |
+    SELECT check_name,
+           count(*) AS hours_failing,
+           count(DISTINCT cluster_name) AS clusters
+    FROM (
+      SELECT cluster_name,
+             unnest(CAST(checks_failed_names AS VARCHAR[])) AS check_name
+      FROM health_snapshots
+      WHERE resolution = 'hour'
+    )
+    GROUP BY check_name
+    ORDER BY hours_failing DESC, check_name
+  expect:
+    min_rows: 1
+    columns: [check_name, hours_failing, clusters]
+    contains: {check_name: no-degraded-operators, clusters: 1}
+
+- id: version-changes-last-week
+  question: Which clusters were upgraded in the last 7 days, and from which version to which?
+  sql: |
+    SELECT ch.cluster_name, c.region, c.environment,
+           ch.changed_at, ch.before AS from_version, ch.after AS to_version
+    FROM changes AS ch
+    JOIN clusters AS c ON c.name = ch.cluster_name
+    WHERE ch.kind = 'version'
+      AND ch.changed_at >= now() - INTERVAL 7 DAY
+    ORDER BY ch.changed_at DESC
+  expect:
+    row_count: 1
+    columns: [cluster_name, changed_at, from_version, to_version]
+    contains: {cluster_name: ocp-east-1, from_version: 4.16.5, to_version: 4.16.7}
+
+- id: restarts-today-by-cluster
+  question: Which clusters have restarted their containers the most today?
+  sql: |
+    SELECT hs.cluster_name, c.hub_name, c.environment,
+           max(hs.restarts_total) AS restarts
+    FROM health_snapshots AS hs
+    JOIN clusters AS c ON c.name = hs.cluster_name
+    WHERE hs.resolution = 'hour'
+      AND hs.snapshot_at >= date_trunc('day', now())
+    GROUP BY hs.cluster_name, c.hub_name, c.environment
+    ORDER BY restarts DESC
+  expect:
+    row_count: 2
+    columns: [cluster_name, hub_name, restarts]
+    contains:
+      - {cluster_name: ocp-east-1, hub_name: hub-east}
+      - {cluster_name: ocp-west-1, hub_name: hub-west}

@@ -143,7 +143,7 @@ The rollup rule:
 - any **fail** at `warning` severity, and any **warn** → `warning`
 - otherwise → `healthy` (results at `info` severity, such as "update available", an upgrade in progress or a cluster without `metrics.k8s.io`, are surfaced but never degrade the rollup)
 
-A health score (0-100) and a per-cluster history snapshot are recorded on every sweep, which powers the timeline.
+A health score (0-100) and a per-cluster history snapshot are recorded on every sweep, which powers the timeline and the trend queries (see [History](#history)).
 Every result also carries what it measured and the levels that applied (`value`, `levels`), so "87% used (warn 85, fail 95)" is readable without opening the manifest.
 Health is always **computed** from collected state - never read from a field on the cluster - so it behaves identically against the kind fixtures and real OCP.
 
@@ -156,6 +156,23 @@ Fleet-wide questions are answered from those indexes, never by scanning every cl
 Per-cluster keys carry a TTL (`REDIS_TTL_SECONDS`, default 24h) and the Redis instance runs `maxmemory-policy noeviction`, so a cluster that stops being collected ages out cleanly instead of being silently evicted.
 
 The full keyspace - every key, its type, who writes it and who reads it - is documented in [docs/redis-keyspace.md](redis-keyspace.md); the store implementation lives in `data-layer/app/store/`.
+
+### History
+
+Everything above is the state as of the last sweep, which cannot answer "is this getting worse?".
+So each write also appends to two per-cluster histories.
+
+The first is a **time series**, kept at three resolutions so a span of hours and a span of years cost the same to read: every sweep for 48 hours, one row per hour for 90 days, one row per day for two years, each tier trimmed by its own window rather than by a row count.
+A row is what a trend is drawn from, so it carries more than the health score: crash loops, image pull errors, OOM kills, pending pods, container restarts, warning events with their commonest reasons, which checks were failing by name, degraded operators, node and application counts.
+Rolling a bucket up is per-field and deliberate: counters keep the **worst** value inside the bucket (a ten-minute spike must survive into the daily row), gauges keep the value at its **end**, utilization keeps the **mean** with the peak beside it, and name lists are **unioned**.
+The rollup happens inside the write that notices the hour or day has turned, so nothing has to be scheduled and a collector that stops leaves the tiers consistent.
+
+The second is a **change log**, a per-cluster Redis stream of what actually happened: a version moved, a status rolled over, a check started failing or recovered, an operator degraded, nodes or namespaces came and went, an upgrade started or finished, a cluster went unreachable.
+Each record carries the value before and after and a sentence describing it.
+A time series tells you a number was different an hour ago; the change log tells you what changed, and when.
+
+Both are queryable three ways: `GET /api/clusters/{name}/timeline?resolution=` and `GET /api/clusters/{name}/changes` per cluster, `GET /api/insights/changes` fleet-wide, and the `health_snapshots` and `changes` tables in the SQL snapshot below.
+The model, the memory arithmetic at fleet scale, and the exact rollup rules are in [docs/redis-keyspace.md](redis-keyspace.md); the code is `data-layer/app/store/history.py`, which is pure functions over rows.
 
 ### Relational view used by natural-language queries
 
@@ -248,10 +265,21 @@ erDiagram
     json levels
   }
   HEALTH_SNAPSHOT {
-    int id PK
     string cluster_name FK
-    int health_score
+    string resolution
     datetime snapshot_at
+    int samples
+    int health_score
+    int crashloops
+    json events_by_reason
+  }
+  CHANGE {
+    string cluster_name FK
+    datetime changed_at
+    string kind
+    string subject
+    string before
+    string after
   }
 ```
 

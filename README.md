@@ -280,7 +280,8 @@ Every sweep also appends a health snapshot per cluster, powering the timeline.
 | `GET /api/clusters?region=&environment=&status=&version=&team=` | filterable cluster list with utilization, issues, certs |
 | `GET /api/clusters/{name}` | full detail: platform config, capacity, checks, operators, nodes, namespaces, pod issues, what was collected |
 | `GET /api/clusters/{name}/nodes` · `/namespaces?class=` · `/workloads?namespace=&detail=` · `/pod-issues` · `/resources?kind=` | per-cluster inventory |
-| `GET /api/clusters/{name}/timeline` | health-score + utilization history |
+| `GET /api/clusters/{name}/timeline?resolution=sweep\|hour\|day&since=` | health, crash / error counters and utilization history (every sweep for 48 h, hourly for 90 days, daily for 2 years) |
+| `GET /api/clusters/{name}/changes` · `GET /api/insights/changes?kind=&since=` | what changed between sweeps: version, status, checks, operators, nodes, application namespaces, upgrades, reachability |
 | `POST /api/clusters/{name}/refresh` | collect and persist this one cluster now, behind a single-flight lock, without waiting for the next sweep (404 unknown cluster, 409 already refreshing) |
 | `GET /api/applications?team=&tier=&environment=&status=` · `GET /api/applications/{app}` | applications (application namespaces) across the fleet |
 | `GET /api/applications/summary?group_by=cluster\|hub\|region\|datacenter\|environment\|version` | how many distinct applications (and teams, namespaces, unassigned namespaces) run on each cluster or group of clusters |

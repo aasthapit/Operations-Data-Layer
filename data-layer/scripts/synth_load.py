@@ -47,6 +47,7 @@ from app.collector.parsers import split_image  # noqa: E402
 from app.collector.registry import REGISTRY  # noqa: E402
 from app.manifest import get_manifest  # noqa: E402
 from app.store.base import SECTIONS  # noqa: E402
+from app.store.history import RESOLUTIONS  # noqa: E402
 from app.store.redis_store import RedisStore  # noqa: E402
 
 GIB = 1024 ** 3
@@ -1333,10 +1334,16 @@ def sample_cluster_keys(client, store: RedisStore, name: str) -> dict:
         key = store.keys.section(name, section)
         sections[section] = {"compressed": client.strlen(key),
                              "memory": _memory_usage(client, key)}
-    snapshots = _memory_usage(client, store.keys.snapshots(name))
+    # History is three tiers plus the change stream, and at these retentions it
+    # is a real share of a cluster's footprint - a report that left it out would
+    # understate the estate.
+    history = {resolution: _memory_usage(client, store.keys.snapshots(name, resolution))
+               for resolution in RESOLUTIONS}
+    changes = _memory_usage(client, store.keys.changes(name))
     ledger = _memory_usage(client, store.keys.ledger(name))
     return {"name": name, "summary_bytes": summary_bytes, "sections": sections,
-            "snapshots_bytes": snapshots, "ledger_bytes": ledger}
+            "snapshots_bytes": history["sweep"], "history_bytes": history,
+            "changes_bytes": changes, "ledger_bytes": ledger}
 
 
 def read_latencies(store: RedisStore, iterations: int, budget: float) -> list[dict]:
@@ -1559,11 +1566,15 @@ def render_report(facts: dict) -> str:
         for section, sizes in sample["sections"].items():
             add(f"| `sec:{section}` | {sizes['compressed']:,} | {sizes['memory']:,} |")
         add(f"| `summary` | | {sample['summary_bytes']:,} |")
-        add(f"| `snapshots` | | {sample['snapshots_bytes']:,} |")
+        history = sample.get("history_bytes") or {"sweep": sample["snapshots_bytes"]}
+        for resolution, size in history.items():
+            add(f"| `snapshots` ({resolution}) | | {size:,} |")
+        add(f"| `changes` | | {sample.get('changes_bytes', 0):,} |")
         add(f"| `ledger` | | {sample['ledger_bytes']:,} |")
         compressed = sum(s["compressed"] for s in sample["sections"].values())
         memory = (sum(s["memory"] for s in sample["sections"].values())
-                  + sample["summary_bytes"] + sample["snapshots_bytes"] + sample["ledger_bytes"])
+                  + sample["summary_bytes"] + sum(history.values())
+                  + sample.get("changes_bytes", 0) + sample["ledger_bytes"])
         add(f"| **total** | **{compressed:,}** | **{memory:,}** |")
         add("")
         raw = doc.get("raw_json_bytes") or 0

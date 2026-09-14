@@ -300,6 +300,69 @@ def check_dict(h) -> dict:
     }
 
 
+def change_dict(c) -> dict:
+    """One change-log record. `before` / `after` keep the type they were
+    recorded with (a version string, a node count, a boolean), so a caller can
+    render "4 -> 3" without parsing it back out of the message."""
+    return {
+        "cluster": c.cluster_name,
+        "at": _iso(c.at),
+        "kind": c.kind,
+        "subject": c.subject,
+        "before": c.before,
+        "after": c.after,
+        "message": c.message,
+    }
+
+
+def snapshot_dict(s) -> dict:
+    """One history row, at whatever resolution it was read at.
+
+    The per-sweep rows and the rolled-up rows have the same shape on purpose:
+    a chart switching from hours to days changes one query parameter and
+    nothing else. `samples` says how many sweeps are behind the row (1 for a
+    per-sweep row), and the `*_max` fields carry the peak that the mean hides.
+    """
+    return {
+        "at": _iso(s.snapshot_at),
+        "resolution": s.resolution or "sweep",
+        "samples": s.samples if s.samples is not None else 1,
+        "overall_status": s.overall_status,
+        "health_score": s.health_score,
+        "passed": s.checks_passed,
+        "warned": s.checks_warned,
+        "failed": s.checks_failed,
+        "failed_checks": s.checks_failed_names or [],
+        "warned_checks": s.checks_warned_names or [],
+        "operators_degraded": s.operators_degraded,
+        "ocp_version": s.ocp_version,
+        "upgrading": s.upgrading,
+        "cpu_used_cores": s.cpu_usage,
+        "cpu_used_cores_max": s.cpu_usage_max,
+        "cpu_allocatable_cores": s.cpu_allocatable,
+        "memory_used_bytes": s.memory_usage,
+        "memory_used_bytes_max": s.memory_usage_max,
+        "memory_allocatable_bytes": s.memory_allocatable,
+        "pods_running": s.pods_running,
+        "pod_issues": s.pod_issues,
+        "pod_issues_platform": s.pod_issues_platform,
+        "pod_issues_application": s.pod_issues_application,
+        "crashloops": s.crashloops,
+        "image_pull_errors": s.image_pull_errors,
+        "oom_killed": s.oom_killed,
+        "pending_pods": s.pending_pods,
+        "restarts_total": s.restarts_total,
+        "warning_events": s.warning_events,
+        "events_by_reason": s.events_by_reason or {},
+        "nodes_total": s.nodes_total,
+        "nodes_ready": s.nodes_ready,
+        "namespaces_application": s.namespaces_application,
+        "applications_total": s.applications_total,
+        "workloads_total": s.workloads_total,
+        "certs_expiring_total": s.certs_expiring_total,
+    }
+
+
 def cluster_detail(c, operators, nodes, namespaces, pod_issues, resource_status, health_checks) -> dict:
     """The summary row plus the cluster's detail sections, as one document.
 

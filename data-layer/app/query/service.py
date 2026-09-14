@@ -40,6 +40,13 @@ log = logging.getLogger("odl.query.service")
 class QueryResult:
     sql: str                        # the normalised SQL that actually ran
     columns: list[str]
+    # The DuckDB type of each column, as the engine names it ('VARCHAR',
+    # 'BIGINT', 'DOUBLE', 'TIMESTAMP', 'BOOLEAN', 'DECIMAL(2,1)', ...), aligned
+    # with `columns`. A caller rendering the answer needs it: a TIMESTAMP first
+    # column and a numeric second one is a time series, two VARCHARs are a
+    # table, and nothing in the values themselves says which - JSON has no
+    # types and a timestamp arrives as a string.
+    column_types: list[str]
     rows: list[list]
     row_count: int
     truncated: bool                 # the row cap may have cut the answer short
@@ -48,8 +55,8 @@ class QueryResult:
 
     def as_dict(self) -> dict:
         return {
-            "sql": self.sql, "columns": self.columns, "rows": self.rows,
-            "row_count": self.row_count, "truncated": self.truncated,
+            "sql": self.sql, "columns": self.columns, "column_types": self.column_types,
+            "rows": self.rows, "row_count": self.row_count, "truncated": self.truncated,
             "elapsed_ms": self.elapsed_ms, "generation": self.generation,
         }
 
@@ -158,7 +165,10 @@ def run_sql(sql: str, limit: int | None = None, store: Store | None = None) -> Q
     try:
         timer.start()
         cursor.execute(validated)
-        columns = [d[0] for d in (cursor.description or [])]
+        description = cursor.description or []
+        columns = [d[0] for d in description]
+        # d[1] is a DuckDBPyType; its str() is the SQL type name.
+        column_types = [str(d[1]) for d in description]
         rows = [[_jsonable(v) for v in row] for row in cursor.fetchall()]
     except duckdb.InterruptException as e:
         raise QueryTimeout(
@@ -170,8 +180,8 @@ def run_sql(sql: str, limit: int | None = None, store: Store | None = None) -> Q
         timer.cancel()
         cursor.close()
     elapsed = int((time.time() - t0) * 1000)
-    return QueryResult(sql=validated, columns=columns, rows=rows, row_count=len(rows),
-                       truncated=len(rows) >= cap, elapsed_ms=elapsed,
+    return QueryResult(sql=validated, columns=columns, column_types=column_types, rows=rows,
+                       row_count=len(rows), truncated=len(rows) >= cap, elapsed_ms=elapsed,
                        generation=manager.info().generation)
 
 

@@ -12,7 +12,8 @@ How it is built:
 
   * one pass per table - `store.clusters()`, `store.hubs()`,
     `store.section_across(section)` for the ten per-cluster sections,
-    `store.snapshots(name)` per cluster, `store.runs()`;
+    `store.snapshots_across(names, resolution)` once per history tier,
+    `store.changes_across(names)`, `store.runs()`;
   * rows are coerced to the column types declared in `schema.py` (a Redis row
     is JSON, so an int can arrive as a string and a datetime as an ISO
     string), packed into Arrow columns, and loaded with
@@ -36,16 +37,31 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import duckdb
 import pyarrow as pa
 
-from ..settings import settings
 from ..store import Store, get_store
 from .schema import SECTION_TABLES, TABLES, Table
 
 log = logging.getLogger("odl.query.snapshot")
+
+# How much history one snapshot loads. The store keeps more than this (48h of
+# sweeps, 90 days of hours, 2 years of days - see app/store/history.py); these
+# windows are what a single question is allowed to scan, and they are what
+# keeps a rebuild bounded as the fleet grows. Each tier is roughly the same
+# number of rows per cluster, which is the point of having tiers at all.
+HISTORY_WINDOWS: dict[str, timedelta] = {
+    "sweep": timedelta(hours=6),
+    "hour": timedelta(days=30),
+    "day": timedelta(days=730),
+}
+HISTORY_ROWS_PER_CLUSTER = 1000
+# The change log is small per cluster but unbounded in principle; a month of it
+# is what "what happened recently?" means.
+CHANGES_WINDOW = timedelta(days=30)
+CHANGES_PER_CLUSTER = 500
 
 _ARROW_TYPES = {
     "VARCHAR": pa.string(),
@@ -212,16 +228,42 @@ def _gather(store: Store) -> dict[str, list[dict]]:
     }
     for section, table_name in SECTION_TABLES.items():
         data[table_name] = _flatten(store.section_across(section, names))
-
-    retention = getattr(settings, "snapshot_retention", 500)
-    history: list[dict] = []
-    for name in names:
-        for row in store.snapshots(name, limit=retention):
-            row = dict(row)
-            row.setdefault("cluster_name", name)
-            history.append(row)
-    data["health_snapshots"] = history
+    data["health_snapshots"] = _history(store, names)
+    data["changes"] = _changes(store, names)
     return data
+
+
+def _history(store: Store, names: list[str]) -> list[dict]:
+    """Every history tier, stacked into one table and told apart by `resolution`.
+
+    Each tier is one pipelined read for the whole fleet, and each carries its
+    own window: the per-sweep tier answers "the last few hours" exactly, and
+    anything longer is answered from the hourly or daily tier, which is what
+    keeps a rebuild from loading a million rows.
+    """
+    now = datetime.now(UTC)
+    out: list[dict] = []
+    for resolution, window in HISTORY_WINDOWS.items():
+        loaded = store.snapshots_across(names, resolution=resolution, since=now - window,
+                                        limit_per_cluster=HISTORY_ROWS_PER_CLUSTER)
+        for cluster_name, rows in loaded.items():
+            for row in rows:
+                row = dict(row)
+                row.setdefault("cluster_name", cluster_name)
+                row.setdefault("resolution", resolution)
+                out.append(row)
+    return out
+
+
+def _changes(store: Store, names: list[str]) -> list[dict]:
+    """The fleet's change log. `changed_at` rather than `at`: `at` is a reserved
+    word in DuckDB, and a column nobody can write in SQL is not a column."""
+    if not names:
+        return []
+    since = datetime.now(UTC) - CHANGES_WINDOW
+    return [{**dict(row), "changed_at": row.get("at")}
+            for row in store.changes_across(names, since=since,
+                                            limit_per_cluster=CHANGES_PER_CLUSTER)]
 
 
 # --------------------------------------------------------------------------- #

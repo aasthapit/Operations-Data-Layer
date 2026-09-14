@@ -13,7 +13,7 @@ for something the store does not hold would fail here.
 Both run the same nginx image, and both host the `payments` application.
 """
 import base64
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import fakeredis
 import pytest
@@ -432,11 +432,71 @@ def test_cluster_sections(client):
 
 def test_timeline_has_one_point_per_sweep(client):
     d = _get(client, "/api/clusters/ocp-east-1/timeline")
-    assert len(d["snapshots"]) == 1
+    assert len(d["snapshots"]) == 1 and d["resolution"] == "sweep"
     point = d["snapshots"][0]
     assert point["overall_status"] == "healthy" and point["ocp_version"] == "4.16.7"
     assert point["cpu_used_cores"] == 3.0 and point["pods_running"] == 3
-    assert point["at"]
+    assert point["at"] and point["samples"] == 1
+    # the counters a trend is drawn from travel with every point
+    assert point["crashloops"] == 0 and point["pod_issues"] == 0
+    assert point["warning_events"] == 2
+    assert point["events_by_reason"] == {"BackOff": 1, "Unhealthy": 1}
+    assert point["failed_checks"] == [] and point["nodes_ready"] == 2
+
+
+def test_timeline_serves_the_coarser_tiers(client):
+    """One sweep is already an hour and a day: the open bucket holds what there
+    is so far, so a chart can switch resolution without waiting an hour."""
+    for resolution in ("hour", "day"):
+        d = _get(client, "/api/clusters/ocp-east-1/timeline", resolution=resolution)
+        assert d["resolution"] == resolution and len(d["snapshots"]) == 1
+        assert d["snapshots"][0]["samples"] == 1
+        assert d["snapshots"][0]["warning_events"] == 2
+    metrics_points = _get(client, "/api/metrics/cluster/ocp-east-1/timeline",
+                          resolution="hour")["points"]
+    assert metrics_points[0]["cpu_used_cores_max"] == metrics_points[0]["cpu_used_cores"]
+    assert client.get("/api/clusters/ocp-east-1/timeline?resolution=decade").status_code == 400
+
+
+def test_changes_are_served_per_cluster_and_fleet_wide():
+    """The change log needs two sweeps to exist, so this builds its own store."""
+    manifest = get_manifest()
+    st = RedisStore(fakeredis.FakeRedis())
+    meta = {"name": "ocp-east-1", "region": "us-east-1", "environment": "prod",
+            "managed_available": True}
+    _persist(st, manifest, "hub-east", meta, _east_raw())
+    upgraded = _east_raw()
+    upgraded["clusterversion"]["status"]["desired"]["version"] = "4.17.1"
+    upgraded["clusterversion"]["status"]["history"] = [{"state": "Completed", "version": "4.17.1"}]
+    _persist(st, manifest, "hub-east", meta, upgraded)
+
+    app = FastAPI()
+    app.include_router(clusters.router)
+    app.include_router(insights.router)
+    store_module.set_store(st)
+    try:
+        c = TestClient(app)
+        body = c.get("/api/clusters/ocp-east-1/changes").json()
+        assert body["count"] == 1
+        change = body["changes"][0]
+        assert change["kind"] == "version" and change["subject"] == "ocp_version"
+        assert (change["before"], change["after"]) == ("4.16.7", "4.17.1")
+        assert change["cluster"] == "ocp-east-1" and change["at"]
+        assert c.get("/api/clusters/ocp-east-1/changes?kind=status").json()["count"] == 0
+
+        fleet = c.get("/api/insights/changes").json()
+        assert fleet["by_kind"] == {"version": 1}
+        assert fleet["changes"][0]["message"].startswith("version changed")
+        assert fleet["since"]
+        assert c.get("/api/insights/changes?kind=version&cluster=ocp-east-1").json()["count"] == 1
+        assert c.get("/api/insights/changes?cluster=nope").json()["count"] == 0
+        # a window that starts after the change was recorded returns nothing
+        later = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
+        assert c.get("/api/insights/changes", params={"since": later}).json()["count"] == 0
+        assert c.get("/api/clusters/ocp-east-1/changes",
+                     params={"since": later}).json()["count"] == 0
+    finally:
+        store_module.set_store(None)
 
 
 def test_refresh_one_cluster(client, monkeypatch):

@@ -133,11 +133,38 @@ def cluster_health(name: str) -> dict:
 
 
 @mcp.tool()
-def cluster_timeline(name: str) -> dict:
-    """Per-sweep history for one cluster: health score plus CPU / memory usage,
-    running pods and pod issues - use to see whether a cluster is improving,
-    degrading, mid-upgrade, or trending towards capacity."""
-    return _get(f"/api/clusters/{name}/timeline")
+def cluster_timeline(name: str, resolution: str = "sweep", since: str = "",
+                     until: str = "") -> dict:
+    """History for one cluster: health score, CPU / memory usage, running pods,
+    and what was going wrong (crash loops, image pull errors, OOM kills,
+    pending pods, restarts, warning events, which checks were failing). Use to
+    see whether a cluster is improving, degrading, mid-upgrade, or trending
+    towards capacity. resolution = sweep (every collection, the last 48 hours)
+    | hour (the last 90 days) | day (the last 2 years); pick it from the span
+    you care about. since / until are ISO 8601 instants. At hour and day
+    resolution the usage numbers are the mean over the bucket with the peak
+    beside them (cpu_used_cores_max), and the counters are the worst value
+    inside it."""
+    return _get(f"/api/clusters/{name}/timeline", {
+        "resolution": resolution, "since": since, "until": until})
+
+
+@mcp.tool()
+def recent_changes(cluster: str = "", kind: str = "", since: str = "") -> dict:
+    """What has CHANGED across the fleet, newest first - the log a timeline
+    cannot show. One record per event, with the value before and after and a
+    sentence describing it: version (a cluster was upgraded), status (its
+    health rolled over), check (a precondition check started failing or
+    recovered, named), operator (a cluster operator degraded or recovered),
+    nodes (node count or readiness moved), namespace (an application namespace
+    appeared or disappeared), application (the application count moved),
+    upgrade (one started or finished), reachability (the collector lost or
+    regained a cluster). Use for "what happened to this cluster?", "what
+    changed last night?", "when did X break?". cluster limits it to one
+    cluster, kind to one of the kinds above, since is an ISO 8601 instant
+    (default: the last 24 hours)."""
+    return _get("/api/insights/changes", {
+        "cluster": cluster, "kind": kind, "since": since})
 
 
 # --------------------------------------------------------------------------- #

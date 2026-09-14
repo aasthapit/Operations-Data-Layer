@@ -15,6 +15,7 @@ import pytest
 
 from app.collector.collect import assemble, unreachable
 from app.collector.healthchecks import run_health_checks
+from app.store import history
 from app.store.redis_store import RedisStore
 from tests.conftest import make_cert_pem
 from tests.test_parsers import NOW, _pod
@@ -157,10 +158,10 @@ def store(make_store):
     return make_store()
 
 
-def _persist(store, manifest, doc, hub="hub-east"):
+def _persist(store, manifest, doc, hub="hub-east", at=None):
     thresholds = manifest.describe()["thresholds"]
     checks, overall, score, counts = run_health_checks(doc, "4.15.0", thresholds)
-    store.persist_cluster(hub, doc, checks, overall, score, counts)
+    store.persist_cluster(hub, doc, checks, overall, score, counts, now=at)
     return overall
 
 
@@ -239,6 +240,342 @@ def test_snapshots_are_appended_and_trimmed(make_store, manifest, documents):
     assert snaps[0].snapshot_at < snaps[-1].snapshot_at      # oldest first
     assert snaps[-1].health_score == store.get_cluster(EAST).health_score
     assert isinstance(snaps[-1].snapshot_at, datetime)
+
+
+def test_a_snapshot_row_counts_what_went_wrong(fleet, documents):
+    """The row is what a trend is drawn from, so it carries the shape of the
+    trouble, not just a total: which kind of pod issue, which checks failed."""
+    row = fleet.snapshots(WEST)[-1]
+    summary = fleet.get_cluster(WEST)
+    assert row.resolution == "sweep" and row.samples == 1
+    assert row.pod_issues == summary.pod_issues_total == 2
+    assert row.pod_issues_application == 1 and row.pod_issues_platform == 1
+    assert row.crashloops == 1                 # api-3 is CrashLoopBackOff
+    assert row.image_pull_errors == 1          # prom-1 is ImagePullBackOff
+    assert row.oom_killed == 0 and row.pending_pods == 0
+    assert row.restarts_total == 9             # summed over the namespaces
+    assert row.warning_events == 0             # the fixture's events are forbidden
+    assert row.events_by_reason == {}
+    assert row.operators_degraded == 1         # west's ingress is degraded
+    assert "no-degraded-operators" in row.checks_failed_names
+    assert row.checks_failed == len(row.checks_failed_names)
+    assert row.nodes_total == 2 and row.nodes_ready == 2
+    assert row.namespaces_application == 1 and row.applications_total == 1
+    assert row.workloads_total == 3 and row.certs_expiring_total == 1
+
+
+# --------------------------------------------------------------------------- #
+# history: the rollup rules, as pure functions
+# --------------------------------------------------------------------------- #
+def _sample(minute, **fields):
+    """One per-sweep row, with only the fields a rule under test cares about."""
+    return {"cluster_name": EAST, "resolution": "sweep", "samples": 1,
+            "snapshot_at": HOUR_START + timedelta(minutes=minute), **fields}
+
+
+HOUR_START = datetime(2026, 9, 10, 10, 0, tzinfo=UTC)
+
+
+def test_a_bucket_keeps_the_worst_counter_and_the_last_gauge():
+    rolled = history.aggregate_snapshots([
+        _sample(0, crashloops=1, pod_issues=2, health_score=90, nodes_ready=3,
+                overall_status="warning", ocp_version="4.16.5"),
+        _sample(20, crashloops=5, pod_issues=9, health_score=40, nodes_ready=1,
+                overall_status="critical", ocp_version="4.16.5"),
+        _sample(40, crashloops=0, pod_issues=1, health_score=100, nodes_ready=3,
+                overall_status="healthy", ocp_version="4.16.7"),
+    ], HOUR_START, "hour")
+
+    # counters: the spike survives, because that is what the hour was about
+    assert rolled["crashloops"] == 5 and rolled["pod_issues"] == 9
+    # gauges: where the cluster ended up
+    assert rolled["health_score"] == 100 and rolled["nodes_ready"] == 3
+    assert rolled["overall_status"] == "healthy" and rolled["ocp_version"] == "4.16.7"
+    assert rolled["snapshot_at"] == HOUR_START and rolled["resolution"] == "hour"
+    assert rolled["samples"] == 3 and rolled["cluster_name"] == EAST
+
+
+def test_a_bucket_means_utilization_and_keeps_the_peak():
+    rolled = history.aggregate_snapshots([
+        _sample(0, cpu_usage=2.0, memory_usage=100),
+        _sample(20, cpu_usage=8.0, memory_usage=400),
+        _sample(40, cpu_usage=2.0, memory_usage=100),
+    ], HOUR_START, "hour")
+    assert rolled["cpu_usage"] == 4.0 and rolled["cpu_usage_max"] == 8.0
+    assert rolled["memory_usage"] == 200 and rolled["memory_usage_max"] == 400
+    # cores are fractional, bytes are not: a mean of whole numbers stays whole
+    assert isinstance(rolled["cpu_usage"], float)
+    assert isinstance(rolled["memory_usage"], int)
+
+
+def test_rolling_up_a_rollup_weights_the_mean_by_its_samples():
+    """A daily row is the mean of the raw samples, never a mean of means."""
+    hourly = [
+        {"snapshot_at": HOUR_START, "resolution": "hour", "samples": 30,
+         "cpu_usage": 1.0, "cpu_usage_max": 2.0},
+        {"snapshot_at": HOUR_START + timedelta(hours=1), "resolution": "hour", "samples": 10,
+         "cpu_usage": 5.0, "cpu_usage_max": 9.0},
+    ]
+    rolled = history.aggregate_snapshots(hourly, HOUR_START.replace(hour=0), "day")
+    assert rolled["samples"] == 40
+    assert rolled["cpu_usage"] == (30 * 1.0 + 10 * 5.0) / 40 == 2.0
+    assert rolled["cpu_usage_max"] == 9.0        # the peak of an hour is a peak of the day
+
+
+def test_a_bucket_unions_names_and_merges_event_reasons():
+    rolled = history.aggregate_snapshots([
+        _sample(0, checks_failed_names=["nodes-ready"], checks_warned_names=[],
+                events_by_reason={"BackOff": 4, "FailedMount": 1}),
+        _sample(30, checks_failed_names=["no-degraded-operators"],
+                checks_warned_names=["capacity-headroom"],
+                events_by_reason={"BackOff": 2, "Unhealthy": 7}),
+    ], HOUR_START, "hour")
+    assert rolled["checks_failed_names"] == ["no-degraded-operators", "nodes-ready"]
+    assert rolled["checks_warned_names"] == ["capacity-headroom"]
+    # the worst count per reason, not the sum: the same event is seen again by
+    # every sweep, so summing would multiply it by the sweep rate
+    assert rolled["events_by_reason"] == {"Unhealthy": 7, "BackOff": 4, "FailedMount": 1}
+
+
+def test_a_bucket_of_missing_values_stays_missing():
+    rolled = history.aggregate_snapshots([_sample(0), _sample(30)], HOUR_START, "hour")
+    assert rolled["cpu_usage"] is None and rolled["cpu_usage_max"] is None
+    assert rolled["crashloops"] is None and rolled["upgrading"] is False
+    assert history.aggregate_snapshots([], HOUR_START, "hour") is None
+
+
+def test_an_upgrade_anywhere_in_the_bucket_shows_on_the_bucket():
+    rolled = history.aggregate_snapshots(
+        [_sample(0, upgrading=False), _sample(20, upgrading=True), _sample(40, upgrading=False)],
+        HOUR_START, "hour")
+    assert rolled["upgrading"] is True       # an upgrade inside one day still happened
+
+
+def test_buckets_are_the_start_of_the_hour_and_of_the_day():
+    when = datetime(2026, 9, 10, 10, 37, 12, tzinfo=UTC)
+    assert history.bucket_start(when, "hour") == datetime(2026, 9, 10, 10, 0, tzinfo=UTC)
+    assert history.bucket_start(when, "day") == datetime(2026, 9, 10, 0, 0, tzinfo=UTC)
+    assert history.bucket_start(when, "sweep") == when          # a sweep is an instant
+    assert history.bucket_end(history.bucket_start(when, "hour"), "hour") == \
+        datetime(2026, 9, 10, 11, 0, tzinfo=UTC)
+    assert history.bucket_end(history.bucket_start(when, "day"), "day") == \
+        datetime(2026, 9, 11, 0, 0, tzinfo=UTC)
+    assert history.bucket_start(when.timestamp(), "hour") == history.bucket_start(when, "hour")
+
+
+# --------------------------------------------------------------------------- #
+# history: the tiers, through the store
+# --------------------------------------------------------------------------- #
+def test_sweeps_roll_up_into_hours_and_days(make_store, manifest, documents):
+    store = make_store()
+    calm = documents[EAST]
+    spike = copy.deepcopy(calm)
+    spike["pod_issues"] = [*spike["pod_issues"], {**spike["pod_issues"][0], "name": "api-4"}]
+    spike["pod_issues_total"] = len(spike["pod_issues"])
+    spike["capacity"] = {**spike["capacity"], "cpu_usage": 7.5}
+
+    start = datetime(2026, 9, 10, 10, 0, tzinfo=UTC)
+    for minutes, doc in ((0, calm), (20, spike), (40, calm)):
+        _persist(store, manifest, doc, at=start + timedelta(minutes=minutes))
+    _persist(store, manifest, calm, at=start + timedelta(hours=1))      # closes the hour
+    _persist(store, manifest, calm, at=start + timedelta(days=1))       # closes the day
+
+    hour = next(r for r in store.snapshots(EAST, resolution="hour")
+                if r.snapshot_at == start)
+    assert hour.samples == 3 and hour.resolution == "hour"
+    assert hour.crashloops == 2 and hour.pod_issues == 3        # the spike, not the average
+    assert hour.cpu_usage == pytest.approx((3.5 + 7.5 + 3.5) / 3)
+    assert hour.cpu_usage_max == 7.5
+    assert hour.health_score == store.get_cluster(EAST).health_score
+
+    day = next(r for r in store.snapshots(EAST, resolution="day")
+               if r.snapshot_at == start.replace(hour=0))
+    assert day.samples == 4 and day.resolution == "day"         # the hour, plus the 11:00 sweep
+    assert day.crashloops == 2 and day.cpu_usage_max == 7.5
+    assert day.cluster_name == EAST
+
+
+def test_the_current_bucket_exists_from_the_first_sweep(make_store, manifest, documents):
+    """A cluster collected once is already queryable at every resolution: the
+    open bucket holds what there is so far and is recomputed when it closes."""
+    store = make_store()
+    at = datetime(2026, 9, 10, 10, 5, tzinfo=UTC)
+    _persist(store, manifest, documents[EAST], at=at)
+    for resolution, expected in (("sweep", at), ("hour", at.replace(minute=0)),
+                                 ("day", at.replace(hour=0, minute=0))):
+        rows = store.snapshots(EAST, resolution=resolution)
+        assert [r.snapshot_at for r in rows] == [expected], resolution
+        assert rows[0].samples == 1
+
+
+def test_each_tier_is_trimmed_by_its_own_window(make_store, manifest, documents):
+    store = make_store(raw_hours=2, hourly_days=1, daily_days=3)
+    start = datetime(2026, 9, 1, 0, 5, tzinfo=UTC)
+    for hours in range(0, 24 * 5, 6):          # one sweep every six hours, for five days
+        _persist(store, manifest, documents[EAST], at=start + timedelta(hours=hours))
+    last = start + timedelta(hours=24 * 5 - 6)
+
+    # the per-sweep tier keeps hours, the hourly tier a day, the daily tier days
+    assert [r.snapshot_at for r in store.snapshots(EAST, limit=500)] == [last]
+    hourly = store.snapshots(EAST, limit=500, resolution="hour")
+    assert len(hourly) == 4 and all(r.snapshot_at > last - timedelta(days=1) for r in hourly)
+    daily = store.snapshots(EAST, limit=500, resolution="day")
+    assert len(daily) == 3 and all(r.snapshot_at > last - timedelta(days=3) for r in daily)
+    # and nothing ages out of the coarse tiers just because the sweeps did
+    assert daily[-1].samples == 4 and sum(r.samples for r in daily) == 12
+
+
+def test_the_row_cap_is_a_safety_net_on_the_sweep_tier_only(make_store, manifest, documents):
+    store = make_store(snapshot_retention=2)
+    start = datetime(2026, 9, 10, 10, 0, tzinfo=UTC)
+    for hours in range(6):
+        _persist(store, manifest, documents[EAST], at=start + timedelta(hours=hours))
+    assert len(store.snapshots(EAST, limit=500)) == 2            # capped
+    assert len(store.snapshots(EAST, limit=500, resolution="hour")) == 6   # untouched
+
+
+def test_history_reads_by_resolution_and_window(make_store, manifest, documents):
+    store = make_store()
+    start = datetime(2026, 9, 10, 0, 0, tzinfo=UTC)
+    for hours in range(12):
+        _persist(store, manifest, documents[EAST], at=start + timedelta(hours=hours))
+
+    assert len(store.snapshots(EAST, limit=3)) == 3               # the last three sweeps
+    window = store.snapshots(EAST, limit=100, resolution="hour",
+                             since=start + timedelta(hours=4),
+                             until=start + timedelta(hours=6))
+    assert [r.snapshot_at for r in window] == [start + timedelta(hours=h) for h in (4, 5, 6)]
+    # bounds may be ISO strings or epoch seconds, as a query string carries them
+    assert store.snapshots(EAST, resolution="hour",
+                           since=(start + timedelta(hours=4)).isoformat(),
+                           until=(start + timedelta(hours=6)).timestamp()) == window
+    assert store.snapshots(EAST, resolution="day") == store.snapshots(EAST, resolution="day")
+    assert store.snapshots("nope", resolution="hour") == []
+
+
+def test_history_across_clusters_is_one_round_trip(make_store, manifest, documents):
+    store = make_store()
+    at = datetime(2026, 9, 10, 10, 0, tzinfo=UTC)
+    _persist(store, manifest, documents[EAST], hub="hub-east", at=at)
+    _persist(store, manifest, documents[WEST], hub="hub-west", at=at)
+    across = store.snapshots_across([EAST, WEST], resolution="hour")
+    assert set(across) == {EAST, WEST}
+    assert all(row.cluster_name == name for name, rows in across.items() for row in rows)
+    assert [r.snapshot_at for r in across[EAST]] == [at]
+    # a window nothing falls in leaves the cluster out rather than yielding []
+    assert store.snapshots_across([EAST], resolution="hour",
+                                  since=at + timedelta(hours=1)) == {}
+    assert store.snapshots_across([]) == {}
+
+
+# --------------------------------------------------------------------------- #
+# history: the change log
+# --------------------------------------------------------------------------- #
+def _changed(doc: dict, **fields) -> dict:
+    return {**copy.deepcopy(doc), **fields}
+
+
+def test_the_first_sweep_of_a_cluster_changes_nothing(store, manifest, documents):
+    _persist(store, manifest, documents[EAST])
+    assert store.changes(EAST) == []
+
+
+def test_every_kind_of_change_is_recorded(store, manifest, documents):
+    base = documents[EAST]
+    _persist(store, manifest, base)
+    moved = _changed(base, version="4.17.1", nodes_total=3, nodes_ready=2, upgrading=True,
+                     desired_version="4.17.2", applications_total=2)
+    moved["namespaces"] = [*moved["namespaces"],
+                           {**moved["namespaces"][0], "name": "risk", "app_name": "fraud",
+                            "ns_class": "application"}]
+    moved["operators"] = [{**o, "degraded": True} for o in moved["operators"]]
+    _persist(store, manifest, moved)
+
+    by_kind = {}
+    for change in store.changes(EAST):
+        by_kind.setdefault(change.kind, []).append(change)
+    assert set(by_kind) == {"version", "status", "check", "operator", "nodes", "namespace",
+                            "application", "upgrade"}
+    assert all(k in history.KINDS for k in by_kind)
+
+    version = by_kind["version"][0]
+    assert (version.subject, version.before, version.after) == \
+        ("ocp_version", "4.16.7", "4.17.1")
+    assert version.message == "version changed from 4.16.7 to 4.17.1"
+    assert isinstance(version.at, datetime) and version.cluster_name == EAST
+    # ints stay ints and booleans booleans, so a caller can render "2 -> 3"
+    assert [(c.subject, c.before, c.after) for c in by_kind["nodes"]] == [("nodes_total", 2, 3)]
+    assert [(c.subject, c.before, c.after) for c in by_kind["application"]] == [
+        ("applications_total", 1, 2)]
+    assert by_kind["upgrade"][0].after is True
+    assert by_kind["upgrade"][0].subject == "4.17.2"
+    assert by_kind["namespace"][0].after == "fraud"
+    assert "risk" in by_kind["namespace"][0].message
+    assert {c.subject for c in by_kind["operator"]} == {"etcd", "ingress"}
+    assert all(c.after == "degraded" and c.before == "ok" for c in by_kind["operator"])
+    # three nodes but only two ready, and every operator degraded: two checks fell over
+    assert {c.subject for c in by_kind["check"]} == {"no-degraded-operators", "nodes-ready"}
+    assert all(c.after == "fail" and c.before == "ok" for c in by_kind["check"])
+    assert by_kind["status"][0].after == "critical"
+
+
+def test_a_check_and_an_operator_that_recover_are_recorded_too(store, manifest, documents):
+    degraded = _changed(documents[EAST])
+    degraded["operators"] = [{**o, "degraded": True} for o in degraded["operators"]]
+    _persist(store, manifest, degraded)
+    _persist(store, manifest, degraded)              # nothing moved: nothing recorded
+    assert store.changes(EAST) == []
+    _persist(store, manifest, documents[EAST])       # operators healthy again
+
+    recovered = {(c.kind, c.subject, c.after) for c in store.changes(EAST)}
+    assert ("operator", "ingress", "ok") in recovered
+    assert ("check", "no-degraded-operators", "ok") in recovered
+    assert ("status", "overall_status", "warning") in recovered
+
+
+def test_an_unreachable_sweep_records_only_that(store, manifest, documents):
+    """A cluster the collector cannot reach has empty sections. Reporting every
+    check as recovered and every namespace as deleted would be a lie."""
+    _persist(store, manifest, documents[EAST])
+    _persist(store, manifest, unreachable({"name": EAST}, "connect: timed out"))
+    lost = store.changes(EAST)
+    assert [(c.kind, c.subject) for c in lost] == [("reachability", "reachable")]
+    assert lost[0].before is True and lost[0].after is False
+    assert "timed out" in lost[0].message
+
+    _persist(store, manifest, documents[EAST])       # and back again
+    assert [(c.kind, c.after) for c in store.changes(EAST, limit=1)] == [("reachability", True)]
+
+
+def test_changes_are_read_newest_first_and_by_window(store, manifest, documents):
+    base = documents[EAST]
+    start = datetime(2026, 9, 10, 10, 0, tzinfo=UTC)
+    _persist(store, manifest, base, at=start)
+    for index, version in enumerate(("4.16.8", "4.16.9", "4.17.0"), start=1):
+        _persist(store, manifest, _changed(base, version=version),
+                 at=start + timedelta(hours=index))
+
+    everything = store.changes(EAST)
+    assert [c.after for c in everything] == ["4.17.0", "4.16.9", "4.16.8"]
+    assert [c.after for c in store.changes(EAST, limit=1)] == ["4.17.0"]
+    assert [c.after for c in store.changes(EAST, since=start + timedelta(hours=2, minutes=30))] \
+        == ["4.17.0"]
+    assert store.changes("nope") == []
+
+
+def test_changes_across_the_fleet_are_merged_newest_first(fleet, manifest, documents):
+    start = datetime(2026, 9, 10, 10, 0, tzinfo=UTC)
+    _persist(fleet, manifest, _changed(documents[WEST], version="4.15.10"),
+             hub="hub-west", at=start)
+    _persist(fleet, manifest, _changed(documents[EAST], version="4.16.8"),
+             hub="hub-east", at=start + timedelta(minutes=1))
+
+    rows = fleet.changes_across([EAST, WEST])
+    assert [(r.cluster_name, r.after) for r in rows] == [(EAST, "4.16.8"), (WEST, "4.15.10")]
+    assert [r.cluster_name for r in fleet.changes_across()] == [EAST, WEST]
+    assert fleet.changes_across([], since=start) == []
+    assert [r.cluster_name for r in
+            fleet.changes_across(since=start + timedelta(seconds=30))] == [EAST]
 
 
 # --------------------------------------------------------------------------- #
@@ -468,7 +805,16 @@ def test_ttl_is_set_only_when_configured(make_store, manifest, documents):
     store = make_store(ttl_seconds=3600)
     _persist(store, manifest, documents[EAST])
     for key in store.keys.expiring_keys(EAST):
+        # The change log only exists once something has changed, and a first
+        # sweep changes nothing; every other per-cluster key is written here.
+        if key == store.keys.changes(EAST):
+            continue
         assert 0 < store.r.ttl(key) <= 3600, key
+
+    changed = copy.deepcopy(documents[EAST])
+    changed["version"] = "4.17.1"
+    _persist(store, manifest, changed)
+    assert 0 < store.r.ttl(store.keys.changes(EAST)) <= 3600
     assert store.r.ttl(store.keys.ledger(EAST)) == -1      # the ledger outlives the data
     assert store.r.ttl(store.keys.clusters) == -1          # fleet keys never expire
 

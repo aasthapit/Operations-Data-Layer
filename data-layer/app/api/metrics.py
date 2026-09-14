@@ -7,12 +7,14 @@ Fleet-wide top-N comes from the usage sorted sets, so "the ten busiest
 namespaces" is a range read rather than a fleet scan.
 """
 from collections import defaultdict
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..serialize import _iso, capacity_dict
 from ..store import Store
-from .deps import get_store_dep
+from .deps import RESOLUTION_DOC, get_store_dep
+from .deps import resolution as resolution_of
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
@@ -108,14 +110,30 @@ def cluster_utilization(name: str, store: Store = Depends(get_store_dep)):
 
 
 @router.get("/cluster/{name}/timeline")
-def cluster_timeline(name: str, limit: int = 100, store: Store = Depends(get_store_dep)):
-    return {"cluster": name, "points": [{
+def cluster_timeline(name: str, limit: int = 100,
+                     resolution: str = Query("sweep", description=RESOLUTION_DOC),
+                     since: datetime | None = None, until: datetime | None = None,
+                     store: Store = Depends(get_store_dep)):
+    """Utilization over time for one cluster, oldest first.
+
+    At `hour` and `day` resolution the usage columns are the mean over the
+    bucket and `*_max` is the peak inside it, which is the pair capacity
+    planning needs: a mean alone makes every cluster look idle.
+    """
+    rows = store.snapshots(name, limit, resolution=resolution_of(resolution),
+                           since=since, until=until)
+    return {"cluster": name, "resolution": resolution, "points": [{
         "at": _iso(r.snapshot_at),
-        "cpu_used_cores": r.cpu_usage, "cpu_allocatable_cores": r.cpu_allocatable,
-        "cpu_percent": round(100 * r.cpu_usage / r.cpu_allocatable, 1)
-        if r.cpu_usage is not None and r.cpu_allocatable else None,
-        "memory_used_bytes": r.memory_usage, "memory_allocatable_bytes": r.memory_allocatable,
-        "memory_percent": round(100 * r.memory_usage / r.memory_allocatable, 1)
-        if r.memory_usage is not None and r.memory_allocatable else None,
+        "samples": r.samples if r.samples is not None else 1,
+        "cpu_used_cores": r.cpu_usage, "cpu_used_cores_max": r.cpu_usage_max,
+        "cpu_allocatable_cores": r.cpu_allocatable,
+        "cpu_percent": _percent(r.cpu_usage, r.cpu_allocatable),
+        "memory_used_bytes": r.memory_usage, "memory_used_bytes_max": r.memory_usage_max,
+        "memory_allocatable_bytes": r.memory_allocatable,
+        "memory_percent": _percent(r.memory_usage, r.memory_allocatable),
         "pods_running": r.pods_running, "pod_issues": r.pod_issues,
-    } for r in store.snapshots(name, limit)]}
+    } for r in rows]}
+
+
+def _percent(used, total):
+    return round(100 * used / total, 1) if used is not None and total else None
