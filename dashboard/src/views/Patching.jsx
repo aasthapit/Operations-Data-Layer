@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Stat, Loading, ErrorBanner } from "../components";
+import { Stat, Loading, ErrorBanner, DataTable } from "../components";
 
 const JOB_TONE = {
   completed: "healthy", running: "warning", paused: "warning",
@@ -17,6 +17,50 @@ function Tag({ tone, children }) {
 function fmtTime(iso) {
   return iso ? new Date(iso).toLocaleString() : "—";
 }
+
+const JOB_COLUMNS = [
+  { key: "id", label: "Job", className: "mono", filter: "text" },
+  { key: "change_record", label: "Change", className: "mono", filter: "text" },
+  { key: "requested_by", label: "Requested", filter: "select" },
+  {
+    key: "approved_by", label: "Approved", filter: "select",
+    render: (j) => j.approved_by || <span className="muted">pending</span>,
+  },
+  { key: "target_version", label: "Target", className: "mono", filter: "select" },
+  {
+    key: "progress", label: "Progress", className: "nowrap",
+    sortValue: (j) => j.totals.success_pct,
+    filterValue: (j) => `${j.totals.succeeded}/${j.totals.total} ${j.totals.success_pct}%`,
+    render: (j) => (
+      <>
+        <span style={{ color: "var(--healthy)" }}>{j.totals.succeeded}✓</span>{" "}
+        {j.totals.skipped ? <span style={{ color: "var(--warning)" }}>{j.totals.skipped}⤼</span> : null}{" "}
+        {j.totals.failed ? <span style={{ color: "var(--critical)" }}>{j.totals.failed}✕</span> : null}
+        <span className="muted"> / {j.totals.total} · {j.totals.success_pct}%</span>
+      </>
+    ),
+  },
+  { key: "status", label: "Status", filter: "select", render: (j) => <Tag tone={JOB_TONE[j.status]}>{j.status}</Tag> },
+  { key: "created_at", label: "Created", className: "muted nowrap", render: (j) => fmtTime(j.created_at) },
+];
+
+const TASK_COLUMNS = [
+  { key: "cluster", label: "Cluster", className: "mono", filter: "text" },
+  { key: "phase", label: "Phase", filter: "select" },
+  { key: "outcome", label: "Outcome", filter: "select", render: (t) => <Tag tone={OUTCOME_TONE[t.outcome]}>{t.outcome}</Tag> },
+  {
+    key: "version", label: "Version", className: "mono nowrap",
+    sortValue: (t) => t.version_to,
+    filterValue: (t) => `${t.version_from || "?"} → ${t.version_to || ""}`,
+    render: (t) => `${t.version_from || "?"} → ${t.version_to || "—"}`,
+  },
+  {
+    key: "health", label: "Health",
+    sortValue: (t) => t.health_after,
+    filterValue: (t) => `${t.health_before ?? ""} ${t.health_after ?? ""}`,
+    render: (t) => `${t.health_before ?? "—"} → ${t.health_after ?? "—"}`,
+  },
+];
 
 export default function Patching() {
   const [selected, setSelected] = useState(null);
@@ -40,34 +84,15 @@ export default function Patching() {
       <div className="card" style={{ padding: 0 }}>
         <div style={{ padding: "18px 18px 0" }}><h3>Jobs</h3></div>
         {jobs.error ? <ErrorBanner error={jobs.error} /> : jobs.loading && !jobs.data ? <Loading /> : (
-          <table>
-            <thead>
-              <tr><th>Job</th><th>Change</th><th>Requested</th><th>Approved</th>
-                <th>Target</th><th>Progress</th><th>Status</th><th>Created</th></tr>
-            </thead>
-            <tbody>
-              {jobs.data.jobs.map((j) => (
-                <tr key={j.id} className="clickable" onClick={() => setSelected(j.id)}>
-                  <td className="mono">{j.id}</td>
-                  <td className="mono">{j.change_record}</td>
-                  <td>{j.requested_by}</td>
-                  <td>{j.approved_by || <span className="muted">pending</span>}</td>
-                  <td className="mono">{j.target_version}</td>
-                  <td>
-                    <span style={{ color: "var(--healthy)" }}>{j.totals.succeeded}✓</span>{" "}
-                    {j.totals.skipped ? <span style={{ color: "var(--warning)" }}>{j.totals.skipped}⤼</span> : null}{" "}
-                    {j.totals.failed ? <span style={{ color: "var(--critical)" }}>{j.totals.failed}✕</span> : null}
-                    <span className="muted"> / {j.totals.total} · {j.totals.success_pct}%</span>
-                  </td>
-                  <td><Tag tone={JOB_TONE[j.status]}>{j.status}</Tag></td>
-                  <td className="muted">{fmtTime(j.created_at)}</td>
-                </tr>
-              ))}
-              {jobs.data.jobs.length === 0 && (
-                <tr><td colSpan={8} className="empty">No patching jobs yet. Submit one via the N8N form.</td></tr>
-              )}
-            </tbody>
-          </table>
+          <DataTable
+            id="patching.jobs"
+            columns={JOB_COLUMNS}
+            rows={jobs.data.jobs}
+            rowKey="id"
+            onRowClick={(j) => setSelected(j.id)}
+            initialSort={{ key: "created_at", dir: "desc" }}
+            empty="No patching jobs yet. Submit one via the N8N form."
+          />
         )}
       </div>
     </div>
@@ -125,20 +150,14 @@ function JobDetail({ id, onBack }) {
       <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <div className="card" style={{ padding: 0 }}>
           <div style={{ padding: "18px 18px 0" }}><h3>Per-cluster results</h3></div>
-          <table>
-            <thead><tr><th>Cluster</th><th>Phase</th><th>Outcome</th><th>Version</th><th>Health</th></tr></thead>
-            <tbody>
-              {j.tasks.map((t) => (
-                <tr key={t.cluster}>
-                  <td className="mono">{t.cluster}</td>
-                  <td>{t.phase}</td>
-                  <td><Tag tone={OUTCOME_TONE[t.outcome]}>{t.outcome}</Tag></td>
-                  <td className="mono">{t.version_from || "?"} → {t.version_to || "—"}</td>
-                  <td>{t.health_before ?? "—"} → {t.health_after ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable
+            id="patching.job.tasks"
+            columns={TASK_COLUMNS}
+            rows={j.tasks}
+            rowKey="cluster"
+            initialSort={{ key: "cluster", dir: "asc" }}
+            empty="No per-cluster results yet."
+          />
         </div>
 
         <div className="card" style={{ padding: 0 }}>

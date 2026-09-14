@@ -2,8 +2,8 @@ import { useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
 import {
-  Pill, Loading, ErrorBanner, Sparkline, Dot, SubTabs, UsageBar, Tier, Empty, FilterSelect,
-  fmtBytes, fmtCores, fmtPct, fmtTime, fmtAge, fmtDays,
+  Pill, Loading, ErrorBanner, Sparkline, Dot, SubTabs, UsageBar, Tier, FilterSelect, DataTable,
+  fmtBytes, fmtCores, fmtTime, fmtAge, fmtDays,
 } from "../components";
 
 const SECTIONS = [
@@ -156,50 +156,116 @@ function NamespacesSection({ c, nav }) {
   const platform = c.namespaces_detail.filter((n) => n.class === "platform");
   return (
     <div className="grid" style={{ gap: 16 }}>
-      <NamespaceTable title={`Applications (${apps.length})`} rows={apps} showOwner nav={nav}
+      <NamespaceTable id="cluster.namespaces.application" title={`Applications (${apps.length})`} rows={apps} showOwner nav={nav}
         desc="Every non-platform namespace is an application. Ownership comes from labels on the namespace, then its workloads." />
-      <NamespaceTable title={`OpenShift platform namespaces (${platform.length})`} rows={platform} nav={nav}
+      <NamespaceTable id="cluster.namespaces.platform" title={`OpenShift platform namespaces (${platform.length})`} rows={platform} nav={nav}
         desc="The cluster's own namespaces, grouped separately (openshift-*, kube-*, default…)." />
     </div>
   );
 }
 
-function NamespaceTable({ title, rows, showOwner, desc, nav }) {
+function NamespaceTable({ id, title, rows, showOwner, desc, nav }) {
+  const columns = [
+    { key: "name", label: "Namespace", className: "mono", filter: "text" },
+    ...(showOwner
+      ? [
+        { key: "app", label: "App", filter: "text" },
+        { key: "team", label: "Team", className: "muted", filter: "select", render: (n) => n.team || "—" },
+        { key: "tier", label: "Tier", filter: "select", render: (n) => <Tier tier={n.tier} /> },
+      ]
+      : []),
+    { key: "status", label: "Status", filter: "select", render: (n) => <Pill status={n.status} /> },
+    { key: "workloads", label: "Workloads" },
+    {
+      key: "replicas_ready", label: "Replicas",
+      filterValue: (n) => `${n.replicas_ready}/${n.replicas_desired}`,
+      render: (n) => `${n.replicas_ready}/${n.replicas_desired}`,
+    },
+    {
+      key: "pods", label: "Pods",
+      sortValue: (n) => n.pods.running,
+      filterValue: (n) => `${n.pods.running}/${n.pods.total}`,
+      render: (n) => (
+        <>
+          {n.pods.running}<span className="muted">/{n.pods.total}</span>
+          {n.pods.pending ? <span style={{ color: "var(--warning)" }}> +{n.pods.pending} pending</span> : null}
+        </>
+      ),
+    },
+    {
+      key: "restarts", label: "Restarts",
+      sortValue: (n) => n.pods.restarts,
+      render: (n) => n.pods.restarts || <span className="muted">0</span>,
+    },
+    {
+      key: "issues", label: "Issues",
+      sortValue: (n) => n.pods.issues,
+      render: (n) => (n.pods.issues ? <span style={{ color: "var(--warning)" }}>{n.pods.issues}</span> : <span className="muted">0</span>),
+    },
+    {
+      key: "cpu", label: "CPU used / req", className: "nowrap",
+      sortValue: (n) => n.cpu.used_cores,
+      filterValue: (n) => `${fmtCores(n.cpu.used_cores)} / ${fmtCores(n.cpu.requests_cores)}`,
+      render: (n) => <>{fmtCores(n.cpu.used_cores)} <span className="muted">/ {fmtCores(n.cpu.requests_cores)}</span></>,
+    },
+    {
+      key: "memory", label: "Memory used / req", className: "nowrap",
+      sortValue: (n) => n.memory.used_bytes,
+      filterValue: (n) => `${fmtBytes(n.memory.used_bytes)} / ${fmtBytes(n.memory.requests_bytes)}`,
+      render: (n) => <>{fmtBytes(n.memory.used_bytes)} <span className="muted">/ {fmtBytes(n.memory.requests_bytes)}</span></>,
+    },
+    {
+      key: "resource_counts", label: "Resources", className: "muted",
+      sortValue: (n) => Object.values(n.resource_counts).reduce((a, b) => a + b, 0),
+      filterValue: (n) => Object.keys(n.resource_counts).join(" "),
+      render: (n) => <span style={{ fontSize: 11.5 }}>{Object.entries(n.resource_counts).map(([k, v]) => `${v} ${k}`).join(" · ") || "—"}</span>,
+    },
+  ];
   return (
     <div className="card flush">
       <div className="card-head"><h3>{title}</h3><div className="desc">{desc}</div></div>
-      <table>
-        <thead>
-          <tr>
-            <th>Namespace</th>{showOwner && <><th>App</th><th>Team</th><th>Tier</th></>}<th>Status</th>
-            <th>Workloads</th><th>Replicas</th><th>Pods</th><th>Restarts</th><th>Issues</th>
-            <th>CPU used / req</th><th>Memory used / req</th><th>Resources</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((n) => (
-            <tr key={n.name} className={showOwner ? "clickable" : ""} onClick={() => showOwner && nav.openApp(n.app)}>
-              <td className="mono">{n.name}</td>
-              {showOwner && <><td>{n.app}</td><td className="muted">{n.team || "—"}</td><td><Tier tier={n.tier} /></td></>}
-              <td><Pill status={n.status} /></td>
-              <td>{n.workloads}</td>
-              <td>{n.replicas_ready}/{n.replicas_desired}</td>
-              <td>{n.pods.running}<span className="muted">/{n.pods.total}</span>{n.pods.pending ? <span style={{ color: "var(--warning)" }}> +{n.pods.pending} pending</span> : null}</td>
-              <td>{n.pods.restarts || <span className="muted">0</span>}</td>
-              <td>{n.pods.issues ? <span style={{ color: "var(--warning)" }}>{n.pods.issues}</span> : <span className="muted">0</span>}</td>
-              <td className="nowrap">{fmtCores(n.cpu.used_cores)} <span className="muted">/ {fmtCores(n.cpu.requests_cores)}</span></td>
-              <td className="nowrap">{fmtBytes(n.memory.used_bytes)} <span className="muted">/ {fmtBytes(n.memory.requests_bytes)}</span></td>
-              <td className="muted" style={{ fontSize: 11.5 }}>{Object.entries(n.resource_counts).map(([k, v]) => `${v} ${k}`).join(" · ") || "—"}</td>
-            </tr>
-          ))}
-          {rows.length === 0 && <tr><td colSpan={13} className="empty">None.</td></tr>}
-        </tbody>
-      </table>
+      <DataTable
+        id={id}
+        columns={columns}
+        rows={rows}
+        rowKey="name"
+        onRowClick={showOwner ? (n) => nav.openApp(n.app) : undefined}
+        initialSort={{ key: "name", dir: "asc" }}
+        empty="None."
+      />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
+const workloadKey = (w) => `${w.namespace}/${w.kind}/${w.name}`;
+
+const WORKLOAD_COLUMNS = [
+  { key: "namespace", label: "Namespace", className: "mono", filter: "text", sortValue: (w) => `${w.namespace}/${w.name}` },
+  { key: "kind", label: "Kind", className: "muted", filter: "select" },
+  { key: "name", label: "Name", filter: "text" },
+  { key: "status", label: "Status", filter: "select", render: (w) => <span className={`chip ${w.status}`}>{w.status}</span> },
+  {
+    key: "replicas", label: "Replicas", className: "nowrap",
+    sortValue: (w) => w.replicas.ready,
+    filterValue: (w) => `${w.replicas.ready}/${w.replicas.desired}`,
+    render: (w) => (
+      <>
+        {w.replicas.ready}/{w.replicas.desired}
+        {w.replicas.updated < w.replicas.desired && <span className="muted"> · {w.replicas.updated} updated</span>}
+      </>
+    ),
+  },
+  {
+    key: "images", label: "Images", className: "mono wrap", filter: "text",
+    sortValue: (w) => w.images.join(", "),
+    render: (w) => w.images.join(", "),
+  },
+  { key: "config_refs", label: "Config refs", className: "muted", sortValue: (w) => w.config_refs.length, render: (w) => w.config_refs.length },
+  { key: "service_account", label: "SA", className: "muted", filter: "select" },
+  { key: "created_at", label: "Age", className: "muted", render: (w) => fmtAge(w.created_at) },
+];
+
 function WorkloadsSection({ name }) {
   const [cls, setCls] = useState("");
   const [ns, setNs] = useState("");
@@ -219,35 +285,16 @@ function WorkloadsSection({ name }) {
         <div className="desc">Env var names and their Secret / ConfigMap sources are collected; values never are. Click a row for containers.</div>
       </div>
       {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
-        <table>
-          <thead><tr><th>Namespace</th><th>Kind</th><th>Name</th><th>Status</th><th>Replicas</th><th>Images</th><th>Config refs</th><th>SA</th><th>Age</th></tr></thead>
-          <tbody>
-            {data.workloads.map((w) => {
-              const key = `${w.namespace}/${w.kind}/${w.name}`;
-              return [
-                <tr key={key} className="clickable" onClick={() => setOpen(open === key ? null : key)}>
-                  <td className="mono">{w.namespace}</td>
-                  <td className="muted">{w.kind}</td>
-                  <td>{w.name}</td>
-                  <td><span className={`chip ${w.status}`}>{w.status}</span></td>
-                  <td>{w.replicas.ready}/{w.replicas.desired}{w.replicas.updated < w.replicas.desired && <span className="muted"> · {w.replicas.updated} updated</span>}</td>
-                  <td className="mono wrap">{w.images.join(", ")}</td>
-                  <td className="muted">{w.config_refs.length}</td>
-                  <td className="muted">{w.service_account}</td>
-                  <td className="muted">{fmtAge(w.created_at)}</td>
-                </tr>,
-                open === key && (
-                  <tr key={key + "-d"}>
-                    <td colSpan={9} style={{ background: "var(--bg)" }}>
-                      <WorkloadDetail w={w} />
-                    </td>
-                  </tr>
-                ),
-              ];
-            })}
-            {data.workloads.length === 0 && <tr><td colSpan={9} className="empty">No workloads.</td></tr>}
-          </tbody>
-        </table>
+        <DataTable
+          id="cluster.workloads"
+          columns={WORKLOAD_COLUMNS}
+          rows={data.workloads}
+          rowKey={workloadKey}
+          onRowClick={(w) => setOpen(open === workloadKey(w) ? null : workloadKey(w))}
+          expanded={(w) => (open === workloadKey(w) ? <WorkloadDetail w={w} /> : null)}
+          initialSort={{ key: "namespace", dir: "asc" }}
+          empty="No workloads."
+        />
       )}
     </div>
   );
@@ -295,44 +342,141 @@ function WorkloadDetail({ w }) {
 }
 
 // ---------------------------------------------------------------------------
+const nodePressure = (n) => Object.entries(n.conditions).filter(([, v]) => v).map(([k]) => k);
+const nodeState = (n) => (!n.ready ? "critical" : nodePressure(n).length || !n.schedulable ? "warning" : "healthy");
+
+const NODE_COLUMNS = [
+  { key: "name", label: "Node", className: "mono", filter: "text" },
+  {
+    key: "roles", label: "Roles", filter: "select",
+    filterValue: (n) => n.roles.join(", "),
+    render: (n) => n.roles.map((r) => <span key={r} className="tag" style={{ marginRight: 4 }}>{r}</span>),
+  },
+  {
+    key: "state", label: "State", filter: "select",
+    sortValue: (n) => ({ critical: 0, warning: 1, healthy: 2 })[nodeState(n)],
+    filterValue: (n) => nodeState(n),
+    render: (n) => {
+      const pressure = nodePressure(n);
+      return (
+        <>
+          <Pill status={nodeState(n)} />
+          {!n.schedulable && <span className="muted"> cordoned</span>}
+          {pressure.length > 0 && <span className="muted"> {pressure.join(", ")}</span>}
+        </>
+      );
+    },
+  },
+  {
+    key: "cpu", label: "CPU used / alloc", className: "nowrap",
+    sortValue: (n) => n.cpu.used_percent,
+    filterValue: (n) => `${n.cpu.used_cores != null ? n.cpu.used_cores.toFixed(2) : ""} / ${n.cpu.allocatable_cores}`,
+    render: (n) => (
+      <>
+        <UsageBar percent={n.cpu.used_percent} width={70} />{" "}
+        <span className="muted">{n.cpu.used_cores != null ? n.cpu.used_cores.toFixed(2) : "—"} / {n.cpu.allocatable_cores}</span>
+      </>
+    ),
+  },
+  {
+    key: "memory", label: "Memory used / alloc", className: "nowrap",
+    sortValue: (n) => n.memory.used_percent,
+    filterValue: (n) => `${fmtBytes(n.memory.used_bytes)} / ${fmtBytes(n.memory.allocatable_bytes)}`,
+    render: (n) => (
+      <>
+        <UsageBar percent={n.memory.used_percent} width={70} />{" "}
+        <span className="muted">{fmtBytes(n.memory.used_bytes)} / {fmtBytes(n.memory.allocatable_bytes)}</span>
+      </>
+    ),
+  },
+  {
+    key: "pods", label: "Pods",
+    sortValue: (n) => n.pods.running,
+    filterValue: (n) => `${n.pods.running}/${n.pods.capacity}`,
+    render: (n) => <>{n.pods.running}<span className="muted">/{n.pods.capacity}</span></>,
+  },
+  { key: "kubelet_version", label: "Kubelet", className: "mono", filter: "select" },
+  { key: "os_image", label: "OS", className: "muted wrap", filter: "text" },
+  { key: "container_runtime", label: "Runtime", className: "mono", filter: "select" },
+  {
+    key: "zone", label: "Zone / type", className: "muted", filter: "select",
+    filterValue: (n) => [n.zone, n.instance_type].filter(Boolean).join(" · "),
+    render: (n) => [n.zone, n.instance_type].filter(Boolean).join(" · ") || "—",
+  },
+  {
+    key: "images", label: "Images", className: "muted nowrap",
+    sortValue: (n) => n.images.bytes,
+    filterValue: (n) => `${n.images.count}`,
+    render: (n) => `${n.images.count} · ${fmtBytes(n.images.bytes)}`,
+  },
+  { key: "created_at", label: "Age", className: "muted", render: (n) => fmtAge(n.created_at) },
+];
+
 function NodesSection({ c }) {
   return (
     <div className="card flush">
       <div className="card-head"><h3>Nodes ({c.nodes_detail.length})</h3></div>
-      <table>
-        <thead><tr><th>Node</th><th>Roles</th><th>State</th><th>CPU used / alloc</th><th>Memory used / alloc</th><th>Pods</th><th>Kubelet</th><th>OS</th><th>Runtime</th><th>Zone / type</th><th>Images</th><th>Age</th></tr></thead>
-        <tbody>
-          {c.nodes_detail.map((n) => {
-            const pressure = Object.entries(n.conditions).filter(([, v]) => v).map(([k]) => k);
-            return (
-              <tr key={n.name}>
-                <td className="mono">{n.name}</td>
-                <td>{n.roles.map((r) => <span key={r} className="tag" style={{ marginRight: 4 }}>{r}</span>)}</td>
-                <td>
-                  <Pill status={!n.ready ? "critical" : pressure.length || !n.schedulable ? "warning" : "healthy"} />
-                  {!n.schedulable && <span className="muted"> cordoned</span>}
-                  {pressure.length > 0 && <span className="muted"> {pressure.join(", ")}</span>}
-                </td>
-                <td><UsageBar percent={n.cpu.used_percent} width={70} /> <span className="muted">{n.cpu.used_cores != null ? n.cpu.used_cores.toFixed(2) : "—"} / {n.cpu.allocatable_cores}</span></td>
-                <td><UsageBar percent={n.memory.used_percent} width={70} /> <span className="muted">{fmtBytes(n.memory.used_bytes)} / {fmtBytes(n.memory.allocatable_bytes)}</span></td>
-                <td>{n.pods.running}<span className="muted">/{n.pods.capacity}</span></td>
-                <td className="mono">{n.kubelet_version}</td>
-                <td className="muted wrap">{n.os_image}</td>
-                <td className="mono">{n.container_runtime}</td>
-                <td className="muted">{[n.zone, n.instance_type].filter(Boolean).join(" · ") || "—"}</td>
-                <td className="muted">{n.images.count} · {fmtBytes(n.images.bytes)}</td>
-                <td className="muted">{fmtAge(n.created_at)}</td>
-              </tr>
-            );
-          })}
-          {c.nodes_detail.length === 0 && <tr><td colSpan={12} className="empty">No nodes collected.</td></tr>}
-        </tbody>
-      </table>
+      <DataTable
+        id="cluster.nodes"
+        columns={NODE_COLUMNS}
+        rows={c.nodes_detail}
+        rowKey="name"
+        initialSort={{ key: "name", dir: "asc" }}
+        empty="No nodes collected."
+      />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
+const POD_ISSUE_COLUMNS = [
+  { key: "class", label: "Class", filter: "select", render: (i) => <span className="tag">{i.class}</span> },
+  { key: "namespace", label: "Namespace", className: "mono", filter: "text" },
+  { key: "name", label: "Pod", filter: "text" },
+  { key: "reason", label: "Reason", filter: "select", render: (i) => <span className="chip critical">{i.reason}</span> },
+  { key: "owner", label: "Owner", className: "muted", filter: "text", render: (i) => i.owner || "—" },
+  { key: "node", label: "Node", className: "muted", filter: "select", render: (i) => i.node || "—" },
+  { key: "restarts", label: "Restarts" },
+  { key: "containers_ready", label: "Ready" },
+  { key: "message", label: "Message", className: "muted wrap", filter: "text" },
+  { key: "started_at", label: "Since", className: "muted", render: (i) => fmtAge(i.started_at) },
+];
+
+const CLUSTER_CERT_COLUMNS = [
+  { key: "namespace", label: "Namespace", className: "mono", filter: "text" },
+  { key: "kind", label: "Kind", className: "muted", filter: "select" },
+  { key: "name", label: "Name", filter: "text" },
+  { key: "status", label: "Status", filter: "select", render: (r) => <span className={`chip ${r.status}`}>{r.status}</span> },
+  {
+    key: "days_left", label: "Expires", className: "nowrap",
+    filterValue: (r) => fmtDays(r.days_left),
+    render: (r) => <>{fmtDays(r.days_left)} <span className="muted">· {fmtTime(r.expires_at)}</span></>,
+  },
+  {
+    key: "subject", label: "Subject", className: "mono muted", filter: "text",
+    filterValue: (r) => r.certificates[0]?.subject || "",
+    render: (r) => r.certificates[0]?.subject,
+  },
+];
+
+const CLUSTER_EVENT_COLUMNS = [
+  {
+    key: "last_at", label: "When", className: "muted nowrap",
+    filterValue: (e) => fmtAge(e.last_at),
+    render: (e) => `${fmtAge(e.last_at)} ago`,
+  },
+  { key: "namespace", label: "Namespace", className: "mono", filter: "text" },
+  {
+    key: "object", label: "Object", filter: "text",
+    sortValue: (e) => `${e.involved.kind}/${e.involved.name}`,
+    filterValue: (e) => `${e.involved.kind}/${e.involved.name}`,
+    render: (e) => `${e.involved.kind}/${e.involved.name}`,
+  },
+  { key: "reason", label: "Reason", filter: "select", render: (e) => <span className="chip warning">{e.reason}</span> },
+  { key: "count", label: "Count" },
+  { key: "message", label: "Message", className: "muted wrap", filter: "text" },
+];
+
 function IssuesSection({ c }) {
   const ev = useFetch(() => api.events({ cluster: c.name, limit: 50 }), [c.name]);
   const certs = useFetch(() => api.certificates({ cluster: c.name }), [c.name]);
@@ -340,65 +484,39 @@ function IssuesSection({ c }) {
     <div className="grid" style={{ gap: 16 }}>
       <div className="card flush">
         <div className="card-head"><h3>Pod issues ({c.pod_issues_detail.length})</h3></div>
-        <table>
-          <thead><tr><th>Class</th><th>Namespace</th><th>Pod</th><th>Reason</th><th>Owner</th><th>Node</th><th>Restarts</th><th>Ready</th><th>Message</th><th>Since</th></tr></thead>
-          <tbody>
-            {c.pod_issues_detail.map((i) => (
-              <tr key={i.namespace + i.name}>
-                <td><span className="tag">{i.class}</span></td>
-                <td className="mono">{i.namespace}</td>
-                <td>{i.name}</td>
-                <td><span className="chip critical">{i.reason}</span></td>
-                <td className="muted">{i.owner || "—"}</td>
-                <td className="muted">{i.node || "—"}</td>
-                <td>{i.restarts}</td>
-                <td>{i.containers_ready}</td>
-                <td className="muted wrap">{i.message}</td>
-                <td className="muted">{fmtAge(i.started_at)}</td>
-              </tr>
-            ))}
-            {c.pod_issues_detail.length === 0 && <tr><td colSpan={10} className="empty">No problem pods.</td></tr>}
-          </tbody>
-        </table>
+        <DataTable
+          id="cluster.podIssues"
+          columns={POD_ISSUE_COLUMNS}
+          rows={c.pod_issues_detail}
+          rowKey={(i) => i.namespace + "/" + i.name}
+          initialSort={{ key: "namespace", dir: "asc" }}
+          empty="No problem pods."
+        />
       </div>
       <div className="card flush">
         <div className="card-head"><h3>Certificates expiring ({certs.data?.count ?? "…"})</h3></div>
-        {certs.data && (
-          <table>
-            <thead><tr><th>Namespace</th><th>Kind</th><th>Name</th><th>Status</th><th>Expires</th><th>Subject</th></tr></thead>
-            <tbody>
-              {certs.data.certificates.map((r) => (
-                <tr key={r.namespace + r.name}>
-                  <td className="mono">{r.namespace}</td><td className="muted">{r.kind}</td><td>{r.name}</td>
-                  <td><span className={`chip ${r.status}`}>{r.status}</span></td>
-                  <td>{fmtDays(r.days_left)} <span className="muted">· {fmtTime(r.expires_at)}</span></td>
-                  <td className="mono muted">{r.certificates[0]?.subject}</td>
-                </tr>
-              ))}
-              {certs.data.certificates.length === 0 && <tr><td colSpan={6} className="empty">Nothing expiring within the threshold.</td></tr>}
-            </tbody>
-          </table>
+        {certs.error ? <ErrorBanner error={certs.error} /> : !certs.data ? <Loading /> : (
+          <DataTable
+            id="cluster.certificates"
+            columns={CLUSTER_CERT_COLUMNS}
+            rows={certs.data.certificates}
+            rowKey={(r) => r.namespace + "/" + r.name}
+            initialSort={{ key: "days_left", dir: "asc" }}
+            empty="Nothing expiring within the threshold."
+          />
         )}
       </div>
       <div className="card flush">
         <div className="card-head"><h3>Recent warning events</h3></div>
         {ev.error ? <ErrorBanner error={ev.error} /> : !ev.data ? <Loading /> : (
-          <table>
-            <thead><tr><th>When</th><th>Namespace</th><th>Object</th><th>Reason</th><th>Count</th><th>Message</th></tr></thead>
-            <tbody>
-              {ev.data.events.map((e) => (
-                <tr key={e.name}>
-                  <td className="muted nowrap">{fmtAge(e.last_at)} ago</td>
-                  <td className="mono">{e.namespace}</td>
-                  <td>{e.involved.kind}/{e.involved.name}</td>
-                  <td><span className="chip warning">{e.reason}</span></td>
-                  <td>{e.count}</td>
-                  <td className="muted wrap">{e.message}</td>
-                </tr>
-              ))}
-              {ev.data.events.length === 0 && <tr><td colSpan={6} className="empty">No warning events.</td></tr>}
-            </tbody>
-          </table>
+          <DataTable
+            id="cluster.events"
+            columns={CLUSTER_EVENT_COLUMNS}
+            rows={ev.data.events}
+            rowKey={(e, i) => `${e.namespace}/${e.name}/${i}`}
+            initialSort={{ key: "last_at", dir: "desc" }}
+            empty="No warning events."
+          />
         )}
       </div>
     </div>
@@ -407,38 +525,78 @@ function IssuesSection({ c }) {
 
 // ---------------------------------------------------------------------------
 function OperatorsSection({ c, nav }) {
+  const columns = [
+    {
+      key: "name", label: "Operator", filter: "text",
+      render: (o) => <>{o.name} {o.critical && <span className="tag critical">critical</span>}</>,
+    },
+    { key: "version", label: "Version", className: "mono", filter: "select" },
+    {
+      key: "state", label: "State", filter: "select",
+      sortValue: (o) => ["Degraded", "Unavailable", "Progressing", "Available"].indexOf(opStateLabel(o)),
+      filterValue: (o) => opStateLabel(o),
+      render: (o) => opState(o),
+    },
+    { key: "message", label: "Message", className: "muted wrap", filter: "text" },
+    {
+      key: "blast", label: "",
+      render: (o) => (
+        <span className="link" onClick={() => nav.goBlast({ operator: o.name, operator_version: o.version })}>blast radius →</span>
+      ),
+    },
+  ];
   return (
     <div className="card flush">
       <div className="card-head"><h3>Cluster operators ({c.operators.length})</h3></div>
-      <table>
-        <thead><tr><th>Operator</th><th>Version</th><th>State</th><th>Message</th><th></th></tr></thead>
-        <tbody>
-          {c.operators.map((o) => (
-            <tr key={o.name}>
-              <td>{o.name} {o.critical && <span className="tag critical">critical</span>}</td>
-              <td className="mono">{o.version}</td>
-              <td>{opState(o)}</td>
-              <td className="muted wrap">{o.message}</td>
-              <td><span className="link" onClick={() => nav.goBlast({ operator: o.name, operator_version: o.version })}>blast radius →</span></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DataTable
+        id="cluster.operators"
+        columns={columns}
+        rows={c.operators}
+        rowKey="name"
+        initialSort={{ key: "name", dir: "asc" }}
+        empty="No cluster operators collected."
+      />
     </div>
   );
 }
 
+function opStateLabel(o) {
+  if (o.degraded) return "Degraded";
+  if (!o.available) return "Unavailable";
+  if (o.progressing) return "Progressing";
+  return "Available";
+}
+
 function opState(o) {
-  if (o.degraded) return <span style={{ color: "var(--critical)" }}>Degraded</span>;
-  if (!o.available) return <span style={{ color: "var(--critical)" }}>Unavailable</span>;
-  if (o.progressing) return <span style={{ color: "var(--warning)" }}>Progressing</span>;
-  return <span style={{ color: "var(--healthy)" }}>Available</span>;
+  const label = opStateLabel(o);
+  const color = label === "Progressing" ? "var(--warning)" : label === "Available" ? "var(--healthy)" : "var(--critical)";
+  return <span style={{ color }}>{label}</span>;
 }
 
 // ---------------------------------------------------------------------------
 const RESOURCE_KINDS = ["routes", "services", "configmaps", "secrets", "persistentvolumeclaims", "resourcequotas",
   "networkpolicies", "horizontalpodautoscalers", "cronjobs", "ingresses", "clusterserviceversions", "subscriptions",
   "machineconfigpools", "storageclasses", "persistentvolumes", "clusterrolebindings", "events"];
+
+const INVENTORY_COLUMNS = [
+  {
+    key: "namespace", label: "Namespace", className: "mono", filter: "text",
+    sortValue: (r) => `${r.namespace || ""}/${r.name}`,
+    render: (r) => r.namespace || <span className="muted">cluster</span>,
+  },
+  { key: "name", label: "Name", filter: "text" },
+  {
+    key: "status", label: "Status", filter: "select",
+    render: (r) => (r.status ? <span className={`chip ${r.status}`}>{r.status}</span> : <span className="muted">—</span>),
+  },
+  {
+    key: "summary", label: "Summary", className: "muted wrap", filter: "text",
+    sortValue: (r) => summarize(r),
+    filterValue: (r) => summarize(r),
+    render: (r) => <span style={{ fontSize: 12 }}>{summarize(r)}</span>,
+  },
+  { key: "created_at", label: "Age", className: "muted", render: (r) => fmtAge(r.created_at) },
+];
 
 function ResourcesSection({ c }) {
   const [kind, setKind] = useState("routes");
@@ -473,23 +631,15 @@ function ResourcesSection({ c }) {
           </div>
         </div>
         {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
-          <div className="scroll">
-            <table>
-              <thead><tr><th>Namespace</th><th>Name</th><th>Status</th><th>Summary</th><th>Age</th></tr></thead>
-              <tbody>
-                {data.resources.map((r) => (
-                  <tr key={(r.namespace || "") + r.name}>
-                    <td className="mono">{r.namespace || <span className="muted">cluster</span>}</td>
-                    <td>{r.name}</td>
-                    <td>{r.status ? <span className={`chip ${r.status}`}>{r.status}</span> : <span className="muted">—</span>}</td>
-                    <td className="muted wrap" style={{ fontSize: 12 }}>{summarize(r)}</td>
-                    <td className="muted">{fmtAge(r.created_at)}</td>
-                  </tr>
-                ))}
-                {data.resources.length === 0 && <tr><td colSpan={5}><Empty>Nothing collected for this kind.</Empty></td></tr>}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            id="cluster.resources"
+            columns={INVENTORY_COLUMNS}
+            rows={data.resources}
+            rowKey={(r, i) => `${r.namespace || ""}/${r.name}/${i}`}
+            initialSort={{ key: "namespace", dir: "asc" }}
+            empty="Nothing collected for this kind."
+            scroll
+          />
         )}
       </div>
     </div>

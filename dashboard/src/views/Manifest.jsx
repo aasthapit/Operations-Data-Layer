@@ -1,7 +1,36 @@
 import { Fragment } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Loading, ErrorBanner } from "../components";
+import { Loading, ErrorBanner, DataTable } from "../components";
+
+const RESOURCE_COLUMNS = [
+  {
+    key: "domain", label: "Domain", className: "muted nowrap", filter: "select",
+    sortValue: (r) => `${r.domain}/${r.key}`,
+    filterValue: (r) => r.domain,
+  },
+  { key: "key", label: "Key", className: "mono nowrap", filter: "text" },
+  { key: "kind", label: "Kind", className: "nowrap", filter: "select" },
+  {
+    key: "api_group", label: "API group", className: "mono muted nowrap", filter: "select",
+    filterValue: (r) => `${r.api_group}/${r.version}`,
+    render: (r) => `${r.api_group}/${r.version}`,
+  },
+  {
+    key: "scope", label: "Scope", className: "muted nowrap", filter: "select",
+    filterValue: (r) => r.scope,
+    render: (r) => `${r.scope}${r.namespace_class && r.namespace_class !== "all" ? ` · ${r.namespace_class} only` : ""}${r.limit ? ` · limit ${r.limit}` : ""}`,
+  },
+  {
+    key: "enabled", label: "Enabled", filter: "select",
+    filterValue: (r) => (r.enabled ? "enabled" : "disabled"),
+    render: (r) => (r.enabled ? <span className="chip ok">enabled</span> : <span className="chip disabled">disabled</span>),
+  },
+  {
+    key: "description", label: "What it gives", className: "muted", filter: "text", width: "40%",
+    render: (r) => <span style={{ fontSize: 12 }}>{r.description}</span>,
+  },
+];
 
 export default function Manifest({ onOpen }) {
   const m = useFetch(() => api.manifest(), []);
@@ -58,23 +87,18 @@ export default function Manifest({ onOpen }) {
       </div>
 
       <div className="card flush">
-        <div className="card-head"><h3>Resources</h3></div>
-        <table>
-          <thead><tr><th>Domain</th><th>Key</th><th>Kind</th><th>API group</th><th>Scope</th><th>Enabled</th><th>What it gives</th></tr></thead>
-          <tbody>
-            {domains.map((dom) => d.resources.filter((r) => r.domain === dom).map((r, i) => (
-              <tr key={r.key}>
-                <td className="muted nowrap">{i === 0 ? dom : ""}</td>
-                <td className="mono nowrap">{r.key}</td>
-                <td className="nowrap">{r.kind}</td>
-                <td className="mono muted nowrap">{r.api_group}/{r.version}</td>
-                <td className="muted nowrap">{r.scope}{r.namespace_class && r.namespace_class !== "all" ? ` · ${r.namespace_class} only` : ""}{r.limit ? ` · limit ${r.limit}` : ""}</td>
-                <td>{r.enabled ? <span className="chip ok">enabled</span> : <span className="chip disabled">disabled</span>}</td>
-                <td className="muted" style={{ fontSize: 12, width: "40%" }}>{r.description}</td>
-              </tr>
-            )))}
-          </tbody>
-        </table>
+        <div className="card-head">
+          <h3>Resources</h3>
+          <div className="desc">{d.resources.length} declared across {domains.length} domains.</div>
+        </div>
+        <DataTable
+          id="manifest.resources"
+          columns={RESOURCE_COLUMNS}
+          rows={d.resources}
+          rowKey="key"
+          initialSort={{ key: "domain", dir: "asc" }}
+          empty="The manifest declares no resources."
+        />
       </div>
 
       <div className="card flush">
@@ -90,27 +114,37 @@ export default function Manifest({ onOpen }) {
 
 function Matrix({ data, onOpen }) {
   const label = (s) => !s ? "—" : s.status === "collected" ? s.count : s.status === "unavailable" ? "n/a" : s.status === "forbidden" ? "403" : s.status === "error" ? "err" : "off";
+  // One column per cluster, so only the resource column is sortable - a cluster
+  // header stays the link that opens it.
+  const columns = [
+    { key: "resource", label: "Resource", className: "mono", filter: "text" },
+    ...data.clusters.map((c) => ({
+      key: `cluster:${c.name}`,
+      label: <span className="link" onClick={() => onOpen(c.name)}>{c.name}</span>,
+      sortable: false,
+      headerClassName: "rot",
+      className: "cell",
+      filterValue: (row) => c.resources[row.resource]?.status || "disabled",
+      render: (row) => {
+        const s = c.resources[row.resource];
+        return (
+          <span className={`m ${s?.status || "disabled"}`} title={s?.error || (s ? `${s.status} · ${s.duration_ms} ms` : "")}>
+            {label(s)}
+          </span>
+        );
+      },
+    })),
+  ];
   return (
     <div className="matrix">
-      <table>
-        <thead>
-          <tr>
-            <th>Resource</th>
-            {data.clusters.map((c) => <th key={c.name} className="rot"><span className="link" onClick={() => onOpen(c.name)}>{c.name}</span></th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {data.resources.map((key) => (
-            <tr key={key}>
-              <td className="mono">{key}</td>
-              {data.clusters.map((c) => {
-                const s = c.resources[key];
-                return <td key={c.name} className="cell" title={s?.error || (s ? `${s.status} · ${s.duration_ms} ms` : "")}><span className={`m ${s?.status || "disabled"}`}>{label(s)}</span></td>;
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DataTable
+        id="manifest.availability"
+        columns={columns}
+        rows={data.resources.map((key) => ({ resource: key }))}
+        rowKey="resource"
+        initialSort={{ key: "resource", dir: "asc" }}
+        empty="Nothing collected on the last sweep."
+      />
     </div>
   );
 }

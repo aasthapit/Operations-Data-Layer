@@ -1,5 +1,8 @@
 // Small shared presentational components + formatters.
 
+// The one table primitive every view uses: sorting, per-column filters, search.
+export { default as DataTable } from "./DataTable";
+
 export function Pill({ status }) {
   const s = status || "unknown";
   return <span className={`pill ${s}`}><span className={`dot-s ${s}`} />{s}</span>;

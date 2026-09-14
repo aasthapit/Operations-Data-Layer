@@ -1,7 +1,39 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Pill, Stat, Loading, ErrorBanner, Tier } from "../components";
+import { Pill, Stat, ErrorBanner, Tier, DataTable } from "../components";
+
+const CLUSTER_COLUMNS = [
+  { key: "name", label: "Cluster", className: "mono", filter: "text" },
+  { key: "hub", label: "Hub", className: "mono", filter: "select" },
+  { key: "environment", label: "Env", filter: "select", render: (c) => <span className="tag">{c.environment}</span> },
+  { key: "reason", label: "Match", className: "muted wrap", filter: "text" },
+  { key: "status", label: "Status", filter: "select", render: (c) => <Pill status={c.status} /> },
+];
+
+const APP_COLUMNS = [
+  { key: "app", label: "Application", filter: "text" },
+  { key: "team", label: "Team", className: "muted", filter: "select" },
+  { key: "tier", label: "Tier", filter: "select", render: (a) => <Tier tier={a.tier} /> },
+  {
+    key: "cluster_count", label: "Clusters",
+    filterValue: (a) => a.clusters.map((c) => c.cluster).join(", "),
+    render: (a) => <span title={a.clusters.map((c) => c.cluster).join(", ")}>{a.cluster_count}</span>,
+  },
+];
+
+const WORKLOAD_COLUMNS = [
+  { key: "cluster", label: "Cluster", className: "mono", filter: "text" },
+  { key: "namespace", label: "Namespace", filter: "text" },
+  {
+    key: "workload", label: "Workload", filter: "text",
+    sortValue: (w) => `${w.kind}/${w.name}`,
+    filterValue: (w) => `${w.kind}/${w.name}`,
+    render: (w) => `${w.kind}/${w.name}`,
+  },
+  { key: "container", label: "Container", className: "muted", filter: "select" },
+  { key: "image", label: "Image", className: "mono", filter: "text" },
+];
 
 const EMPTY = { operator: "", operator_version: "", ocp_version: "", degraded_only: false,
   olm_operator: "", olm_version: "", image: "" };
@@ -121,59 +153,43 @@ function Result({ result, nav }) {
       <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <div className="card flush">
           <div className="card-head"><h3>Impacted clusters</h3></div>
-          <table>
-            <thead><tr><th>Cluster</th><th>Hub</th><th>Env</th><th>Match</th><th>Status</th></tr></thead>
-            <tbody>
-              {result.clusters.map((c) => (
-                <tr key={c.name} className="clickable" onClick={() => nav.openCluster(c.name)}>
-                  <td className="mono">{c.name}</td>
-                  <td className="mono">{c.hub}</td>
-                  <td><span className="tag">{c.environment}</span></td>
-                  <td className="muted wrap">{c.reason}</td>
-                  <td><Pill status={c.status} /></td>
-                </tr>
-              ))}
-              {result.clusters.length === 0 && <tr><td colSpan={5} className="empty">No clusters matched.</td></tr>}
-            </tbody>
-          </table>
+          <DataTable
+            id="blast.clusters"
+            columns={CLUSTER_COLUMNS}
+            rows={result.clusters}
+            rowKey="name"
+            onRowClick={(c) => nav.openCluster(c.name)}
+            initialSort={{ key: "name", dir: "asc" }}
+            empty="No clusters matched."
+          />
         </div>
 
         <div className="card flush">
           <div className="card-head"><h3>Impacted applications</h3></div>
-          <table>
-            <thead><tr><th>Application</th><th>Team</th><th>Tier</th><th>Clusters</th></tr></thead>
-            <tbody>
-              {result.applications.map((a) => (
-                <tr key={a.app} className="clickable" onClick={() => nav.openApp(a.app)}>
-                  <td>{a.app}</td>
-                  <td className="muted">{a.team}</td>
-                  <td><Tier tier={a.tier} /></td>
-                  <td title={a.clusters.map((c) => c.cluster).join(", ")}>{a.cluster_count}</td>
-                </tr>
-              ))}
-              {result.applications.length === 0 && <tr><td colSpan={4} className="empty">No applications on matched clusters.</td></tr>}
-            </tbody>
-          </table>
+          <DataTable
+            id="blast.applications"
+            columns={APP_COLUMNS}
+            rows={result.applications}
+            rowKey="app"
+            onRowClick={(a) => nav.openApp(a.app)}
+            initialSort={{ key: "app", dir: "asc" }}
+            empty="No applications on matched clusters."
+          />
         </div>
       </div>
 
       {result.workloads.length > 0 && (
         <div className="card flush">
           <div className="card-head"><h3>Impacted workloads</h3></div>
-          <table>
-            <thead><tr><th>Cluster</th><th>Namespace</th><th>Workload</th><th>Container</th><th>Image</th></tr></thead>
-            <tbody>
-              {result.workloads.map((w, i) => (
-                <tr key={i} className="clickable" onClick={() => nav.openCluster(w.cluster)}>
-                  <td className="mono">{w.cluster}</td>
-                  <td>{w.namespace}</td>
-                  <td>{w.kind}/{w.name}</td>
-                  <td className="muted">{w.container}</td>
-                  <td className="mono">{w.image}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable
+            id="blast.workloads"
+            columns={WORKLOAD_COLUMNS}
+            rows={result.workloads}
+            rowKey={(w, i) => `${w.cluster}/${w.namespace}/${w.kind}/${w.name}/${w.container}/${i}`}
+            onRowClick={(w) => nav.openCluster(w.cluster)}
+            initialSort={{ key: "cluster", dir: "asc" }}
+            empty="No workloads matched."
+          />
         </div>
       )}
 

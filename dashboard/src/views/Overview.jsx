@@ -1,7 +1,24 @@
 import { useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { HealthBar, Stat, Loading, ErrorBanner, Pill, fmtTime } from "../components";
+import { HealthBar, Stat, Loading, ErrorBanner, Pill, DataTable, fmtTime } from "../components";
+
+const HUB_COLUMNS = [
+  { key: "name", label: "Hub", className: "mono", filter: "text" },
+  { key: "region", label: "Region", filter: "select" },
+  { key: "datacenter", label: "Data center", filter: "select" },
+  { key: "managed_count", label: "Managed" },
+  {
+    key: "reachable", label: "Status", filter: "select",
+    filterValue: (h) => (h.reachable ? "healthy" : "critical"),
+    render: (h) => <Pill status={h.reachable ? "healthy" : "critical"} />,
+  },
+  { key: "last_synced", label: "Last synced", className: "muted", render: (h) => fmtTime(h.last_synced) },
+  {
+    key: "last_error", label: "Error", className: "muted", filter: "text",
+    render: (h) => <span style={{ fontSize: 12, maxWidth: 420, wordBreak: "break-word", display: "inline-block" }}>{h.last_error || ""}</span>,
+  },
+];
 
 const GROUPS = [
   ["hub", "Hub"],
@@ -67,24 +84,14 @@ export default function Overview({ nav }) {
 
       <div className="card">
         <h3>Hubs (ACM)</h3>
-        <table>
-          <thead>
-            <tr><th>Hub</th><th>Region</th><th>Data center</th><th>Managed</th><th>Status</th><th>Last synced</th><th>Error</th></tr>
-          </thead>
-          <tbody>
-            {d.hubs.map((h) => (
-              <tr key={h.name}>
-                <td className="mono">{h.name}</td>
-                <td>{h.region}</td>
-                <td>{h.datacenter}</td>
-                <td>{h.managed_count}</td>
-                <td><Pill status={h.reachable ? "healthy" : "critical"} /></td>
-                <td className="muted">{fmtTime(h.last_synced)}</td>
-                <td className="muted" style={{ fontSize: 12, maxWidth: 420, wordBreak: "break-word" }}>{h.last_error || ""}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          id="overview.hubs"
+          columns={HUB_COLUMNS}
+          rows={d.hubs}
+          rowKey="name"
+          initialSort={{ key: "name", dir: "asc" }}
+          empty="No hubs configured."
+        />
         {d.last_collection && (
           <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
             Last sweep: {d.last_collection.clusters_ok} ok / {d.last_collection.clusters_failed} failed in {d.last_collection.duration_ms} ms

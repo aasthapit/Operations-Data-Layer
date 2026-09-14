@@ -1,6 +1,17 @@
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Pill, Loading, ErrorBanner } from "../components";
+import { Pill, Loading, ErrorBanner, DataTable } from "../components";
+
+const OPERATOR_COLUMNS = [
+  { key: "operator", label: "Operator", filter: "text" },
+  {
+    key: "versions", label: "Versions in fleet", className: "mono", filter: "text",
+    sortValue: (o) => o.distinct,
+    filterValue: (o) => o.versions.map((v) => v.version).join(", "),
+    render: (o) => o.versions.map((v) => `${v.version} (${v.count})`).join(", "),
+  },
+  { key: "distinct", label: "Drift", sortValue: (o) => o.distinct, render: () => <Pill status="warning" /> },
+];
 
 export default function Versions({ onOpen, onBlast }) {
   const { data, error, loading } = useFetch(() => api.versions(), []);
@@ -40,25 +51,16 @@ export default function Versions({ onOpen, onBlast }) {
           <h3>Operator version spread</h3>
           <p className="dim" style={{ marginTop: -6 }}>Operators reporting more than one version across the fleet are drifting - usually a partial rollout.</p>
         </div>
-        <table>
-          <thead><tr><th>Operator</th><th>Versions in fleet</th><th>Drift</th></tr></thead>
-          <tbody>
-            {ops.data?.operators
-              .filter((o) => o.distinct > 1)
-              .map((o) => (
-                <tr key={o.operator}>
-                  <td>{o.operator}</td>
-                  <td className="mono">
-                    {o.versions.map((v) => `${v.version} (${v.count})`).join(", ")}
-                  </td>
-                  <td><Pill status="warning" /></td>
-                </tr>
-              ))}
-            {ops.data && ops.data.operators.filter((o) => o.distinct > 1).length === 0 && (
-              <tr><td colSpan={3} className="empty">All operators are on a single version across the fleet.</td></tr>
-            )}
-          </tbody>
-        </table>
+        {ops.error ? <ErrorBanner error={ops.error} /> : !ops.data ? <Loading /> : (
+          <DataTable
+            id="versions.operators"
+            columns={OPERATOR_COLUMNS}
+            rows={ops.data.operators.filter((o) => o.distinct > 1)}
+            rowKey="operator"
+            initialSort={{ key: "operator", dir: "asc" }}
+            empty="All operators are on a single version across the fleet."
+          />
+        )}
       </div>
     </div>
   );

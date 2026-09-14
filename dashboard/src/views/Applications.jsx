@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Pill, Loading, ErrorBanner, FilterSelect, Tier, fmtBytes, fmtCores } from "../components";
+import { Pill, Loading, ErrorBanner, FilterSelect, Tier, DataTable, fmtBytes, fmtCores } from "../components";
 
 export default function Applications({ initialApp, nav, onClearApp }) {
   const [filters, setFilters] = useState({});
@@ -22,6 +22,54 @@ export default function Applications({ initialApp, nav, onClearApp }) {
   const mapped = data?.source === "mapping";
   const ownerLabel = mapped ? "LOB" : "Team";
   const unassigned = apps.find((a) => !a.assigned);
+
+  // Team / tier / environment / status already have server-side dropdowns above
+  // the table, so they are not repeated as column filters.
+  const columns = [
+    {
+      key: "app", label: "Application", filter: "text",
+      render: (a) => (a.assigned === false
+        ? <span className="muted">{a.app} <span style={{ fontSize: 11 }}>not under a business application</span></span>
+        : a.app),
+    },
+    { key: "team", label: ownerLabel, className: "muted", render: (a) => a.team || "-" },
+    mapped
+      ? {
+        key: "namespace_environments", label: "Namespace envs",
+        filterValue: (a) => (a.namespace_environments || []).join(", "),
+        render: (a) => (a.namespace_environments || []).map((e) => <span key={e} className="tag" style={{ marginRight: 4 }}>{e}</span>),
+      }
+      : { key: "tier", label: "Tier", render: (a) => <Tier tier={a.tier} /> },
+    { key: "status", label: "Status", render: (a) => <Pill status={a.status} /> },
+    {
+      key: "cluster_count", label: "Clusters",
+      filterValue: (a) => `${a.cluster_count} ${(a.hubs || a.regions || []).join(" ")}`,
+      render: (a) => <>{a.cluster_count} <span className="muted">· {(a.hubs || a.regions || []).join(", ")}</span></>,
+    },
+    {
+      key: "environments", label: "Environments",
+      sortValue: (a) => a.environments.join(", "),
+      render: (a) => a.environments.map((e) => <span key={e} className="tag" style={{ marginRight: 4 }}>{e}</span>),
+    },
+    { key: "workloads", label: "Workloads" },
+    {
+      key: "replicas_ready", label: "Replicas",
+      filterValue: (a) => `${a.replicas_ready}/${a.replicas_desired}`,
+      render: (a) => `${a.replicas_ready}/${a.replicas_desired}`,
+    },
+    {
+      key: "pod_issues", label: "Pod issues",
+      render: (a) => (a.pod_issues ? <span style={{ color: "var(--warning)" }}>{a.pod_issues}</span> : <span className="muted">0</span>),
+    },
+    {
+      key: "cpu_used_cores", label: "CPU used",
+      render: (a) => (a.cpu_used_cores != null ? fmtCores(a.cpu_used_cores) : <span className="muted">n/a</span>),
+    },
+    {
+      key: "memory_used_bytes", label: "Memory used",
+      render: (a) => (a.memory_used_bytes != null ? fmtBytes(a.memory_used_bytes) : <span className="muted">n/a</span>),
+    },
+  ];
 
   return (
     <div>
@@ -47,38 +95,82 @@ export default function Applications({ initialApp, nav, onClearApp }) {
       </div>
       {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
         <div className="card flush">
-          <table>
-            <thead>
-              <tr><th>Application</th><th>{ownerLabel}</th>{mapped ? <th>Namespace envs</th> : <th>Tier</th>}<th>Status</th><th>Clusters</th><th>Environments</th>
-                <th>Workloads</th><th>Replicas</th><th>Pod issues</th><th>CPU used</th><th>Memory used</th></tr>
-            </thead>
-            <tbody>
-              {apps.map((a) => (
-                <tr key={a.app} className="clickable" onClick={() => setSelected(a.app)}>
-                  <td>{a.assigned ? a.app : <span className="muted">{a.app} <span style={{ fontSize: 11 }}>not under a business application</span></span>}</td>
-                  <td className="muted">{a.team || "-"}</td>
-                  {mapped
-                    ? <td>{(a.namespace_environments || []).map((e) => <span key={e} className="tag" style={{ marginRight: 4 }}>{e}</span>)}</td>
-                    : <td><Tier tier={a.tier} /></td>}
-                  <td><Pill status={a.status} /></td>
-                  <td>{a.cluster_count} <span className="muted">· {(a.hubs || a.regions).join(", ")}</span></td>
-                  <td>{a.environments.map((e) => <span key={e} className="tag" style={{ marginRight: 4 }}>{e}</span>)}</td>
-                  <td>{a.workloads}</td>
-                  <td>{a.replicas_ready}/{a.replicas_desired}</td>
-                  <td>{a.pod_issues ? <span style={{ color: "var(--warning)" }}>{a.pod_issues}</span> : <span className="muted">0</span>}</td>
-                  <td>{a.cpu_used_cores != null ? fmtCores(a.cpu_used_cores) : <span className="muted">n/a</span>}</td>
-                  <td>{a.memory_used_bytes != null ? fmtBytes(a.memory_used_bytes) : <span className="muted">n/a</span>}</td>
-                </tr>
-              ))}
-              {apps.length === 0 && <tr><td colSpan={11} className="empty">No applications match.</td></tr>}
-            </tbody>
-          </table>
+          <DataTable
+            id="applications"
+            columns={columns}
+            rows={apps}
+            rowKey="app"
+            onRowClick={(a) => setSelected(a.app)}
+            initialSort={{ key: "app", dir: "asc" }}
+            empty="No applications match."
+            footer={`${data.count ?? apps.length} applications`}
+          />
         </div>
       )}
-      <div className="muted" style={{ marginTop: 10, fontSize: 12.5 }}>{data?.count ?? 0} applications</div>
     </div>
   );
 }
+
+const PLACEMENT_COLUMNS = [
+  { key: "cluster", label: "Cluster", className: "mono", filter: "text" },
+  { key: "hub", label: "Hub", className: "mono", filter: "select" },
+  { key: "environment", label: "Env", filter: "select", render: (p) => <span className="tag">{p.environment}</span> },
+  { key: "ocp_version", label: "OCP", className: "mono", filter: "select" },
+  { key: "cluster_status", label: "Cluster status", filter: "select", render: (p) => <Pill status={p.cluster_status} /> },
+  { key: "namespace", label: "Namespace", className: "mono", filter: "text" },
+  {
+    key: "namespace_environment", label: "Namespace env", filter: "select",
+    render: (p) => (p.namespace_environment ? <span className="tag">{p.namespace_environment}</span> : <span className="muted">-</span>),
+  },
+  { key: "status", label: "App status", filter: "select", render: (p) => <Pill status={p.status} /> },
+  { key: "workloads", label: "Workloads" },
+  {
+    key: "replicas_ready", label: "Replicas",
+    filterValue: (p) => `${p.replicas_ready}/${p.replicas_desired}`,
+    render: (p) => `${p.replicas_ready}/${p.replicas_desired}`,
+  },
+  { key: "pod_issues", label: "Pod issues", render: (p) => p.pod_issues || <span className="muted">0</span> },
+  { key: "cpu_used_cores", label: "CPU", render: (p) => fmtCores(p.cpu_used_cores) },
+  { key: "memory_used_bytes", label: "Memory", render: (p) => fmtBytes(p.memory_used_bytes) },
+];
+
+const WORKLOAD_COLUMNS = [
+  { key: "cluster", label: "Cluster", className: "mono", filter: "text" },
+  { key: "kind", label: "Kind", className: "muted", filter: "select" },
+  { key: "name", label: "Name", filter: "text" },
+  { key: "status", label: "Status", filter: "select", render: (w) => <span className={`chip ${w.status}`}>{w.status}</span> },
+  {
+    key: "replicas", label: "Replicas",
+    sortValue: (w) => w.replicas.ready,
+    filterValue: (w) => `${w.replicas.ready}/${w.replicas.desired}`,
+    render: (w) => `${w.replicas.ready}/${w.replicas.desired}`,
+  },
+  {
+    key: "images", label: "Image", className: "mono wrap", filter: "text",
+    sortValue: (w) => w.images.join(", "),
+    render: (w) => w.images.join(", "),
+  },
+  {
+    key: "env", label: "Env (name ← source)",
+    sortValue: (w) => w.containers.flatMap((c) => c.env).length,
+    filterValue: (w) => w.containers.flatMap((c) => c.env).map((e) => e.name).join(" "),
+    render: (w) => (
+      <div className="env-list">
+        {w.containers.flatMap((c) => c.env).map((e) => (
+          <span key={e.name}><span className="mono">{e.name}</span> <span className="src">
+            {e.from?.kind === "literal" ? "(literal, scrubbed)" : e.from?.kind === "field" ? `← ${e.from.path}` : e.from ? `← ${e.from.kind} ${e.from.name}/${e.from.key}` : ""}
+          </span></span>
+        ))}
+      </div>
+    ),
+  },
+  {
+    key: "config_refs", label: "References", className: "muted wrap",
+    sortValue: (w) => w.config_refs.length,
+    filterValue: (w) => w.config_refs.map((r) => `${r.kind} ${r.name}`).join(", "),
+    render: (w) => <span style={{ fontSize: 12 }}>{w.config_refs.map((r) => `${r.kind} ${r.name} (${r.via})`).join(", ")}</span>,
+  },
+];
 
 function ApplicationDetail({ app, nav, onBack }) {
   const { data: a, error, loading } = useFetch(() => api.application(app), [app]);
@@ -97,59 +189,29 @@ function ApplicationDetail({ app, nav, onBack }) {
       <div className="grid" style={{ gap: 16 }}>
         <div className="card flush">
           <div className="card-head"><h3>Placements ({a.cluster_count} clusters)</h3></div>
-          <table>
-            <thead><tr><th>Cluster</th><th>Hub</th><th>Env</th><th>OCP</th><th>Cluster status</th><th>Namespace</th><th>Namespace env</th><th>App status</th><th>Workloads</th><th>Replicas</th><th>Pod issues</th><th>CPU</th><th>Memory</th></tr></thead>
-            <tbody>
-              {a.placements.map((p) => (
-                <tr key={p.cluster + "/" + p.namespace} className="clickable" onClick={() => nav.openCluster(p.cluster)}>
-                  <td className="mono">{p.cluster}</td>
-                  <td className="mono">{p.hub}</td>
-                  <td><span className="tag">{p.environment}</span></td>
-                  <td className="mono">{p.ocp_version}</td>
-                  <td><Pill status={p.cluster_status} /></td>
-                  <td className="mono">{p.namespace}</td>
-                  <td>{p.namespace_environment ? <span className="tag">{p.namespace_environment}</span> : <span className="muted">-</span>}</td>
-                  <td><Pill status={p.status} /></td>
-                  <td>{p.workloads}</td>
-                  <td>{p.replicas_ready}/{p.replicas_desired}</td>
-                  <td>{p.pod_issues || <span className="muted">0</span>}</td>
-                  <td>{fmtCores(p.cpu_used_cores)}</td>
-                  <td>{fmtBytes(p.memory_used_bytes)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable
+            id="application.placements"
+            columns={PLACEMENT_COLUMNS}
+            rows={a.placements}
+            rowKey={(p) => `${p.cluster}/${p.namespace}`}
+            onRowClick={(p) => nav.openCluster(p.cluster)}
+            initialSort={{ key: "cluster", dir: "asc" }}
+            empty="No placements."
+          />
         </div>
         <div className="card flush">
           <div className="card-head">
             <h3>Workloads ({a.workloads_detail.length})</h3>
             <div className="desc">Container env shows names and sources only - values are never collected.</div>
           </div>
-          <table>
-            <thead><tr><th>Cluster</th><th>Kind</th><th>Name</th><th>Status</th><th>Replicas</th><th>Image</th><th>Env (name ← source)</th><th>References</th></tr></thead>
-            <tbody>
-              {a.workloads_detail.map((w) => (
-                <tr key={w.cluster + w.kind + w.name}>
-                  <td className="mono">{w.cluster}</td>
-                  <td className="muted">{w.kind}</td>
-                  <td>{w.name}</td>
-                  <td><span className={`chip ${w.status}`}>{w.status}</span></td>
-                  <td>{w.replicas.ready}/{w.replicas.desired}</td>
-                  <td className="mono wrap">{w.images.join(", ")}</td>
-                  <td>
-                    <div className="env-list">
-                      {w.containers.flatMap((c) => c.env).map((e) => (
-                        <span key={e.name}><span className="mono">{e.name}</span> <span className="src">
-                          {e.from?.kind === "literal" ? "(literal, scrubbed)" : e.from?.kind === "field" ? `← ${e.from.path}` : e.from ? `← ${e.from.kind} ${e.from.name}/${e.from.key}` : ""}
-                        </span></span>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="muted wrap" style={{ fontSize: 12 }}>{w.config_refs.map((r) => `${r.kind} ${r.name} (${r.via})`).join(", ")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable
+            id="application.workloads"
+            columns={WORKLOAD_COLUMNS}
+            rows={a.workloads_detail}
+            rowKey={(w) => w.cluster + w.kind + w.name}
+            initialSort={{ key: "cluster", dir: "asc" }}
+            empty="No workloads."
+          />
         </div>
       </div>
     </div>

@@ -21,6 +21,7 @@
 
   --radius: 10px;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --topbar-h: 58px;
 }
 
 * { box-sizing: border-box; }
@@ -241,8 +242,68 @@ td.nowrap, th.nowrap { white-space: nowrap; }
 .kv.wide { grid-template-columns: max-content 1fr max-content 1fr; }
 .link { color: var(--accent); cursor: pointer; }
 .link:hover { text-decoration: underline; }
-.mini-table td, .mini-table th { padding: 6px 10px; }
 .scroll { max-height: 520px; overflow: auto; }
 .search { min-width: 260px; }
 .hbar { position: relative; }
 .hbar .req-marker { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text-dim); opacity: 0.8; }
+
+/* ----- data table: sortable headers, per-column filters, sticky header ----- */
+.dt-wrap { --dt-top: var(--topbar-h); }
+/* inside the capped scroll container the header sticks to the container, not
+   to the page under the topbar */
+.dt-wrap .scroll { --dt-top: 0px; }
+
+.dt { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+
+.dt-bar { display: flex; align-items: center; gap: 10px; padding: 0 12px 10px; }
+.dt .dt-head th { padding: 0; height: 36px; background: var(--bg-elev); position: sticky;
+  top: var(--dt-top); z-index: 3; }
+.dt .dt-filters td { padding: 0 8px 8px; background: var(--bg-elev); border-bottom: 1px solid var(--border);
+  position: sticky; z-index: 2; vertical-align: top; }
+.dt-dense .dt-head th { height: 30px; }
+.dt-dense td, .dt-dense .dt-sort { padding: 6px 10px; }
+
+.dt-sort {
+  display: flex; align-items: center; gap: 4px; width: 100%; height: 100%;
+  background: none; border: 0; margin: 0; padding: 9px 12px; cursor: pointer;
+  color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left;
+}
+.dt-sort:hover { color: var(--text); }
+.dt-sort.active { color: var(--text); }
+.dt-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.dt th.dt-right .dt-sort { justify-content: flex-end; }
+.dt th.dt-center .dt-sort { justify-content: center; }
+.dt .dt-static { display: inline-block; padding: 9px 12px; }
+.dt-arrow { color: var(--text-faint); font-size: 9px; line-height: 1; opacity: 0.7; flex: none; }
+.dt-arrow.active { color: var(--accent); opacity: 1; }
+
+.dt-wrap .dt-filter {
+  width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--border-soft);
+  color: var(--text); padding: 3px 6px; border-radius: 5px; font-size: 11.5px; height: 24px;
+  outline: none;
+}
+.dt-wrap select.dt-filter { padding: 2px 4px; }
+.dt-wrap .dt-filter:focus { border-color: var(--accent); }
+.dt-wrap .dt-filter::placeholder { color: var(--text-faint); }
+
+.dt-wrap .dt-search {
+  min-width: 220px; background: var(--bg-elev-2); border: 1px solid var(--border); color: var(--text);
+  padding: 5px 9px; border-radius: 7px; font-size: 12.5px; outline: none;
+}
+.dt-wrap .dt-search:focus { border-color: var(--accent); }
+.dt-count { color: var(--text-faint); font-size: 12px; }
+.dt-clear {
+  background: none; border: 1px solid var(--border); color: var(--text-dim);
+  padding: 4px 10px; border-radius: 7px; cursor: pointer; font-size: 12px;
+}
+.dt-clear:hover { border-color: var(--accent); color: var(--text); }
+
+.dt td { border-bottom: 1px solid var(--border-soft); }
+.dt td.dt-right, .dt th.dt-right { text-align: right; }
+.dt td.dt-center, .dt th.dt-center { text-align: center; }
+.dt tr.dt-expanded:hover { background: none; }
+.dt tr.dt-expanded > td { background: var(--bg); padding: 0 12px; }
+/* a table nested in an expanded row is short: a sticky header there would only
+   collide with the outer table's own sticky header */
+.dt-expanded .dt thead th, .dt-expanded .dt thead td { position: static; }
+.dt-foot { color: var(--text-faint); font-size: 12.5px; padding: 10px 12px 12px; }

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Loading, ErrorBanner, SubTabs, fmtBytes, fmtCores, fmtPct } from "../components";
+import { Loading, ErrorBanner, SubTabs, DataTable, fmtBytes, fmtCores, fmtPct } from "../components";
 
 function BarRow({ label, sub, value, max, fmt, color, onClick }) {
   const pct = max ? Math.min(100, (value / max) * 100) : 0;
@@ -113,35 +113,45 @@ function NodeList({ data, onOpen }) {
 function CapacityTable({ data, onOpen }) {
   const key = data.group_by;
   const rows = data.results || [];
-  if (rows.length === 0) return <div className="empty">No capacity data.</div>;
+  const columns = [
+    { key, label: key, className: "mono", filter: "text" },
+    {
+      key: "clusters", label: "Clusters",
+      render: (r) => <>{r.clusters}{r.with_metrics < r.clusters && <span className="muted"> ({r.with_metrics} w/ metrics)</span>}</>,
+    },
+    {
+      key: "used_percent", label: "CPU used / allocatable", className: "nowrap",
+      filterValue: (r) => `${r.used_cores.toFixed(1)} / ${r.allocatable_cores.toFixed(1)}`,
+      render: (r) => (
+        <>
+          <span style={{ color: tone(r.used_percent || 0) }}>{r.used_cores.toFixed(1)}</span>
+          <span className="muted"> / {r.allocatable_cores.toFixed(1)} · {fmtPct(r.used_percent)}</span>
+        </>
+      ),
+    },
+    { key: "requests_cores", label: "CPU requested", render: (r) => <>{r.requests_cores.toFixed(1)} <span className="muted">cores</span></> },
+    { key: "headroom_cores", label: "CPU headroom", render: (r) => <>{r.headroom_cores.toFixed(1)} <span className="muted">cores</span></> },
+    {
+      key: "memory_used_percent", label: "Memory used / allocatable", className: "nowrap",
+      filterValue: (r) => `${fmtBytes(r.used_bytes)} / ${fmtBytes(r.allocatable_bytes)}`,
+      render: (r) => (
+        <>
+          <span style={{ color: tone(r.memory_used_percent || 0) }}>{fmtBytes(r.used_bytes)}</span>
+          <span className="muted"> / {fmtBytes(r.allocatable_bytes)} · {fmtPct(r.memory_used_percent)}</span>
+        </>
+      ),
+    },
+    { key: "headroom_bytes", label: "Memory headroom", render: (r) => fmtBytes(r.headroom_bytes) },
+  ];
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>{key}</th><th>Clusters</th>
-          <th>CPU used / allocatable</th><th>CPU requested</th><th>CPU headroom</th>
-          <th>Memory used / allocatable</th><th>Memory headroom</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r[key]} className={key === "cluster" ? "clickable" : ""} onClick={() => key === "cluster" && onOpen(r[key])}>
-            <td className="mono">{r[key]}</td>
-            <td>{r.clusters}{r.with_metrics < r.clusters && <span className="muted"> ({r.with_metrics} w/ metrics)</span>}</td>
-            <td>
-              <span style={{ color: tone(r.used_percent || 0) }}>{r.used_cores.toFixed(1)}</span>
-              <span className="muted"> / {r.allocatable_cores.toFixed(1)} · {fmtPct(r.used_percent)}</span>
-            </td>
-            <td>{r.requests_cores.toFixed(1)} <span className="muted">cores</span></td>
-            <td>{r.headroom_cores.toFixed(1)} <span className="muted">cores</span></td>
-            <td>
-              <span style={{ color: tone(r.memory_used_percent || 0) }}>{fmtBytes(r.used_bytes)}</span>
-              <span className="muted"> / {fmtBytes(r.allocatable_bytes)} · {fmtPct(r.memory_used_percent)}</span>
-            </td>
-            <td>{fmtBytes(r.headroom_bytes)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable
+      id={`metrics.capacity.${key}`}
+      columns={columns}
+      rows={rows}
+      rowKey={(r) => r[key]}
+      onRowClick={key === "cluster" ? (r) => onOpen(r[key]) : undefined}
+      initialSort={{ key: "used_percent", dir: "desc" }}
+      empty="No capacity data."
+    />
   );
 }
