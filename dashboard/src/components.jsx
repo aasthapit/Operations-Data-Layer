@@ -1,4 +1,5 @@
 // Small shared presentational components + formatters.
+import { useEffect, useRef, useState } from "react";
 
 // The one table primitive every view uses: sorting, per-column filters, search.
 export { default as DataTable } from "./DataTable";
@@ -60,6 +61,85 @@ export function Sparkline({ points, width = 260, height = 48, color = "var(--acc
 
 export function Loading() {
   return <div className="loading">Loading…</div>;
+}
+
+// ---- pending placeholders -------------------------------------------------
+// A view paints its frame, its filters and anything already cached straight
+// away; whatever is still on the wire shows as a block the same shape and size
+// as the content that will replace it, so nothing jumps when it lands.
+export function Skeleton({ width = "100%", height = 12, style }) {
+  return <span className="skeleton" style={{ width, height, ...style }} />;
+}
+
+// Deterministic widths: a row of identical bars reads as a progress bar, and a
+// random one flickers on every render.
+const CELL_WIDTHS = ["72%", "48%", "86%", "36%", "64%", "56%", "78%", "44%"];
+
+export function SkeletonTable({ columns = 6, rows = 8, dense = false }) {
+  return (
+    <table className={`dt skeleton-table${dense ? " dt-dense" : ""}`} aria-hidden="true">
+      <tbody>
+        {Array.from({ length: rows }, (_, r) => (
+          <tr key={r}>
+            {Array.from({ length: columns }, (_, c) => (
+              <td key={c}><Skeleton width={CELL_WIDTHS[(r + c * 3) % CELL_WIDTHS.length]} /></td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+export function SkeletonStats({ count = 6 }) {
+  return (
+    <div className="stats">
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="stat">
+          <div className="label"><Skeleton width="60%" height={11} /></div>
+          <div className="value"><Skeleton width="42%" height={26} style={{ marginTop: 4 }} /></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function SkeletonLines({ rows = 4, height = 14 }) {
+  return (
+    <div className="skeleton-lines" aria-hidden="true">
+      {Array.from({ length: rows }, (_, i) => (
+        <Skeleton key={i} width={CELL_WIDTHS[i % CELL_WIDTHS.length]} height={height} />
+      ))}
+    </div>
+  );
+}
+
+// Text input that reports after the user stops typing, so a filter that lives
+// in the URL does not write a history entry (or fire a request) per keystroke.
+export function SearchInput({ value, onChange, delay = 300, ...rest }) {
+  const [local, setLocal] = useState(value || "");
+  const committed = useRef(value || "");
+  const cb = useRef(onChange);
+  cb.current = onChange;
+
+  useEffect(() => {
+    const next = value || "";
+    if (next !== committed.current) {
+      committed.current = next;
+      setLocal(next);
+    }
+  }, [value]);
+
+  useEffect(() => {
+    if (local === committed.current) return undefined;
+    const t = setTimeout(() => {
+      committed.current = local;
+      cb.current(local);
+    }, delay);
+    return () => clearTimeout(t);
+  }, [local, delay]);
+
+  return <input type="text" value={local} onChange={(e) => setLocal(e.target.value)} {...rest} />;
 }
 
 export function ErrorBanner({ error }) {

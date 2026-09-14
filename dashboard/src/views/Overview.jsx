@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { HealthBar, Stat, Loading, ErrorBanner, Pill, DataTable, fmtTime } from "../components";
+import { useQueryFilters } from "../router";
+import {
+  HealthBar, Stat, ErrorBanner, Pill, DataTable, Skeleton, SkeletonStats, SkeletonTable, fmtTime,
+} from "../components";
 
 const HUB_COLUMNS = [
   { key: "name", label: "Hub", className: "mono", filter: "text" },
@@ -28,10 +31,16 @@ const GROUPS = [
   ["version", "OCP version"],
 ];
 
-export default function Overview({ nav }) {
-  const [groupBy, setGroupBy] = useState("hub");
+export default function Overview({ nav, route }) {
+  // The grouping is in the URL (/?group=region), so the view someone shares is
+  // the view they were looking at.
+  const [q, setQ] = useQueryFilters(route, ["group"]);
+  const groupBy = GROUPS.some(([k]) => k === q.group) ? q.group : "hub";
+
   // While a sweep is running the picture fills in cluster by cluster, so the
-  // overview re-reads itself every few seconds until it is done.
+  // overview re-reads itself every few seconds until it is done. The URL does
+  // not change, so this is a cache refresh in place - the numbers move, the
+  // page does not blink.
   const [tick, setTick] = useState(0);
   const ov = useFetch(() => api.overview(), [tick]);
   const sweeping = !!ov.data?.sweep?.running;
@@ -43,12 +52,11 @@ export default function Overview({ nav }) {
   const sum = useFetch(() => api.summary(groupBy), [groupBy]);
   const ins = useFetch(() => api.insightsSummary(), []);
 
-  if (ov.loading && !ov.data) return <Loading />;
-  if (ov.error) return <ErrorBanner error={ov.error} />;
+  if (ov.error && !ov.data) return <ErrorBanner error={ov.error} />;
   const d = ov.data;
   const i = ins.data;
+  const sw = d?.sweep;
 
-  const sw = d.sweep;
   return (
     <div className="grid" style={{ gap: 24 }}>
       {sw?.running && (
@@ -67,14 +75,16 @@ export default function Overview({ nav }) {
         </div>
       )}
       <div>
-        <div className="stats">
-          <Stat label="Clusters" value={d.clusters_total} kind="accent" onClick={() => nav.goClusters()} />
-          <Stat label="Healthy" value={d.counts.healthy} kind="healthy" onClick={() => nav.goClusters("status", "healthy")} />
-          <Stat label="Warning" value={d.counts.warning} kind="warning" onClick={() => nav.goClusters("status", "warning")} />
-          <Stat label="Critical" value={d.counts.critical} kind="critical" onClick={() => nav.goClusters("status", "critical")} />
-          <Stat label="Upgrading" value={d.upgrading} kind="accent" onClick={() => nav.goClusters("upgrading", "true")} />
-          <Stat label="Applications" value={i ? i.applications : "…"} kind="accent" onClick={() => nav.openApp(null)} />
-        </div>
+        {!d ? <SkeletonStats count={6} /> : (
+          <div className="stats">
+            <Stat label="Clusters" value={d.clusters_total} kind="accent" onClick={() => nav.goClusters()} />
+            <Stat label="Healthy" value={d.counts.healthy} kind="healthy" onClick={() => nav.goClusters("status", "healthy")} />
+            <Stat label="Warning" value={d.counts.warning} kind="warning" onClick={() => nav.goClusters("status", "warning")} />
+            <Stat label="Critical" value={d.counts.critical} kind="critical" onClick={() => nav.goClusters("status", "critical")} />
+            <Stat label="Upgrading" value={d.upgrading} kind="accent" onClick={() => nav.goClusters("upgrading", "true")} />
+            <Stat label="Applications" value={i ? i.applications : "…"} kind="accent" onClick={() => nav.openApp(null)} />
+          </div>
+        )}
       </div>
 
       <div>
@@ -82,7 +92,7 @@ export default function Overview({ nav }) {
           <div className="section-title" style={{ margin: 0 }}>Needs attention</div>
           <div className="desc">Everything below is read from the clusters' own API servers - nothing external.</div>
         </div>
-        {ins.error ? <ErrorBanner error={ins.error} /> : !i ? <Loading /> : (
+        {ins.error && !i ? <ErrorBanner error={ins.error} /> : !i ? <SkeletonStats count={10} /> : (
           <div className="stats">
             <Stat label="Expired certificates" value={i.certificates.expired}
               kind={i.certificates.expired ? "critical" : "healthy"} onClick={() => nav.goInsights("certificates")} />
@@ -109,15 +119,17 @@ export default function Overview({ nav }) {
 
       <div className="card">
         <h3>Hubs (ACM)</h3>
-        <DataTable
-          id="overview.hubs"
-          columns={HUB_COLUMNS}
-          rows={d.hubs}
-          rowKey="name"
-          initialSort={{ key: "name", dir: "asc" }}
-          empty="No hubs configured."
-        />
-        {d.last_collection && (
+        {!d ? <SkeletonTable columns={7} rows={3} /> : (
+          <DataTable
+            id="overview.hubs"
+            columns={HUB_COLUMNS}
+            rows={d.hubs}
+            rowKey="name"
+            initialSort={{ key: "name", dir: "asc" }}
+            empty="No hubs configured."
+          />
+        )}
+        {d?.last_collection && (
           <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
             Last sweep: {d.last_collection.clusters_ok} ok / {d.last_collection.clusters_failed} failed in {d.last_collection.duration_ms} ms
           </div>
@@ -129,13 +141,13 @@ export default function Overview({ nav }) {
           <div className="section-title" style={{ margin: 0 }}>Fleet health</div>
           <div className="toggle-group">
             {GROUPS.map(([key, label]) => (
-              <button key={key} className={groupBy === key ? "active" : ""} onClick={() => setGroupBy(key)}>
+              <button key={key} className={groupBy === key ? "active" : ""} onClick={() => setQ("group", key)}>
                 {label}
               </button>
             ))}
           </div>
         </div>
-        {sum.loading && !sum.data ? <Loading /> : sum.error ? <ErrorBanner error={sum.error} /> : (
+        {sum.error && !sum.data ? <ErrorBanner error={sum.error} /> : !sum.data ? <GroupSkeleton /> : (
           <div className="group-grid">
             {sum.data.groups.map((g) => (
               <div key={g.key} className="group-card" style={{ cursor: "pointer" }}
@@ -157,6 +169,20 @@ export default function Overview({ nav }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function GroupSkeleton() {
+  return (
+    <div className="group-grid" aria-hidden="true">
+      {Array.from({ length: 4 }, (_, i) => (
+        <div key={i} className="group-card">
+          <div className="gc-head"><Skeleton width="45%" height={15} /><Skeleton width={62} height={18} /></div>
+          <Skeleton width="100%" height={10} />
+          <div className="gc-counts"><Skeleton width="30%" height={12} /><Skeleton width="38%" height={12} /></div>
+        </div>
+      ))}
     </div>
   );
 }

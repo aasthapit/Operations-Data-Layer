@@ -1,18 +1,21 @@
-import { useEffect, useState } from "react";
 import { api } from "../api";
+import * as cache from "../cache";
 import { useFetch } from "../hooks";
-import { Pill, Loading, ErrorBanner, FilterSelect, Tier, DataTable, fmtBytes, fmtCores } from "../components";
+import { useQueryFilters } from "../router";
+import { Pill, ErrorBanner, FilterSelect, Tier, DataTable, SkeletonTable, fmtBytes, fmtCores } from "../components";
 
-export default function Applications({ initialApp, nav, onClearApp }) {
-  const [filters, setFilters] = useState({});
-  const [selected, setSelected] = useState(initialApp || null);
-  useEffect(() => { setSelected(initialApp || null); }, [initialApp]);
-  const { data, error, loading } = useFetch(() => api.applications(filters), [JSON.stringify(filters)]);
-  const set = (k, v) => setFilters((f) => ({ ...f, [k]: v || undefined }));
+const FILTER_KEYS = ["team", "tier", "assigned", "environment", "status"];
 
-  if (selected) {
-    return <ApplicationDetail app={selected} nav={nav} onBack={() => { setSelected(null); onClearApp && onClearApp(); }} />;
-  }
+// The list rows carry cluster names directly (`clusters`); the full placement
+// objects only come back when they are asked for, and only the detail page
+// needs them. Older responses that still carry placements keep working.
+const clusterNames = (a) => a.clusters ?? (a.placements || []).map((p) => p.cluster);
+
+export default function Applications({ app, nav, route }) {
+  const [filters, set, clear, anyFilter] = useQueryFilters(route, FILTER_KEYS);
+  const { data, error } = useFetch(() => api.applications(filters), [JSON.stringify(filters)]);
+
+  if (app) return <ApplicationDetail app={app} nav={nav} />;
 
   const apps = data?.applications || [];
   const envs = [...new Set(apps.flatMap((a) => a.environments))].sort();
@@ -43,12 +46,12 @@ export default function Applications({ initialApp, nav, onClearApp }) {
     { key: "status", label: "Status", render: (a) => <Pill status={a.status} /> },
     {
       key: "cluster_count", label: "Clusters",
-      filterValue: (a) => `${a.cluster_count} ${(a.placements || []).map((p) => p.cluster).join(" ")}`,
+      filterValue: (a) => `${a.cluster_count} ${clusterNames(a).join(" ")}`,
       render: (a) => {
-        const names = [...new Set((a.placements || []).map((p) => p.cluster))];
+        const names = [...new Set(clusterNames(a))];
         const shown = names.slice(0, 3).join(", ");
         const more = names.length > 3 ? ` +${names.length - 3}` : "";
-        return <>{a.cluster_count} <span className="muted mono" style={{ fontSize: 12 }}>· {shown}{more}</span></>;
+        return <>{a.cluster_count}{shown && <span className="muted mono" style={{ fontSize: 12 }}> · {shown}{more}</span>}</>;
       },
     },
     {
@@ -100,22 +103,24 @@ export default function Applications({ initialApp, nav, onClearApp }) {
         {mapped && <FilterSelect label="Assigned" value={filters.assigned} options={["true", "false"]} onChange={(v) => set("assigned", v)} />}
         <FilterSelect label="Environment" value={filters.environment} options={envs} onChange={(v) => set("environment", v)} />
         <FilterSelect label="Status" value={filters.status} options={["healthy", "warning", "critical"]} onChange={(v) => set("status", v)} />
-        {Object.values(filters).some(Boolean) && (
-          <button className="btn" style={{ alignSelf: "flex-end" }} onClick={() => setFilters({})}>Clear</button>
+        {anyFilter && (
+          <button className="btn" style={{ alignSelf: "flex-end" }} onClick={clear}>Clear</button>
         )}
       </div>
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      {error && !data ? <ErrorBanner error={error} /> : (
         <div className="card flush">
-          <DataTable
-            id="applications"
-            columns={columns}
-            rows={apps}
-            rowKey="app"
-            onRowClick={(a) => setSelected(a.app)}
-            initialSort={{ key: "app", dir: "asc" }}
-            empty="No applications match."
-            footer={`${data.count ?? apps.length} applications`}
-          />
+          {!data ? <SkeletonTable columns={9} rows={10} /> : (
+            <DataTable
+              id="applications"
+              columns={columns}
+              rows={apps}
+              rowKey="app"
+              onRowClick={(a) => nav.openApp(a.app)}
+              initialSort={{ key: "app", dir: "asc" }}
+              empty="No applications match."
+              footer={`${data.count ?? apps.length} applications`}
+            />
+          )}
         </div>
       )}
     </div>
@@ -183,46 +188,54 @@ const WORKLOAD_COLUMNS = [
   },
 ];
 
-function ApplicationDetail({ app, nav, onBack }) {
-  const { data: a, error, loading } = useFetch(() => api.application(app), [app]);
-  if (loading && !a) return <Loading />;
-  if (error) return <ErrorBanner error={error} />;
+function ApplicationDetail({ app, nav }) {
+  const { data, error } = useFetch(() => api.application(app), [app]);
+  // The row the user clicked is already in hand: the header renders from it
+  // while the detail request is still out, so only the tables are pending.
+  const summary = cache.search("/api/applications", (d) => (d.applications || []).find((x) => x.app === app));
+  const a = data || summary;
+  if (error && !data) return <ErrorBanner error={error} />;
+
   return (
     <div>
-      <span className="back" onClick={onBack}>← All applications</span>
+      <span className="back" onClick={() => nav.back("/applications")}>← All applications</span>
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-        <h2 style={{ margin: 0 }}>{a.app}</h2>
-        <Pill status={a.status} />
-        {a.tier && <Tier tier={a.tier} />}
-        {a.team && <span className="muted">{a.namespace_environments?.length ? "LOB" : "team"} {a.team}</span>}
-        {a.assigned === false && <span className="muted">namespaces not under a business application</span>}
+        <h2 style={{ margin: 0 }}>{a ? a.app : app}</h2>
+        {a && <Pill status={a.status} />}
+        {a?.tier && <Tier tier={a.tier} />}
+        {a?.team && <span className="muted">{a.namespace_environments?.length ? "LOB" : "team"} {a.team}</span>}
+        {a?.assigned === false && <span className="muted">namespaces not under a business application</span>}
       </div>
       <div className="grid" style={{ gap: 16 }}>
         <div className="card flush">
-          <div className="card-head"><h3>Placements ({a.cluster_count} clusters)</h3></div>
-          <DataTable
-            id="application.placements"
-            columns={PLACEMENT_COLUMNS}
-            rows={a.placements}
-            rowKey={(p) => `${p.cluster}/${p.namespace}`}
-            onRowClick={(p) => nav.openCluster(p.cluster)}
-            initialSort={{ key: "cluster", dir: "asc" }}
-            empty="No placements."
-          />
+          <div className="card-head"><h3>Placements{a ? ` (${a.cluster_count} clusters)` : ""}</h3></div>
+          {!data ? <SkeletonTable columns={8} rows={5} /> : (
+            <DataTable
+              id="application.placements"
+              columns={PLACEMENT_COLUMNS}
+              rows={data.placements}
+              rowKey={(p) => `${p.cluster}/${p.namespace}`}
+              onRowClick={(p) => nav.openCluster(p.cluster)}
+              initialSort={{ key: "cluster", dir: "asc" }}
+              empty="No placements."
+            />
+          )}
         </div>
         <div className="card flush">
           <div className="card-head">
-            <h3>Workloads ({a.workloads_detail.length})</h3>
+            <h3>Workloads{data ? ` (${data.workloads_detail.length})` : ""}</h3>
             <div className="desc">Container env shows names and sources only - values are never collected.</div>
           </div>
-          <DataTable
-            id="application.workloads"
-            columns={WORKLOAD_COLUMNS}
-            rows={a.workloads_detail}
-            rowKey={(w) => w.cluster + w.kind + w.name}
-            initialSort={{ key: "cluster", dir: "asc" }}
-            empty="No workloads."
-          />
+          {!data ? <SkeletonTable columns={7} rows={6} /> : (
+            <DataTable
+              id="application.workloads"
+              columns={WORKLOAD_COLUMNS}
+              rows={data.workloads_detail}
+              rowKey={(w) => w.cluster + w.kind + w.name}
+              initialSort={{ key: "cluster", dir: "asc" }}
+              empty="No workloads."
+            />
+          )}
         </div>
       </div>
     </div>

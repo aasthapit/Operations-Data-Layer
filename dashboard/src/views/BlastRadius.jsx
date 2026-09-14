@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Pill, Stat, ErrorBanner, Tier, DataTable } from "../components";
+import { Pill, Stat, ErrorBanner, Tier, DataTable, SkeletonStats, SkeletonTable } from "../components";
 
 const CLUSTER_COLUMNS = [
   { key: "name", label: "Cluster", className: "mono", filter: "text" },
@@ -38,32 +38,57 @@ const WORKLOAD_COLUMNS = [
 const EMPTY = { operator: "", operator_version: "", ocp_version: "", degraded_only: false,
   olm_operator: "", olm_version: "", image: "" };
 
-export default function BlastRadius({ initialQuery, nav }) {
+// The query is the URL: /blast?ocp_version=4.16.7 is a shareable impact report,
+// and the back button walks back through the queries that were run.
+function fromRoute(route) {
+  const q = { ...EMPTY };
+  Object.keys(EMPTY).forEach((k) => { q[k] = route.query[k] || ""; });
+  q.degraded_only = route.query.degraded_only === "true";
+  return q;
+}
+
+export default function BlastRadius({ route, nav }) {
   const ops = useFetch(() => api.operatorVersions(), []);
   const vers = useFetch(() => api.versions(), []);
   const olm = useFetch(() => api.olmOperators(), []);
 
-  const [q, setQ] = useState({ ...EMPTY, ...(initialQuery || {}) });
+  const urlQuery = fromRoute(route);
+  const urlKey = JSON.stringify(urlQuery);
+
+  const [q, setQ] = useState(urlQuery);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const ran = useRef(null);
   const set = (k, v) => setQ((s) => ({ ...s, [k]: v }));
   const canRun = q.operator || q.ocp_version || q.olm_operator || q.image;
 
-  const run = async (query = q) => {
+  const execute = async (query, key) => {
+    ran.current = key;
     setBusy(true); setError(null);
     try { setResult(await api.blastRadius(query)); } catch (e) { setError(e); } finally { setBusy(false); }
   };
 
-  // Auto-run when arriving with a preset query.
+  // Landing on a query - a blast-radius link, a reload, or the back button -
+  // restores the form and runs it.
   useEffect(() => {
-    if (initialQuery && Object.values(initialQuery).some(Boolean)) {
-      const query = { ...EMPTY, ...initialQuery };
-      setQ(query);
-      run(query);
+    setQ(urlQuery);
+    if (!Object.values(urlQuery).some(Boolean)) {
+      ran.current = null;
+      setResult(null);
+      return;
     }
+    if (ran.current !== urlKey) execute(urlQuery, urlKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(initialQuery)]);
+  }, [urlKey]);
+
+  // Running is a push: the previous query stays one back button away. Asking
+  // for the query already in the URL just re-runs it.
+  const run = () => {
+    const key = JSON.stringify(q);
+    nav.goBlast(q);
+    if (key === urlKey) execute(q, key);
+  };
 
   const operatorNames = (ops.data?.operators || []).map((o) => o.operator);
   const operatorVersionOpts = q.operator
@@ -122,17 +147,22 @@ export default function BlastRadius({ initialQuery, nav }) {
             <input type="text" className="search" placeholder="e.g. pause:3.9 or quay.io/acme" value={q.image}
               onChange={(e) => set("image", e.target.value)} />
           </label>
-          <button className="btn primary" onClick={() => run()} disabled={busy || !canRun}>
+          <button className="btn primary" onClick={run} disabled={busy || !canRun}>
             {busy ? "Querying…" : "Compute blast radius"}
           </button>
         </div>
       </div>
 
       <ErrorBanner error={error} />
-      {!result ? (
-        <div className="empty">Run a query to see the impact.</div>
-      ) : (
+      {result ? (
         <Result result={result} nav={nav} />
+      ) : busy ? (
+        <div className="grid" style={{ gap: 20 }}>
+          <SkeletonStats count={4} />
+          <div className="card flush"><SkeletonTable columns={5} rows={6} /></div>
+        </div>
+      ) : (
+        <div className="empty">Run a query to see the impact.</div>
       )}
     </div>
   );

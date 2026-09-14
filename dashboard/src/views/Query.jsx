@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { DataTable, ErrorBanner, Loading, Pill, fmtTime } from "../components";
+import { DataTable, ErrorBanner, Pill, SkeletonLines, SkeletonTable, fmtTime } from "../components";
 import {
   AGGREGATES, aggAlias, aggNeedsColumn, aggNumericOnly, availableColumns, buildSql, canJoinClusters,
   clampLimit, clusterContextDefaults, clusterContextOn, decodeState, defaultAggAlias,
@@ -20,8 +20,11 @@ const HASH_PREFIX = "#query=";
 // --------------------------------------------------------------------------- //
 // browser helpers
 // --------------------------------------------------------------------------- //
-function readHash() {
+// A shared query is /query?q=<state>. Links minted before the router put the
+// state in the fragment (#query=<state>), and those still open.
+function readState(q) {
   try {
+    if (q) return decodeState(q);
     const hash = window.location.hash || "";
     return hash.startsWith(HASH_PREFIX) ? decodeState(hash.slice(HASH_PREFIX.length)) : null;
   } catch {
@@ -95,7 +98,7 @@ function startGrouping(state, enabled) {
 // --------------------------------------------------------------------------- //
 // page
 // --------------------------------------------------------------------------- //
-export default function Query({ nav }) {
+export default function Query({ nav, route }) {
   const { data: schema, error: schemaError, loading: schemaLoading } = useFetch(
     () => api.querySchema(), []);
 
@@ -110,13 +113,18 @@ export default function Query({ nav }) {
   const [askState, setAskState] = useState({ question: "", answer: null, error: null,
     unavailable: "", busy: false });
 
-  const fromHash = useRef(null);
+  const fromUrl = useRef(null);
   const initialised = useRef(false);
   const autoRan = useRef(false);
   if (!initialised.current) {                        // read the link before we rewrite it
-    fromHash.current = readHash();
+    fromUrl.current = readState(route.query.q);
     initialised.current = true;
   }
+
+  // navigate is stable, but the route object is new after every navigation:
+  // hold it in a ref so writing the URL does not re-run on unrelated changes.
+  const navigate = useRef(route.navigate);
+  navigate.current = route.navigate;
 
   const flash = useCallback((text) => {
     setNote(text);
@@ -126,7 +134,7 @@ export default function Query({ nav }) {
   // --- state lifecycle -----------------------------------------------------
   useEffect(() => {
     if (!schema || state) return;
-    const shared = fromHash.current;
+    const shared = fromUrl.current;
     setState(shared && tableOf(schema, shared.table)
       ? pruneState(schema, shared)
       : defaultState(schema));
@@ -140,14 +148,16 @@ export default function Query({ nav }) {
     if (pruned !== state) setState(pruned);
   }, [schema, state]);
 
-  // The current query lives in the URL, so a query is a link.
+  // The current query lives in the URL, so a query is a link. It replaces
+  // rather than pushes: the back button steps off the page, not through every
+  // edit of the query.
   useEffect(() => {
     if (!state) return undefined;
     const t = setTimeout(() => {
       const encoded = encodeState(state);
       if (!encoded) return;
       try {
-        window.history.replaceState(null, "", `${HASH_PREFIX}${encoded}`);
+        navigate.current("/query", { q: encoded }, { replace: true });
       } catch {
         /* some embedders block replaceState; the page works without it */
       }
@@ -317,7 +327,9 @@ export default function Query({ nav }) {
 
   // --- render --------------------------------------------------------------
   if (schemaError) return <ErrorBanner error={schemaError} />;
-  if (!schema || !state) return schemaLoading ? <Loading /> : <ErrorBanner error="No schema." />;
+  // The whole page is built from the schema, so until it lands there is only
+  // the frame - but the frame, at least, is there straight away.
+  if (!schema || !state) return schemaLoading ? <QuerySkeleton /> : <ErrorBanner error="No schema." />;
 
   const snap = schema.snapshot || {};
   const table = tableOf(schema, state.table);
@@ -636,6 +648,29 @@ export default function Query({ nav }) {
 // --------------------------------------------------------------------------- //
 // builder pieces
 // --------------------------------------------------------------------------- //
+function QuerySkeleton() {
+  return (
+    <div className="grid" style={{ gap: 16 }}>
+      <div className="section-head">
+        <div>
+          <div className="section-title" style={{ margin: 0 }}>Query</div>
+          <div className="desc">
+            Every table the collector fills, queried directly. The builder writes the SQL, the
+            SQL is what runs, and both stay on screen.
+          </div>
+        </div>
+      </div>
+      <div className="q-layout">
+        <div className="card q-rail"><div className="q-sec"><SkeletonLines rows={9} /></div></div>
+        <div className="q-main">
+          <div className="card"><SkeletonLines rows={5} /></div>
+          <div className="card flush"><SkeletonTable columns={6} rows={6} /></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Section({ title, right, children }) {
   return (
     <div className="q-sec">

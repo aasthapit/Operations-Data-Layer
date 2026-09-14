@@ -140,6 +140,7 @@ export default function DataTable({
   expanded,          // (row) => node | null: extra full-width row under a row
   scroll = false,    // render inside the standard capped scroll container
   searchPlaceholder = "Search",
+  pageSize = 100,    // rows rendered before "Show more"; sort and filter still see them all
 }) {
   const cols = useMemo(() => (columns || []).filter(Boolean), [columns]);
   const all = useMemo(() => rows || [], [rows]);
@@ -213,6 +214,17 @@ export default function DataTable({
     }
     return out;
   }, [all, cols, byKey, activeFilters, query, state.sort]);
+
+  // Only a page of rows is handed to React at a time: sorting and filtering run
+  // over the whole set above, so the table is still the whole table - it is the
+  // DOM that is capped. A refreshed response keeps whatever page the user
+  // expanded to; changing what is being asked for starts over at one page.
+  const [shown, setShown] = useState(pageSize);
+  const filterKey = `${id || ""}|${state.q}|${JSON.stringify(state.filters)}`;
+  useEffect(() => { setShown(pageSize); }, [filterKey, pageSize]);
+  const total = view.length;
+  const page = total > shown ? view.slice(0, shown) : view;
+  const paged = page.length < total;
 
   const defaultSort = normalizeSort(initialSort);
   const sortChanged = JSON.stringify(state.sort) !== JSON.stringify(defaultSort);
@@ -321,7 +333,7 @@ export default function DataTable({
         )}
       </thead>
       <tbody>
-        {view.map((row, i) => {
+        {page.map((row, i) => {
           // A view can hand us rows from the previous query for a render (e.g.
           // the grouping changed but the refetch has not landed), so a row key
           // that does not resolve falls back to the index.
@@ -347,7 +359,7 @@ export default function DataTable({
             ) : null,
           ];
         })}
-        {view.length === 0 && (
+        {total === 0 && (
           <tr>
             <td colSpan={cols.length} className="empty">
               {all.length === 0 ? empty : "No rows match the filters."}
@@ -368,12 +380,28 @@ export default function DataTable({
           placeholder={searchPlaceholder}
           aria-label="Search this table"
         />
-        {filtered && <span className="dt-count">{view.length} of {all.length}</span>}
+        {(paged || filtered) && (
+          <span className="dt-count">
+            {paged
+              ? `${page.length} of ${total} shown${filtered ? ` · filtered from ${all.length}` : ""}`
+              : `${total} of ${all.length}`}
+          </span>
+        )}
         {anyActive && (
           <button type="button" className="dt-clear" onClick={clear}>Clear</button>
         )}
       </div>
       {scroll ? <div className="scroll">{table}</div> : table}
+      {paged && (
+        <div className="dt-more">
+          <button type="button" className="dt-clear" onClick={() => setShown((s) => s + pageSize)}>
+            Show {Math.min(pageSize, total - page.length)} more
+          </button>
+          <button type="button" className="dt-clear" onClick={() => setShown(total)}>
+            Show all {total}
+          </button>
+        </div>
+      )}
       {footer != null && <div className="dt-foot">{footer}</div>}
     </div>
   );

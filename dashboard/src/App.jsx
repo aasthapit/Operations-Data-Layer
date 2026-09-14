@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+import { invalidate } from "./cache";
+import { useRoute } from "./router";
 import Overview from "./views/Overview";
 import Clusters from "./views/Clusters";
 import ClusterDetail from "./views/ClusterDetail";
@@ -12,59 +14,79 @@ import Query from "./views/Query";
 import Manifest from "./views/Manifest";
 import Patching from "./views/Patching";
 
+// [root segment, label, where the tab button goes]
 const TABS = [
-  ["overview", "Overview"],
-  ["clusters", "Clusters"],
-  ["applications", "Applications"],
-  ["versions", "Versions"],
-  ["metrics", "Utilization"],
-  ["insights", "Insights"],
-  ["query", "Query"],
-  ["blast", "Blast radius"],
-  ["patching", "Patching"],
-  ["manifest", "Collected"],
+  ["", "Overview", "/"],
+  ["clusters", "Clusters", "/clusters"],
+  ["applications", "Applications", "/applications"],
+  ["versions", "Versions", "/versions"],
+  ["utilization", "Utilization", "/utilization"],
+  ["insights", "Insights", "/insights/certificates"],
+  ["query", "Query", "/query"],
+  ["blast", "Blast radius", "/blast"],
+  ["patching", "Patching", "/patching"],
+  ["collected", "Collected", "/collected"],
 ];
 
+const DEFAULT_INSIGHT = "certificates";
+const enc = encodeURIComponent;
+
+// The document title says where you are, so a tab in the browser's own history
+// and a bookmark both name the page rather than the whole dashboard.
+function titleFor([root, second, third]) {
+  switch (root) {
+    case undefined: return "Overview";
+    case "clusters": return second ? `${second}${third ? ` · ${third}` : ""}` : "Clusters";
+    case "applications": return second || "Applications";
+    case "versions": return "Versions";
+    case "utilization": return "Utilization";
+    case "insights": return `Insights · ${second || DEFAULT_INSIGHT}`;
+    case "query": return "Query";
+    case "blast": return "Blast radius";
+    case "patching": return second ? `Patching · ${second}` : "Patching";
+    case "collected": return "Collected";
+    default: return "Overview";
+  }
+}
+
 export default function App() {
-  // A shared query link (#query=<state>) opens on the Query tab.
-  const [tab, setTab] = useState(() => {
-    try {
-      return (window.location.hash || "").startsWith("#query=") ? "query" : "overview";
-    } catch {
-      return "overview";
-    }
-  });
-  const [selectedCluster, setSelectedCluster] = useState(null);
-  const [selectedApp, setSelectedApp] = useState(null);
-  const [clusterFilter, setClusterFilter] = useState(null);
-  const [blastQuery, setBlastQuery] = useState(null);
-  const [insightSection, setInsightSection] = useState(null);
+  const route = useRoute();
+  const { navigate, back, segments } = route;
+  const [root, second, third] = segments;
   const [refreshing, setRefreshing] = useState(false);
-  const [refreshedAt, setRefreshedAt] = useState(null);
+  // An unknown path falls back to the overview, so the tab strip does too.
+  const known = TABS.some(([key]) => key === (root || ""));
+  const activeTab = known ? root || "" : "";
 
-  const clearSelection = () => { setSelectedCluster(null); setSelectedApp(null); };
-  const openCluster = (name) => { setSelectedApp(null); setSelectedCluster(name); };
-  const openApp = (name) => { setSelectedCluster(null); setSelectedApp(name); setTab("applications"); };
-  const goClusters = (key, value) => {
-    const map = { hub: "hub", region: "region", datacenter: "datacenter", environment: "environment", version: "version", status: "status", upgrading: "upgrading" };
-    setClusterFilter(map[key] ? { [map[key]]: value } : null);
-    clearSelection();
-    setTab("clusters");
-  };
-  const goBlast = (query) => { setBlastQuery(query || null); clearSelection(); setTab("blast"); };
-  const goInsights = (section) => { setInsightSection(section || null); clearSelection(); setTab("insights"); };
+  useEffect(() => {
+    document.title = `${titleFor(segments)} · Operations Data Layer`;
+  }, [segments.join("/")]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The navigation object the views already speak, now writing to the URL.
+  // Opening something is a push (the back button undoes it); narrowing a list
+  // is a replace, which each view does through useQueryFilters.
+  const nav = useMemo(() => ({
+    openCluster: (name, tab) => navigate(`/clusters/${enc(name)}${tab ? `/${tab}` : ""}`),
+    openApp: (name) => navigate(name ? `/applications/${enc(name)}` : "/applications"),
+    goClusters: (key, value) => {
+      const keys = ["hub", "region", "datacenter", "environment", "version", "status", "team", "upgrading"];
+      navigate("/clusters", keys.includes(key) ? { [key]: value } : {});
+    },
+    goBlast: (query) => navigate("/blast", query || {}),
+    goInsights: (section) => navigate(`/insights/${section || DEFAULT_INSIGHT}`),
+    goPatchJob: (id) => navigate(`/patching/${enc(id)}`),
+    back,
+  }), [navigate, back]);
+
+  // Ask for a sweep, then drop the cache so every mounted view re-reads in
+  // place - no remount, so tables keep their sort and the page does not blink.
   const refresh = async () => {
     setRefreshing(true);
     try {
       await api.refresh();
-      // give the background sweep a moment, then nudge views by remounting
-      setTimeout(() => { setRefreshedAt(Date.now()); setRefreshing(false); }, 4000);
+      setTimeout(() => { invalidate(); setRefreshing(false); }, 4000);
     } catch { setRefreshing(false); }
   };
-
-  const switchTab = (t) => { clearSelection(); setTab(t); };
-  const nav = { openCluster, openApp, goClusters, goBlast, goInsights };
 
   return (
     <div className="app">
@@ -75,8 +97,8 @@ export default function App() {
           <small>· OpenShift fleet</small>
         </div>
         <div className="nav">
-          {TABS.map(([k, label]) => (
-            <button key={k} className={tab === k && !selectedCluster ? "active" : ""} onClick={() => switchTab(k)}>
+          {TABS.map(([key, label, href]) => (
+            <button key={label} className={activeTab === key ? "active" : ""} onClick={() => navigate(href)}>
               {label}
             </button>
           ))}
@@ -87,29 +109,29 @@ export default function App() {
         </button>
       </div>
 
-      <div className="content" key={refreshedAt}>
-        {selectedCluster ? (
-          <ClusterDetail name={selectedCluster} onBack={() => setSelectedCluster(null)} nav={nav} />
-        ) : tab === "overview" ? (
-          <Overview nav={nav} />
-        ) : tab === "clusters" ? (
-          <Clusters initialFilter={clusterFilter} onOpen={openCluster} />
-        ) : tab === "applications" ? (
-          <Applications initialApp={selectedApp} nav={nav} onClearApp={() => setSelectedApp(null)} />
-        ) : tab === "versions" ? (
-          <Versions onOpen={openCluster} onBlast={(v) => goBlast({ ocp_version: v })} />
-        ) : tab === "metrics" ? (
-          <Metrics onOpen={openCluster} />
-        ) : tab === "insights" ? (
-          <Insights initialSection={insightSection} nav={nav} />
-        ) : tab === "query" ? (
-          <Query nav={nav} />
-        ) : tab === "patching" ? (
-          <Patching />
-        ) : tab === "manifest" ? (
-          <Manifest onOpen={openCluster} />
+      <div className="content">
+        {root === "clusters" && second ? (
+          <ClusterDetail name={second} tab={third} nav={nav} />
+        ) : root === "clusters" ? (
+          <Clusters route={route} onOpen={nav.openCluster} />
+        ) : root === "applications" ? (
+          <Applications app={second} route={route} nav={nav} />
+        ) : root === "versions" ? (
+          <Versions onOpen={nav.openCluster} onBlast={(v) => nav.goBlast({ ocp_version: v })} />
+        ) : root === "utilization" ? (
+          <Metrics route={route} onOpen={nav.openCluster} />
+        ) : root === "insights" ? (
+          <Insights section={second || DEFAULT_INSIGHT} route={route} nav={nav} />
+        ) : root === "query" ? (
+          <Query route={route} nav={nav} />
+        ) : root === "patching" ? (
+          <Patching id={second} nav={nav} />
+        ) : root === "collected" ? (
+          <Manifest onOpen={nav.openCluster} />
+        ) : root === "blast" ? (
+          <BlastRadius route={route} nav={nav} />
         ) : (
-          <BlastRadius initialQuery={blastQuery} nav={nav} />
+          <Overview route={route} nav={nav} />
         )}
       </div>
     </div>

@@ -1,7 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Loading, ErrorBanner, SubTabs, Pill, FilterSelect, DataTable, fmtBytes, fmtTime, fmtAge, fmtDays } from "../components";
+import { useQueryFilters } from "../router";
+import {
+  ErrorBanner, SubTabs, Pill, FilterSelect, DataTable, SearchInput, SkeletonTable,
+  fmtBytes, fmtTime, fmtAge, fmtDays,
+} from "../components";
 
 const SECTIONS = [
   ["certificates", "Certificates"], ["pods", "Pod issues"], ["quotas", "Quotas"], ["olm", "OLM operators"],
@@ -9,12 +13,13 @@ const SECTIONS = [
   ["images", "Images"], ["references", "Config references"], ["access", "Cluster admins"],
 ];
 
-export default function Insights({ initialSection, nav }) {
-  const [section, setSection] = useState(initialSection || "certificates");
-  useEffect(() => { if (initialSection) setSection(initialSection); }, [initialSection]);
+export default function Insights({ section, nav, route }) {
   const clusters = useFetch(() => api.clusters(), []);
   const names = (clusters.data?.clusters || []).map((c) => c.name);
-  const props = { nav, clusterNames: names };
+  // Each section is its own path (/insights/certificates) and keeps its filters
+  // in that path's query string, so a section is a link and the back button
+  // steps between sections rather than out of Insights.
+  const props = { nav, route, clusterNames: names };
   return (
     <div className="grid" style={{ gap: 16 }}>
       <div className="section-head">
@@ -23,7 +28,7 @@ export default function Insights({ initialSection, nav }) {
           <div className="desc">Fleet-wide views computed over what every cluster's API server reported on the last sweep.</div>
         </div>
       </div>
-      <SubTabs tabs={SECTIONS} value={section} onChange={setSection} />
+      <SubTabs tabs={SECTIONS} value={section} onChange={(s) => nav.goInsights(s)} />
       {section === "certificates" && <Certificates {...props} />}
       {section === "pods" && <PodIssues {...props} />}
       {section === "quotas" && <Quotas {...props} />}
@@ -73,10 +78,12 @@ const STATUS_RANK = {
 const statusRank = (s) => (s in STATUS_RANK ? STATUS_RANK[s] : 5);
 
 // ---------------------------------------------------------------------------
-function Certificates({ nav, clusterNames }) {
-  const [includeValid, setIncludeValid] = useState(false);
-  const [cluster, setCluster] = useState("");
-  const { data, error, loading } = useFetch(() => api.certificates({ include_valid: includeValid, cluster }), [includeValid, cluster]);
+function Certificates({ nav, route, clusterNames }) {
+  const [f, set] = useQueryFilters(route, ["cluster", "class", "valid"]);
+  const includeValid = f.valid === "1";
+  const { data, error } = useFetch(
+    () => api.certificates({ include_valid: includeValid, cluster: f.cluster, class: f.class }),
+    [includeValid, f.cluster, f.class]);
 
   const columns = [
     {
@@ -122,12 +129,13 @@ function Certificates({ nav, clusterNames }) {
     <Card title={`Certificates${data ? ` (${data.count})` : ""}`}
       desc={`Parsed from TLS Secrets and PEM keys in ConfigMaps. Only subject / issuer / validity are kept - the certificate material is never collected. Window: ${data?.within_days ?? "…"} days.`}
       right={<div className="filters" style={{ margin: 0 }}>
-        <FilterSelect label="Cluster" value={cluster} options={clusterNames} onChange={setCluster} />
+        <FilterSelect label="Cluster" value={f.cluster} options={clusterNames} onChange={(v) => set("cluster", v)} />
+        <FilterSelect label="Class" value={f.class} options={["application", "platform"]} onChange={(v) => set("class", v)} />
         <label className="fld" style={{ flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-end" }}>
-          <input type="checkbox" checked={includeValid} onChange={(e) => setIncludeValid(e.target.checked)} /> include valid
+          <input type="checkbox" checked={includeValid} onChange={(e) => set("valid", e.target.checked ? "1" : "")} /> include valid
         </label>
       </div>}>
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={9} rows={8} /> : (
         <DataTable
           id="insights.certificates"
           columns={columns}
@@ -142,10 +150,9 @@ function Certificates({ nav, clusterNames }) {
 }
 
 // ---------------------------------------------------------------------------
-function PodIssues({ nav, clusterNames }) {
-  const [cls, setCls] = useState("");
-  const [cluster, setCluster] = useState("");
-  const { data, error, loading } = useFetch(() => api.podIssues({ class: cls, cluster }), [cls, cluster]);
+function PodIssues({ nav, route, clusterNames }) {
+  const [f, set] = useQueryFilters(route, ["class", "cluster"]);
+  const { data, error } = useFetch(() => api.podIssues({ class: f.class, cluster: f.cluster }), [f.class, f.cluster]);
 
   const columns = [
     { key: "class", label: "Class", render: (i) => <span className="tag">{i.class}</span> },
@@ -164,10 +171,10 @@ function PodIssues({ nav, clusterNames }) {
     <Card title={`Pod issues${data ? ` (${data.count})` : ""}`}
       desc={data ? Object.entries(data.by_reason).map(([k, v]) => `${v} ${k}`).join(" · ") || "Nothing wrong." : ""}
       right={<div className="filters" style={{ margin: 0 }}>
-        <SubTabs tabs={[["", "All"], ["platform", "Platform"], ["application", "Apps"]]} value={cls} onChange={setCls} />
-        <FilterSelect label="Cluster" value={cluster} options={clusterNames} onChange={setCluster} />
+        <SubTabs tabs={[["", "All"], ["platform", "Platform"], ["application", "Apps"]]} value={f.class} onChange={(v) => set("class", v)} />
+        <FilterSelect label="Cluster" value={f.cluster} options={clusterNames} onChange={(v) => set("cluster", v)} />
       </div>}>
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={9} rows={8} /> : (
         <DataTable
           id="insights.podIssues"
           columns={columns}
@@ -183,7 +190,7 @@ function PodIssues({ nav, clusterNames }) {
 
 // ---------------------------------------------------------------------------
 function Quotas({ nav }) {
-  const { data, error, loading } = useFetch(() => api.quotas(), []);
+  const { data, error } = useFetch(() => api.quotas(), []);
 
   const columns = [
     {
@@ -216,7 +223,7 @@ function Quotas({ nav }) {
 
   return (
     <Card title={`Resource quotas${data ? ` (${data.count})` : ""}`} desc="Hard vs used per resource, worst first.">
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={6} rows={8} /> : (
         <DataTable
           id="insights.quotas"
           columns={columns}
@@ -232,7 +239,7 @@ function Quotas({ nav }) {
 
 // ---------------------------------------------------------------------------
 function Olm({ nav }) {
-  const { data, error, loading } = useFetch(() => api.olmOperators(), []);
+  const { data, error } = useFetch(() => api.olmOperators(), []);
   const [open, setOpen] = useState(null);
 
   const installColumns = [
@@ -289,7 +296,7 @@ function Olm({ nav }) {
   return (
     <Card title={`OLM operators${data ? ` (${data.operators.length} packages)` : ""}`}
       desc="ClusterServiceVersions across the fleet: version drift per package, install phase, pending upgrades from Subscriptions. Click a package for per-cluster detail.">
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={8} rows={8} /> : (
         <DataTable
           id="insights.olm"
           columns={columns}
@@ -317,7 +324,7 @@ function Olm({ nav }) {
 
 // ---------------------------------------------------------------------------
 function Mcp({ nav }) {
-  const { data, error, loading } = useFetch(() => api.machineConfigPools(), []);
+  const { data, error } = useFetch(() => api.machineConfigPools(), []);
 
   const columns = [
     {
@@ -340,7 +347,7 @@ function Mcp({ nav }) {
   return (
     <Card title={`Machine config pools${data ? ` (${data.count})` : ""}`}
       desc="Node-level config rollout state per pool, degraded and updating first. The patching signal for OS / kubelet changes.">
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={10} rows={6} /> : (
         <DataTable
           id="insights.mcp"
           columns={columns}
@@ -356,9 +363,8 @@ function Mcp({ nav }) {
 
 // ---------------------------------------------------------------------------
 function Storage({ nav }) {
-  const { data, error, loading } = useFetch(() => api.storage(), []);
-  if (error) return <ErrorBanner error={error} />;
-  if (loading && !data) return <Loading />;
+  const { data, error } = useFetch(() => api.storage(), []);
+  if (error && !data) return <ErrorBanner error={error} />;
 
   const classColumns = [
     {
@@ -401,17 +407,17 @@ function Storage({ nav }) {
   return (
     <div className="grid" style={{ gap: 16 }}>
       <Card title="Storage classes" desc="Provisioner per class, and the claims riding on it - the storage blast radius.">
-        <DataTable
+        {!data ? <SkeletonTable columns={7} rows={5} /> : <DataTable
           id="insights.storageClasses"
           columns={classColumns}
           rows={data.storage_classes}
           rowKey="name"
           initialSort={{ key: "name", dir: "asc" }}
           empty="No storage classes collected."
-        />
+        />}
       </Card>
-      <Card title={`Persistent volume claims (${data.pvcs.length})`} desc="Pending first. Mounted-by comes from pod volumes.">
-        <DataTable
+      <Card title={`Persistent volume claims${data ? ` (${data.pvcs.length})` : ""}`} desc="Pending first. Mounted-by comes from pod volumes.">
+        {!data ? <SkeletonTable columns={9} rows={8} /> : <DataTable
           id="insights.pvcs"
           columns={pvcColumns}
           rows={data.pvcs}
@@ -419,16 +425,16 @@ function Storage({ nav }) {
           initialSort={{ key: "status", dir: "asc" }}
           empty="No persistent volume claims collected."
           scroll
-        />
+        />}
       </Card>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-function Routes({ nav }) {
-  const [host, setHost] = useState("");
-  const { data, error, loading } = useFetch(() => api.routes({ host }), [host]);
+function Routes({ nav, route }) {
+  const [f, set] = useQueryFilters(route, ["host"]);
+  const { data, error } = useFetch(() => api.routes({ host: f.host }), [f.host]);
 
   const columns = [
     { key: "host", label: "Host", className: "mono", sortValue: (r) => `${r.host}${r.path || ""}`, render: (r) => `${r.host}${r.path || ""}` },
@@ -459,8 +465,8 @@ function Routes({ nav }) {
 
   return (
     <Card title={`Routes${data ? ` (${data.count})` : ""}`} desc="Which cluster and namespace serves a hostname."
-      right={<input type="text" className="search" placeholder="filter by host…" value={host} onChange={(e) => setHost(e.target.value)} />}>
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      right={<SearchInput className="search" placeholder="filter by host…" value={f.host} onChange={(v) => set("host", v)} />}>
+      {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={8} rows={8} /> : (
         <DataTable
           id="insights.routes"
           columns={columns}
@@ -476,10 +482,9 @@ function Routes({ nav }) {
 }
 
 // ---------------------------------------------------------------------------
-function Events({ nav, clusterNames }) {
-  const [cluster, setCluster] = useState("");
-  const [cls, setCls] = useState("");
-  const { data, error, loading } = useFetch(() => api.events({ cluster, class: cls, limit: 300 }), [cluster, cls]);
+function Events({ nav, route, clusterNames }) {
+  const [f, set] = useQueryFilters(route, ["cluster", "class"]);
+  const { data, error } = useFetch(() => api.events({ cluster: f.cluster, class: f.class, limit: 300 }), [f.cluster, f.class]);
 
   const columns = [
     {
@@ -505,10 +510,10 @@ function Events({ nav, clusterNames }) {
     <Card title={`Warning events${data ? ` (${data.count})` : ""}`}
       desc={data ? Object.entries(data.by_reason).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${v} ${k}`).join(" · ") : ""}
       right={<div className="filters" style={{ margin: 0 }}>
-        <SubTabs tabs={[["", "All"], ["platform", "Platform"], ["application", "Apps"]]} value={cls} onChange={setCls} />
-        <FilterSelect label="Cluster" value={cluster} options={clusterNames} onChange={setCluster} />
+        <SubTabs tabs={[["", "All"], ["platform", "Platform"], ["application", "Apps"]]} value={f.class} onChange={(v) => set("class", v)} />
+        <FilterSelect label="Cluster" value={f.cluster} options={clusterNames} onChange={(v) => set("cluster", v)} />
       </div>}>
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={7} rows={9} /> : (
         <DataTable
           id="insights.events"
           columns={columns}
@@ -524,10 +529,10 @@ function Events({ nav, clusterNames }) {
 }
 
 // ---------------------------------------------------------------------------
-function Images({ nav }) {
-  const [image, setImage] = useState("");
-  const [groupBy, setGroupBy] = useState("image");
-  const { data, error, loading } = useFetch(() => api.images({ image, group_by: groupBy }), [image, groupBy]);
+function Images({ nav, route }) {
+  const [f, set] = useQueryFilters(route, ["image", "group"]);
+  const groupBy = ["image", "repository", "registry"].includes(f.group) ? f.group : "image";
+  const { data, error } = useFetch(() => api.images({ image: f.image, group_by: groupBy }), [f.image, groupBy]);
   const [open, setOpen] = useState(null);
 
   const workloadColumns = [
@@ -558,10 +563,10 @@ function Images({ nav }) {
   return (
     <Card title={`Images${data ? ` (${data.count})` : ""}`} desc="Which workloads run which images - the input to a CVE blast radius."
       right={<div className="filters" style={{ margin: 0 }}>
-        <SubTabs tabs={[["image", "Image"], ["repository", "Repository"], ["registry", "Registry"]]} value={groupBy} onChange={setGroupBy} />
-        <input type="text" className="search" placeholder="filter images…" value={image} onChange={(e) => setImage(e.target.value)} />
+        <SubTabs tabs={[["image", "Image"], ["repository", "Repository"], ["registry", "Registry"]]} value={groupBy} onChange={(v) => set("group", v)} />
+        <SearchInput className="search" placeholder="filter images…" value={f.image} onChange={(v) => set("image", v)} />
       </div>}>
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={4} rows={8} /> : (
         <DataTable
           id={`insights.images.${groupBy}`}
           columns={columns}
@@ -588,10 +593,11 @@ function Images({ nav }) {
 }
 
 // ---------------------------------------------------------------------------
-function References({ nav }) {
-  const [kind, setKind] = useState("Secret");
-  const [name, setName] = useState("");
-  const { data, error, loading } = useFetch(() => api.references({ kind, name }), [kind, name]);
+function References({ nav, route }) {
+  const KINDS = ["Secret", "ConfigMap", "PersistentVolumeClaim", "ServiceAccount"];
+  const [f, set] = useQueryFilters(route, ["kind", "name"]);
+  const kind = KINDS.includes(f.kind) ? f.kind : "Secret";
+  const { data, error } = useFetch(() => api.references({ kind, name: f.name }), [kind, f.name]);
 
   const columns = [
     clusterColumn(nav, { filter: "text" }),
@@ -613,10 +619,10 @@ function References({ nav }) {
     <Card title={`Config references${data ? ` (${data.count})` : ""}`}
       desc="Which workloads reference a Secret / ConfigMap / PVC / ServiceAccount - the blast radius of rotating a secret or changing a config map."
       right={<div className="filters" style={{ margin: 0 }}>
-        <SubTabs tabs={[["Secret", "Secrets"], ["ConfigMap", "ConfigMaps"], ["PersistentVolumeClaim", "PVCs"], ["ServiceAccount", "Service accounts"]]} value={kind} onChange={setKind} />
-        <input type="text" className="search" placeholder="exact name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
+        <SubTabs tabs={[["Secret", "Secrets"], ["ConfigMap", "ConfigMaps"], ["PersistentVolumeClaim", "PVCs"], ["ServiceAccount", "Service accounts"]]} value={kind} onChange={(v) => set("kind", v)} />
+        <SearchInput className="search" placeholder="exact name (optional)" value={f.name} onChange={(v) => set("name", v)} />
       </div>}>
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={4} rows={8} /> : (
         <DataTable
           id="insights.references"
           columns={columns}
@@ -633,7 +639,7 @@ function References({ nav }) {
 
 // ---------------------------------------------------------------------------
 function Access({ nav }) {
-  const { data, error, loading } = useFetch(() => api.clusterAdmins(), []);
+  const { data, error } = useFetch(() => api.clusterAdmins(), []);
 
   const columns = [
     { key: "kind", label: "Kind", className: "muted", filter: "select" },
@@ -664,7 +670,7 @@ function Access({ nav }) {
   return (
     <Card title={`Cluster admins${data ? ` (${data.count} subjects)` : ""}`}
       desc="Subjects of ClusterRoleBindings to cluster-admin, with the clusters each holds it on.">
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={5} rows={6} /> : (
         <DataTable
           id="insights.access"
           columns={columns}

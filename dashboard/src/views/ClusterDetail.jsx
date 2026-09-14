@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { api } from "../api";
+import * as cache from "../cache";
 import { useFetch } from "../hooks";
 import {
-  Pill, Loading, ErrorBanner, Sparkline, Dot, SubTabs, UsageBar, Tier, FilterSelect, DataTable,
-  fmtBytes, fmtCores, fmtTime, fmtAge, fmtDays,
+  Pill, ErrorBanner, Sparkline, Dot, SubTabs, UsageBar, Tier, FilterSelect, DataTable,
+  Skeleton, SkeletonTable, fmtBytes, fmtCores, fmtTime, fmtAge, fmtDays,
 } from "../components";
 
 const SECTIONS = [
@@ -11,42 +12,62 @@ const SECTIONS = [
   ["issues", "Issues"], ["operators", "Operators"], ["resources", "Resources"],
 ];
 
-export default function ClusterDetail({ name, onBack, nav }) {
-  const [section, setSection] = useState("overview");
-  const { data: c, error, loading } = useFetch(() => api.cluster(name), [name]);
+export default function ClusterDetail({ name, tab, nav }) {
+  const section = SECTIONS.some(([k]) => k === tab) ? tab : "overview";
+  const { data: c, error } = useFetch(() => api.cluster(name), [name]);
 
-  if (loading && !c) return <Loading />;
-  if (error) return <ErrorBanner error={error} />;
+  // The cluster list the user came from is still cached, so the header - name,
+  // hub, status, version - is on screen before the detail response lands.
+  const summary = cache.search("/api/clusters", (d) => (d.clusters || []).find((x) => x.name === name));
+  const head = c || summary;
 
-  const counts = {
+  if (error && !c) return <ErrorBanner error={error} />;
+
+  const counts = c ? {
     namespaces: c.namespaces.application + c.namespaces.platform,
     workloads: c.workloads,
     nodes: c.nodes.total,
     issues: c.pod_issues,
     operators: c.operators.length,
-  };
+  } : {};
 
   return (
     <div>
-      <span className="back" onClick={onBack}>← All clusters</span>
+      <span className="back" onClick={() => nav.back("/clusters")}>← All clusters</span>
       <div className="section-head" style={{ marginBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <h2 className="mono" style={{ margin: 0 }}>{c.name}</h2>
-          <Pill status={c.overall_status} />
-          {c.upgrading && <span className="tag">upgrading → {c.desired_version} ({c.upgrade_percent}%)</span>}
-          {!c.reachable && <span className="tag critical">unreachable</span>}
+          <h2 className="mono" style={{ margin: 0 }}>{name}</h2>
+          {head ? <Pill status={head.overall_status} /> : <Skeleton width={78} height={20} />}
+          {head && <span className="muted mono" style={{ fontSize: 12.5 }}>{head.hub} · {head.ocp_version}</span>}
+          {head?.upgrading && <span className="tag">upgrading → {head.desired_version} ({head.upgrade_percent}%)</span>}
+          {head && !head.reachable && <span className="tag critical">unreachable</span>}
         </div>
-        <SubTabs tabs={SECTIONS.map(([k, l]) => [k, l, counts[k]])} value={section} onChange={setSection} />
+        <SubTabs
+          tabs={SECTIONS.map(([k, l]) => [k, l, counts[k]])}
+          value={section}
+          onChange={(s) => nav.openCluster(name, s)}
+        />
       </div>
-      {c.last_error && <div className="banner">{c.last_error}</div>}
+      {c?.last_error && <div className="banner">{c.last_error}</div>}
 
-      {section === "overview" && <OverviewSection c={c} nav={nav} />}
-      {section === "namespaces" && <NamespacesSection c={c} nav={nav} />}
-      {section === "workloads" && <WorkloadsSection name={c.name} />}
-      {section === "nodes" && <NodesSection c={c} />}
-      {section === "issues" && <IssuesSection c={c} />}
-      {section === "operators" && <OperatorsSection c={c} nav={nav} />}
-      {section === "resources" && <ResourcesSection c={c} />}
+      {/* Workloads fetch for themselves, so a deep link to that sub-tab does not
+          wait on the cluster document; everything else is a slice of it. */}
+      {section === "workloads" ? <WorkloadsSection name={name} />
+        : !c ? <SectionSkeleton />
+          : section === "namespaces" ? <NamespacesSection c={c} nav={nav} />
+            : section === "nodes" ? <NodesSection c={c} />
+              : section === "issues" ? <IssuesSection c={c} />
+                : section === "operators" ? <OperatorsSection c={c} nav={nav} />
+                  : section === "resources" ? <ResourcesSection c={c} />
+                    : <OverviewSection c={c} nav={nav} />}
+    </div>
+  );
+}
+
+function SectionSkeleton() {
+  return (
+    <div className="card flush">
+      <SkeletonTable columns={7} rows={9} />
     </div>
   );
 }
@@ -270,7 +291,7 @@ function WorkloadsSection({ name }) {
   const [cls, setCls] = useState("");
   const [ns, setNs] = useState("");
   const [open, setOpen] = useState(null);
-  const { data, error, loading } = useFetch(() => api.clusterWorkloads(name, { class: cls, namespace: ns, detail: true }), [name, cls, ns]);
+  const { data, error } = useFetch(() => api.clusterWorkloads(name, { class: cls, namespace: ns, detail: true }), [name, cls, ns]);
   const namespaces = [...new Set((data?.workloads || []).map((w) => w.namespace))].sort();
   return (
     <div className="card flush">
@@ -284,7 +305,7 @@ function WorkloadsSection({ name }) {
         </div>
         <div className="desc">Env var names and their Secret / ConfigMap sources are collected; values never are. Click a row for containers.</div>
       </div>
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={9} rows={8} /> : (
         <DataTable
           id="cluster.workloads"
           columns={WORKLOAD_COLUMNS}
@@ -495,7 +516,7 @@ function IssuesSection({ c }) {
       </div>
       <div className="card flush">
         <div className="card-head"><h3>Certificates expiring ({certs.data?.count ?? "…"})</h3></div>
-        {certs.error ? <ErrorBanner error={certs.error} /> : !certs.data ? <Loading /> : (
+        {certs.error && !certs.data ? <ErrorBanner error={certs.error} /> : !certs.data ? <SkeletonTable columns={6} rows={4} /> : (
           <DataTable
             id="cluster.certificates"
             columns={CLUSTER_CERT_COLUMNS}
@@ -508,7 +529,7 @@ function IssuesSection({ c }) {
       </div>
       <div className="card flush">
         <div className="card-head"><h3>Recent warning events</h3></div>
-        {ev.error ? <ErrorBanner error={ev.error} /> : !ev.data ? <Loading /> : (
+        {ev.error && !ev.data ? <ErrorBanner error={ev.error} /> : !ev.data ? <SkeletonTable columns={6} rows={5} /> : (
           <DataTable
             id="cluster.events"
             columns={CLUSTER_EVENT_COLUMNS}
@@ -601,7 +622,7 @@ const INVENTORY_COLUMNS = [
 function ResourcesSection({ c }) {
   const [kind, setKind] = useState("routes");
   const [ns, setNs] = useState("");
-  const { data, error, loading } = useFetch(() => api.clusterResources(c.name, { kind, namespace: ns }), [c.name, kind, ns]);
+  const { data, error } = useFetch(() => api.clusterResources(c.name, { kind, namespace: ns }), [c.name, kind, ns]);
   const status = Object.fromEntries(c.resource_status.map((s) => [s.key, s]));
   const namespaces = c.namespaces_detail.map((n) => n.name);
   return (
@@ -630,7 +651,7 @@ function ResourcesSection({ c }) {
             {" · "}ConfigMaps / Secrets show key names, sizes and certificate facts only.
           </div>
         </div>
-        {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+        {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={5} rows={8} /> : (
           <DataTable
             id="cluster.resources"
             columns={INVENTORY_COLUMNS}

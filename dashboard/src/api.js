@@ -8,13 +8,30 @@ function qs(params = {}) {
   return q ? `?${q}` : "";
 }
 
-async function get(path) {
-  const res = await fetch(`${BASE}${path}`);
+async function fetchJson(path, signal) {
+  const res = await fetch(`${BASE}${path}`, signal ? { signal } : undefined);
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`${res.status} ${res.statusText}: ${body}`);
   }
   return res.json();
+}
+
+// A GET is handed back as a small request descriptor rather than a bare
+// promise. The descriptor carries the URL, which is what the cache is keyed on,
+// and takes an AbortSignal so a view that went away can cancel its fetch. It is
+// still thenable, so `await api.blastRadius(q)` reads exactly as it did - and
+// awaiting it twice reuses the one request rather than issuing a second.
+function get(path) {
+  let pending = null;
+  const run = () => (pending || (pending = fetchJson(path)));
+  return {
+    url: path,
+    load: (signal) => fetchJson(path, signal),
+    then: (ok, fail) => run().then(ok, fail),
+    catch: (fail) => run().catch(fail),
+    finally: (done) => run().finally(done),
+  };
 }
 
 async function post(path) {
@@ -105,8 +122,10 @@ export const api = {
   clusterUtilization: (name) => get(`/api/metrics/cluster/${name}/utilization`),
   utilizationTimeline: (name) => get(`/api/metrics/cluster/${name}/timeline`),
 
-  // Patching system of record (separate service via the /patching proxy).
-  patchReport: () => get("/patching/report"),
-  patchJobs: (params = {}) => get(`/patching/jobs${qs(params)}`),
-  patchJob: (id) => get(`/patching/jobs/${id}`),
+  // Patching system of record (separate service, proxied under /api/patching).
+  // Everything the dashboard fetches lives under /api, which leaves every other
+  // path to the router: /patching/<job id> is a page, not an API call.
+  patchReport: () => get("/api/patching/report"),
+  patchJobs: (params = {}) => get(`/api/patching/jobs${qs(params)}`),
+  patchJob: (id) => get(`/api/patching/jobs/${id}`),
 };

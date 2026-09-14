@@ -1,7 +1,7 @@
-import { useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Pill, Loading, ErrorBanner, FilterSelect, UsageBar, DataTable } from "../components";
+import { useQueryFilters } from "../router";
+import { Pill, ErrorBanner, FilterSelect, UsageBar, DataTable, SkeletonTable } from "../components";
 
 // The dropdowns above the table narrow the API query; the column filters below
 // the header narrow what is already on screen, so they do not repeat a field
@@ -70,13 +70,17 @@ const COLUMNS = [
   },
 ];
 
-export default function Clusters({ initialFilter, onOpen }) {
-  const [filters, setFilters] = useState(initialFilter || {});
-  const { data, error, loading } = useFetch(() => api.clusters(filters), [JSON.stringify(filters)]);
+// Every filter lives in the query string, so a narrowed list is a link and the
+// back button steps out of it. `team` and `upgrading` have no dropdown of their
+// own - they arrive from a click on the overview - so they show as a chip.
+const FILTER_KEYS = ["hub", "region", "datacenter", "environment", "status", "version", "team", "upgrading"];
+
+export default function Clusters({ route, onOpen }) {
+  const [filters, set, clear, anyFilter] = useQueryFilters(route, FILTER_KEYS);
+  const { data, error } = useFetch(() => api.clusters(filters), [JSON.stringify(filters)]);
   const meta = useFetch(() => api.clusters(), []); // unfiltered, for filter options
 
   const opts = buildOptions(meta.data?.clusters || []);
-  const set = (k, v) => setFilters((f) => ({ ...f, [k]: v || undefined }));
 
   return (
     <div>
@@ -87,26 +91,39 @@ export default function Clusters({ initialFilter, onOpen }) {
         <FilterSelect label="Environment" value={filters.environment} options={opts.environment} onChange={(v) => set("environment", v)} />
         <FilterSelect label="Status" value={filters.status} options={["healthy", "warning", "critical", "unknown"]} onChange={(v) => set("status", v)} />
         <FilterSelect label="OCP version" value={filters.version} options={opts.version} onChange={(v) => set("version", v)} />
-        {Object.values(filters).some(Boolean) && (
-          <button className="btn" style={{ alignSelf: "flex-end" }} onClick={() => setFilters({})}>Clear</button>
+        {filters.team && <Chip label="team" value={filters.team} onClear={() => set("team", "")} />}
+        {filters.upgrading && <Chip label="upgrading" value={filters.upgrading} onClear={() => set("upgrading", "")} />}
+        {anyFilter && (
+          <button className="btn" style={{ alignSelf: "flex-end" }} onClick={clear}>Clear</button>
         )}
       </div>
 
-      {error ? <ErrorBanner error={error} /> : loading && !data ? <Loading /> : (
+      {error && !data ? <ErrorBanner error={error} /> : (
         <div className="card flush">
-          <DataTable
-            id="clusters"
-            columns={COLUMNS}
-            rows={data.clusters}
-            rowKey="name"
-            onRowClick={(c) => onOpen(c.name)}
-            initialSort={{ key: "name", dir: "asc" }}
-            empty="No clusters match these filters."
-            footer={`${data.count ?? data.clusters.length} clusters`}
-          />
+          {!data ? <SkeletonTable columns={8} rows={10} /> : (
+            <DataTable
+              id="clusters"
+              columns={COLUMNS}
+              rows={data.clusters}
+              rowKey="name"
+              onRowClick={(c) => onOpen(c.name)}
+              initialSort={{ key: "name", dir: "asc" }}
+              empty="No clusters match these filters."
+              footer={`${data.count ?? data.clusters.length} clusters`}
+            />
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function Chip({ label, value, onClear }) {
+  return (
+    <span className="tag" style={{ alignSelf: "flex-end", padding: "5px 8px" }}>
+      {label}: {value}
+      <span className="link" style={{ marginLeft: 6 }} onClick={onClear} title={`Clear ${label}`}>×</span>
+    </span>
   );
 }
 

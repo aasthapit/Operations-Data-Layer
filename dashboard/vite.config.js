@@ -16,14 +16,18 @@ export default defineConfig({
     host: true,
     port,
     strictPort: !!process.env.PORT,
+    // Order matters: the first matching prefix wins, so the patching service
+    // has to be claimed before the data layer's /api. Everything the dashboard
+    // fetches lives under /api, which leaves every other path to the router -
+    // a deep link like /patching/<job id> is a page, not a proxied API call.
     proxy: {
-      "/api": { target, changeOrigin: true },
-      "/healthz": { target, changeOrigin: true },
-      "/patching": {
+      "/api/patching": {
         target: process.env.VITE_PATCHING_TARGET || "http://localhost:18010",
         changeOrigin: true,
-        rewrite: (p) => p.replace(/^\/patching/, "/api"),
+        rewrite: (p) => p.replace(/^\/api\/patching/, "/api"),
       },
+      "/api": { target, changeOrigin: true },
+      "/healthz": { target, changeOrigin: true },
     },
   },
 });

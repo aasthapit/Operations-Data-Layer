@@ -1,7 +1,9 @@
-import { useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Loading, ErrorBanner, SubTabs, DataTable, fmtBytes, fmtCores, fmtPct } from "../components";
+import { useQueryFilters } from "../router";
+import {
+  ErrorBanner, SubTabs, DataTable, SkeletonLines, SkeletonTable, fmtBytes, fmtCores, fmtPct,
+} from "../components";
 
 function BarRow({ label, sub, value, max, fmt, color, onClick }) {
   const pct = max ? Math.min(100, (value / max) * 100) : 0;
@@ -20,10 +22,15 @@ function BarRow({ label, sub, value, max, fmt, color, onClick }) {
 
 const tone = (p) => (p > 90 ? "var(--critical)" : p > 75 ? "var(--warning)" : "var(--healthy)");
 
-export default function Metrics({ onOpen }) {
-  const [by, setBy] = useState("cpu");
-  const [cls, setCls] = useState("");
-  const [groupBy, setGroupBy] = useState("cluster");
+const GROUPS = ["cluster", "hub", "region", "environment", "datacenter"];
+
+export default function Metrics({ onOpen, route }) {
+  // by / class / group ride in the query string: /utilization?group=region is
+  // the page someone can send to the next person.
+  const [f, set] = useQueryFilters(route, ["by", "class", "group"]);
+  const by = f.by === "memory" ? "memory" : "cpu";
+  const cls = f.class === "application" || f.class === "platform" ? f.class : "";
+  const groupBy = GROUPS.includes(f.group) ? f.group : "cluster";
   const health = useFetch(() => api.metricsHealth(), []);
   const ns = useFetch(() => api.topNamespaces(by, 10, cls), [by, cls]);
   const nodes = useFetch(() => api.topNodes(by, 10), [by]);
@@ -42,7 +49,7 @@ export default function Metrics({ onOpen }) {
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <SubTabs tabs={[["cpu", "CPU"], ["memory", "Memory"]]} value={by} onChange={setBy} />
+          <SubTabs tabs={[["cpu", "CPU"], ["memory", "Memory"]]} value={by} onChange={(v) => set("by", v)} />
         </div>
       </div>
 
@@ -59,15 +66,15 @@ export default function Metrics({ onOpen }) {
         <div className="card">
           <div className="section-head" style={{ marginBottom: 8 }}>
             <h3 style={{ margin: 0 }}>Top namespaces by {by}</h3>
-            <SubTabs tabs={[["", "All"], ["application", "Apps"], ["platform", "Platform"]]} value={cls} onChange={setCls} />
+            <SubTabs tabs={[["", "All"], ["application", "Apps"], ["platform", "Platform"]]} value={cls} onChange={(v) => set("class", v)} />
           </div>
-          {ns.loading && !ns.data ? <Loading /> : ns.error ? <ErrorBanner error={ns.error} /> : (
+          {ns.error && !ns.data ? <ErrorBanner error={ns.error} /> : !ns.data ? <SkeletonLines rows={6} height={22} /> : (
             <TopList data={ns.data} onOpen={onOpen} />
           )}
         </div>
         <div className="card">
           <h3>Top nodes by {by} (% of allocatable)</h3>
-          {nodes.loading && !nodes.data ? <Loading /> : nodes.error ? <ErrorBanner error={nodes.error} /> : (
+          {nodes.error && !nodes.data ? <ErrorBanner error={nodes.error} /> : !nodes.data ? <SkeletonLines rows={6} height={22} /> : (
             <NodeList data={nodes.data} onOpen={onOpen} />
           )}
         </div>
@@ -78,10 +85,10 @@ export default function Metrics({ onOpen }) {
           <div className="section-head">
             <h3 style={{ margin: 0 }}>Capacity headroom</h3>
             <SubTabs tabs={[["cluster", "Cluster"], ["hub", "Hub"], ["region", "Region"], ["environment", "Environment"], ["datacenter", "Data center"]]}
-              value={groupBy} onChange={setGroupBy} />
+              value={groupBy} onChange={(v) => set("group", v)} />
           </div>
         </div>
-        {cap.loading && !cap.data ? <Loading /> : cap.error ? <ErrorBanner error={cap.error} /> : (
+        {cap.error && !cap.data ? <ErrorBanner error={cap.error} /> : !cap.data ? <SkeletonTable columns={7} rows={6} /> : (
           <CapacityTable data={cap.data} onOpen={onOpen} />
         )}
       </div>

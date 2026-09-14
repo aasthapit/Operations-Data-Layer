@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Loading, ErrorBanner, DataTable, fmtBytes } from "../components";
+import { ErrorBanner, DataTable, SkeletonLines, SkeletonTable, fmtBytes } from "../components";
 
 // Durations here span three orders of magnitude (a 40 ms health check, a 12 s
 // fetch), so the unit follows the value rather than the column.
@@ -169,11 +169,10 @@ export default function Manifest({ onOpen }) {
   const m = useFetch(() => api.manifest(), []);
   const av = useFetch(() => api.manifestAvailability(), []);
   const tm = useFetch(() => api.collectorTimings(), []);
-  if (m.error) return <ErrorBanner error={m.error} />;
-  if (m.loading && !m.data) return <Loading />;
+  if (m.error && !m.data) return <ErrorBanner error={m.error} />;
   const d = m.data;
-  const enabled = d.resources.filter((r) => r.enabled).length;
-  const domains = [...new Set(d.resources.map((r) => r.domain))];
+  const enabled = d ? d.resources.filter((r) => r.enabled).length : 0;
+  const domains = d ? [...new Set(d.resources.map((r) => r.domain))] : [];
 
   return (
     // minmax(0, 1fr) rather than the default 1fr: a grid item's automatic
@@ -185,8 +184,8 @@ export default function Manifest({ onOpen }) {
         <div>
           <div className="section-title" style={{ margin: 0 }}>What is collected</div>
           <div className="desc">
-            The OCP API manifest declares everything the collector reads from a cluster - {enabled} of {d.resources.length} resources
-            enabled from <span className="mono" style={{ overflowWrap: "anywhere" }}>{d.source}</span>. Nothing outside
+            The OCP API manifest declares everything the collector reads from a cluster - {d ? enabled : "…"} of {d ? d.resources.length : "…"} resources
+            enabled from <span className="mono" style={{ overflowWrap: "anywhere" }}>{d ? d.source : "…"}</span>. Nothing outside
             it is ever requested, and the read-only RBAC is generated from it.
           </div>
         </div>
@@ -196,12 +195,13 @@ export default function Manifest({ onOpen }) {
         <div className="card">
           <h3>Never collected (scrub policy)</h3>
           <div className="env-list" style={{ fontSize: 12.5 }}>
-            {d.scrub_policy.map((p) => <span key={p.what}><b>{p.what}</b> <span className="src">kept: {p.kept}</span></span>)}
+            {!d ? <SkeletonLines rows={4} /> : d.scrub_policy.map((p) => <span key={p.what}><b>{p.what}</b> <span className="src">kept: {p.kept}</span></span>)}
           </div>
           <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>Enforced in the collector, not configurable.</div>
         </div>
         <div className="card">
           <h3>Namespace classification</h3>
+          {!d ? <SkeletonLines rows={6} /> : (
           <div className="kv" style={{ fontSize: 12.5 }}>
             <span className="k">Platform names</span><span className="mono wrap">{d.namespaces.platform_names.join(", ")}</span>
             <span className="k">Platform prefixes</span><span className="mono wrap">{d.namespaces.platform_prefixes.join(", ")}</span>
@@ -210,37 +210,42 @@ export default function Manifest({ onOpen }) {
             <span className="k">Team label</span><span className="mono wrap">{d.namespaces.ownership.team.join(", ")}</span>
             <span className="k">Tier label</span><span className="mono wrap">{d.namespaces.ownership.tier.join(", ")}</span>
           </div>
+          )}
           <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>Everything else is an application.</div>
         </div>
         <div className="card">
           <h3>Thresholds</h3>
-          <div className="kv" style={{ fontSize: 12.5 }}>
-            {Object.entries(d.thresholds).map(([k, v]) => (
-              <Fragment key={k}>
-                <span className="k mono">{k}</span>
-                <span>{Array.isArray(v) ? v.join(", ") : String(v)}</span>
-              </Fragment>
-            ))}
-          </div>
+          {!d ? <SkeletonLines rows={4} /> : (
+            <div className="kv" style={{ fontSize: 12.5 }}>
+              {Object.entries(d.thresholds).map(([k, v]) => (
+                <Fragment key={k}>
+                  <span className="k mono">{k}</span>
+                  <span>{Array.isArray(v) ? v.join(", ") : String(v)}</span>
+                </Fragment>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
       <div className="card flush">
         <div className="card-head">
           <h3>Resources</h3>
-          <div className="desc">{d.resources.length} declared across {domains.length} domains.</div>
+          <div className="desc">{d ? `${d.resources.length} declared across ${domains.length} domains.` : "…"}</div>
         </div>
         {/* Twelve columns of prose do not fit a narrow window; the table scrolls
             inside the card rather than making the whole page scroll sideways. */}
         <div style={{ overflowX: "auto" }}>
-          <DataTable
-            id="manifest.resources"
-            columns={RESOURCE_COLUMNS}
-            rows={d.resources}
-            rowKey="key"
-            initialSort={{ key: "domain", dir: "asc" }}
-            empty="The manifest declares no resources."
-          />
+          {!d ? <SkeletonTable columns={7} rows={10} /> : (
+            <DataTable
+              id="manifest.resources"
+              columns={RESOURCE_COLUMNS}
+              rows={d.resources}
+              rowKey="key"
+              initialSort={{ key: "domain", dir: "asc" }}
+              empty="The manifest declares no resources."
+            />
+          )}
         </div>
       </div>
 
@@ -249,7 +254,7 @@ export default function Manifest({ onOpen }) {
           <h3>Availability per cluster</h3>
           <div className="desc">What each cluster actually served on the last sweep: object count when collected; n/a when the API is not served (e.g. no OLM); 403 when RBAC denies it.</div>
         </div>
-        {av.error ? <ErrorBanner error={av.error} /> : !av.data ? <Loading /> : <Matrix data={av.data} onOpen={onOpen} />}
+        {av.error && !av.data ? <ErrorBanner error={av.error} /> : !av.data ? <SkeletonTable columns={8} rows={8} /> : <Matrix data={av.data} onOpen={onOpen} />}
       </div>
 
       <div className="card flush">
@@ -264,7 +269,7 @@ export default function Manifest({ onOpen }) {
             fetch + assemble + health + persist.
           </div>
         </div>
-        {tm.error ? <ErrorBanner error={tm.error} /> : !tm.data ? <Loading /> : <Timings data={tm.data} onOpen={onOpen} />}
+        {tm.error && !tm.data ? <ErrorBanner error={tm.error} /> : !tm.data ? <SkeletonTable columns={11} rows={6} /> : <Timings data={tm.data} onOpen={onOpen} />}
       </div>
     </div>
   );

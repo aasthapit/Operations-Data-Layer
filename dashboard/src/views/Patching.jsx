@@ -1,7 +1,6 @@
-import { useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Stat, Loading, ErrorBanner, DataTable } from "../components";
+import { Stat, ErrorBanner, DataTable, SkeletonStats, SkeletonTable, SkeletonLines } from "../components";
 
 const JOB_TONE = {
   completed: "healthy", running: "warning", paused: "warning",
@@ -62,12 +61,11 @@ const TASK_COLUMNS = [
   },
 ];
 
-export default function Patching() {
-  const [selected, setSelected] = useState(null);
+export default function Patching({ id, nav }) {
   const report = useFetch(() => api.patchReport(), []);
   const jobs = useFetch(() => api.patchJobs(), []);
 
-  if (selected) return <JobDetail id={selected} onBack={() => setSelected(null)} />;
+  if (id) return <JobDetail id={id} nav={nav} />;
 
   return (
     <div className="grid" style={{ gap: 20 }}>
@@ -76,20 +74,20 @@ export default function Patching() {
         <div className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>
           Durable system of record - who requested, who approved, the change record, per-cluster outcome, and an immutable audit trail.
         </div>
-        {report.error ? <ErrorBanner error={report.error} /> : report.loading && !report.data ? <Loading /> : (
+        {report.error && !report.data ? <ErrorBanner error={report.error} /> : !report.data ? <SkeletonStats count={4} /> : (
           <Report data={report.data} />
         )}
       </div>
 
       <div className="card" style={{ padding: 0 }}>
         <div style={{ padding: "18px 18px 0" }}><h3>Jobs</h3></div>
-        {jobs.error ? <ErrorBanner error={jobs.error} /> : jobs.loading && !jobs.data ? <Loading /> : (
+        {jobs.error && !jobs.data ? <ErrorBanner error={jobs.error} /> : !jobs.data ? <SkeletonTable columns={8} rows={6} /> : (
           <DataTable
             id="patching.jobs"
             columns={JOB_COLUMNS}
             rows={jobs.data.jobs}
             rowKey="id"
-            onRowClick={(j) => setSelected(j.id)}
+            onRowClick={(j) => nav.goPatchJob(j.id)}
             initialSort={{ key: "created_at", dir: "desc" }}
             empty="No patching jobs yet. Submit one via the N8N form."
           />
@@ -122,21 +120,21 @@ function Report({ data }) {
   );
 }
 
-function JobDetail({ id, onBack }) {
-  const { data: j, error, loading } = useFetch(() => api.patchJob(id), [id]);
-  if (loading && !j) return <Loading />;
-  if (error) return <ErrorBanner error={error} />;
+function JobDetail({ id, nav }) {
+  const { data: j, error } = useFetch(() => api.patchJob(id), [id]);
+  if (error && !j) return <ErrorBanner error={error} />;
 
   return (
     <div>
-      <span className="back" onClick={onBack}>← All jobs</span>
+      <span className="back" onClick={() => nav.back("/patching")}>← All jobs</span>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-        <h2 className="mono" style={{ margin: 0 }}>{j.id}</h2>
-        <Tag tone={JOB_TONE[j.status]}>{j.status}</Tag>
-        <span className="muted">{j.totals.success_pct}% success (threshold {j.threshold_pct}%)</span>
+        <h2 className="mono" style={{ margin: 0 }}>{id}</h2>
+        {j && <Tag tone={JOB_TONE[j.status]}>{j.status}</Tag>}
+        {j && <span className="muted">{j.totals.success_pct}% success (threshold {j.threshold_pct}%)</span>}
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
+        {!j ? <SkeletonLines rows={6} /> : (
         <div className="kv">
           <span className="k">Change record</span><span className="mono">{j.change_record}</span>
           <span className="k">Requested by</span><span>{j.requested_by}</span>
@@ -145,25 +143,28 @@ function JobDetail({ id, onBack }) {
           <span className="k">Source</span><span>{j.source}</span>
           <span className="k">Started / finished</span><span className="muted">{fmtTime(j.started_at)} → {fmtTime(j.finished_at)}</span>
         </div>
+        )}
       </div>
 
       <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <div className="card" style={{ padding: 0 }}>
           <div style={{ padding: "18px 18px 0" }}><h3>Per-cluster results</h3></div>
-          <DataTable
-            id="patching.job.tasks"
-            columns={TASK_COLUMNS}
-            rows={j.tasks}
-            rowKey="cluster"
-            initialSort={{ key: "cluster", dir: "asc" }}
-            empty="No per-cluster results yet."
-          />
+          {!j ? <SkeletonTable columns={5} rows={5} /> : (
+            <DataTable
+              id="patching.job.tasks"
+              columns={TASK_COLUMNS}
+              rows={j.tasks}
+              rowKey="cluster"
+              initialSort={{ key: "cluster", dir: "asc" }}
+              empty="No per-cluster results yet."
+            />
+          )}
         </div>
 
         <div className="card" style={{ padding: 0 }}>
-          <div style={{ padding: "18px 18px 0" }}><h3>Audit trail ({j.audit.length})</h3></div>
+          <div style={{ padding: "18px 18px 0" }}><h3>Audit trail{j ? ` (${j.audit.length})` : ""}</h3></div>
           <div style={{ maxHeight: 380, overflowY: "auto", padding: "4px 0" }}>
-            {j.audit.map((e, i) => (
+            {!j ? <SkeletonLines rows={6} /> : j.audit.map((e, i) => (
               <div key={i} className="check" style={{ alignItems: "flex-start" }}>
                 <span className="muted mono" style={{ fontSize: 11.5, minWidth: 64 }}>
                   {e.ts ? new Date(e.ts).toLocaleTimeString() : ""}

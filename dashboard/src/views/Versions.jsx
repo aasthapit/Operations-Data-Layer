@@ -1,6 +1,6 @@
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { Pill, Loading, ErrorBanner, DataTable } from "../components";
+import { Pill, ErrorBanner, DataTable, SkeletonLines, SkeletonTable } from "../components";
 
 const OPERATOR_COLUMNS = [
   { key: "operator", label: "Operator", filter: "text" },
@@ -14,19 +14,18 @@ const OPERATOR_COLUMNS = [
 ];
 
 export default function Versions({ onOpen, onBlast }) {
-  const { data, error, loading } = useFetch(() => api.versions(), []);
+  const { data, error } = useFetch(() => api.versions(), []);
   const ops = useFetch(() => api.operatorVersions(), []);
 
-  if (loading && !data) return <Loading />;
-  if (error) return <ErrorBanner error={error} />;
+  if (error && !data) return <ErrorBanner error={error} />;
 
-  const maxCount = Math.max(...data.versions.map((v) => v.count), 1);
+  const maxCount = data ? Math.max(...data.versions.map((v) => v.count), 1) : 1;
 
   return (
     <div className="grid" style={{ gap: 20 }}>
       <div className="card">
         <h3>OCP version distribution</h3>
-        {data.versions.map((v) => (
+        {!data ? <SkeletonLines rows={4} height={44} /> : data.versions.map((v) => (
           <div key={v.version} style={{ marginBottom: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
               <span className="mono">{v.version} <span className="muted">· {v.count} cluster{v.count > 1 ? "s" : ""}</span></span>
@@ -51,7 +50,7 @@ export default function Versions({ onOpen, onBlast }) {
           <h3>Operator version spread</h3>
           <p className="dim" style={{ marginTop: -6 }}>Operators reporting more than one version across the fleet are drifting - usually a partial rollout.</p>
         </div>
-        {ops.error ? <ErrorBanner error={ops.error} /> : !ops.data ? <Loading /> : (
+        {ops.error && !ops.data ? <ErrorBanner error={ops.error} /> : !ops.data ? <SkeletonTable columns={3} rows={5} /> : (
           <DataTable
             id="versions.operators"
             columns={OPERATOR_COLUMNS}
