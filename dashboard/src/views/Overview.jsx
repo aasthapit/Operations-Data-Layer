@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
 import { HealthBar, Stat, Loading, ErrorBanner, Pill, DataTable, fmtTime } from "../components";
@@ -30,7 +30,16 @@ const GROUPS = [
 
 export default function Overview({ nav }) {
   const [groupBy, setGroupBy] = useState("hub");
-  const ov = useFetch(() => api.overview(), []);
+  // While a sweep is running the picture fills in cluster by cluster, so the
+  // overview re-reads itself every few seconds until it is done.
+  const [tick, setTick] = useState(0);
+  const ov = useFetch(() => api.overview(), [tick]);
+  const sweeping = !!ov.data?.sweep?.running;
+  useEffect(() => {
+    if (!sweeping) return undefined;
+    const id = setInterval(() => setTick((t) => t + 1), 5000);
+    return () => clearInterval(id);
+  }, [sweeping]);
   const sum = useFetch(() => api.summary(groupBy), [groupBy]);
   const ins = useFetch(() => api.insightsSummary(), []);
 
@@ -39,8 +48,19 @@ export default function Overview({ nav }) {
   const d = ov.data;
   const i = ins.data;
 
+  const sw = d.sweep;
   return (
     <div className="grid" style={{ gap: 24 }}>
+      {sw?.running && (
+        <div className="card" style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 12 }}>
+          <span className="tag">sweep in progress</span>
+          <span>{sw.done} of {sw.total} clusters collected{sw.failed ? `, ${sw.failed} failed` : ""}</span>
+          <div style={{ flex: 1, height: 6, background: "var(--line, #333)", borderRadius: 3, overflow: "hidden" }}>
+            <div style={{ width: `${sw.total ? Math.round((100 * sw.done) / sw.total) : 0}%`, height: "100%", background: "var(--accent, #4f8cff)" }} />
+          </div>
+          <span className="muted" style={{ fontSize: 12 }}>started {fmtTime(sw.started_at)}</span>
+        </div>
+      )}
       <div>
         <div className="stats">
           <Stat label="Clusters" value={d.clusters_total} kind="accent" onClick={() => nav.goClusters()} />
