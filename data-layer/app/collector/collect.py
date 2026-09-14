@@ -316,6 +316,29 @@ def _ns_status(ns: dict, workloads: list[dict]) -> str:
     return "healthy"
 
 
+def _ownership_from_labels(ns: dict, wls: list[dict], own: dict) -> None:
+    """Fill app_name / team / tier from the namespace's own labels (already
+    read by the parser) and, failing that, the workloads' most common value,
+    using only the manifest's ownership label keys."""
+    for owner in ("app_name", "team", "tier"):
+        if ns.get(owner):
+            continue
+        keys = own.get("app" if owner == "app_name" else owner, [])
+        ns[owner] = _most_common(p.pick_label(w["labels"], keys) for w in wls)
+
+
+def _platform_app_for(namespace: str, platform_apps: list[dict]) -> dict | None:
+    """The configured platform application a platform namespace belongs to:
+    entries list exact names or prefixes ending in `*`; first match wins."""
+    for group in platform_apps:
+        for pattern in group.get("namespaces", []):
+            if pattern.endswith("*") and namespace.startswith(pattern[:-1]):
+                return group
+            if namespace == pattern:
+                return group
+    return None
+
+
 def assemble(meta: dict, raw: dict, status: dict, manifest: Manifest,
              now: datetime | None = None, previous: Previous | None = None) -> dict:
     """Join what this collection fetched with what the last one left behind.
@@ -493,6 +516,8 @@ def assemble(meta: dict, raw: dict, status: dict, manifest: Manifest,
     own = manifest.ownership
     appmap = get_appmap(manifest)
     cluster_name = meta.get("name")
+    platform_apps = manifest.applications.get("platform_apps") or []
+    fallback_labels = (manifest.applications.get("mapping") or {}).get("fallback") == "labels"
     for name in set(pods["namespaces"]) | set(wl_by_ns) | set(pod_metrics):
         ensure_ns(name)
     for name, ns in namespaces.items():
@@ -517,26 +542,44 @@ def assemble(meta: dict, raw: dict, status: dict, manifest: Manifest,
         ns["replicas_ready"] = sum(w["replicas_ready"] for w in wls)
         ns["resource_counts"] = dict(ns_counts.get(name, {}))
         ns["status"] = _ns_status(ns, wls)
-        if appmap is not None:
-            # ownership is the registry's, never labels: a namespace is under the
-            # application the mapping says, or under none at all
-            hit = appmap.lookup(cluster_name, name)
-            ns["app_name"] = hit.app if hit else None
-            ns["team"] = hit.team if hit else None
-            ns["tier"] = None
-            ns["environment"] = hit.environment if hit else None
-            ns["assigned"] = hit is not None
+        ns["environment"] = None
+        ns["ownership_source"] = None
+        if ns["ns_class"] != APPLICATION:
+            # platform namespaces belong to a configured platform application
+            # (e.g. the critical OpenShift namespaces) or to none
+            group = _platform_app_for(name, platform_apps)
+            if group:
+                ns.update(app_name=group["name"], team=group.get("team"), tier=group.get("tier"),
+                          assigned=True, ownership_source="platform")
+            elif appmap is not None:
+                ns.update(app_name=None, team=None, tier=None, assigned=False)
+            else:
+                _ownership_from_labels(ns, wls, own)
+                ns["app_name"] = ns.get("app_name") or name
+                ns["assigned"] = True
+                ns["ownership_source"] = "labels"
             continue
-        # ownership: namespace labels first, then the workloads' most common value
-        for owner in ("app_name", "team", "tier"):
-            if ns.get(owner):
+        if appmap is not None:
+            # the registry decides; labels are consulted only for namespaces the
+            # registry does not know, and only when the manifest allows it
+            hit = appmap.lookup(cluster_name, name)
+            if hit:
+                ns.update(app_name=hit.app, team=hit.team, tier=None, environment=hit.environment,
+                          assigned=True, ownership_source="mapping")
                 continue
-            keys = own.get("app" if owner == "app_name" else owner, [])
-            ns[owner] = _most_common(p.pick_label(w["labels"], keys) for w in wls)
+            if fallback_labels:
+                _ownership_from_labels(ns, wls, own)
+                if ns.get("app_name"):
+                    ns.update(assigned=True, ownership_source="labels")
+                    continue
+            ns.update(app_name=None, team=None, tier=None, assigned=False)
+            continue
+        # labels mode: namespace labels first, then the workloads' most common value
+        _ownership_from_labels(ns, wls, own)
         if not ns.get("app_name"):
             ns["app_name"] = name
-        ns["environment"] = None
         ns["assigned"] = True
+        ns["ownership_source"] = "labels"
     data["namespaces"] = sorted(namespaces.values(), key=lambda n: n["name"])
     if appmap is not None and not data.get("environment"):
         # ACM carried no environment for this cluster; the registry knows it
@@ -579,9 +622,14 @@ def assemble(meta: dict, raw: dict, status: dict, manifest: Manifest,
     data["namespaces_platform"] = len(ns_rows) - data["namespaces_application"]
     # distinct applications, not namespaces: with a mapping one application spans
     # several namespaces and an unassigned namespace counts for none
-    data["applications_total"] = len({n["app_name"] for n in ns_rows
-                                      if n["ns_class"] == APPLICATION and n.get("app_name")
-                                      and n.get("assigned", True)})
+    def counts_as_application(n: dict) -> bool:
+        if not n.get("app_name"):
+            return False
+        if n["ns_class"] == APPLICATION:
+            return bool(n.get("assigned", True))
+        return n.get("ownership_source") == "platform"
+
+    data["applications_total"] = len({n["app_name"] for n in ns_rows if counts_as_application(n)})
     data["workloads_total"] = len(workloads)
     data["pod_issues_total"] = len(pod_issues)
     data["certs_expiring_total"] = sum(1 for r in resources

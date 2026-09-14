@@ -39,7 +39,28 @@ With a mapping:
 - `app_name` is the registry's application id, `team` is the line of business, and each namespace carries its own `environment` (development, test, ist ...) next to the cluster's;
 - a namespace absent from the file is under no business application: `app_name` is null, `assigned` is false, and such namespaces group under `(unassigned)` in the applications and blast-radius views (`GET /api/applications?assigned=false` lists them);
 - when ACM carries no environment label for a cluster, the environment the mapping's records agree on for that cluster is used;
-- the file is re-read whenever it changes on disk, so a registry export can be refreshed without a restart.
+- the file is re-read whenever it changes on disk, so a registry export can be refreshed without a restart;
+- `mapping.fallback: labels` lets a namespace the registry does not list be claimed by its own ownership labels (only the keys under `namespaces.ownership`, so restrict those to the labels that really name an application, e.g. `app_id` and `lob`); `fallback: none` trusts the registry alone.
+
+### Platform namespaces as applications
+
+`applications.platform_apps` groups OpenShift's own namespaces into applications of their own, so the platform appears in the applications and blast-radius views with a team and a tier:
+
+```yaml
+applications:
+  platform_apps:
+    - name: openshift-critical
+      team: platform
+      tier: critical
+      namespaces: [openshift-etcd, openshift-kube-apiserver, openshift-ingress, openshift-monitoring]
+    - name: openshift-platform
+      team: platform
+      tier: standard
+      namespaces: ["openshift-*", "kube-*"]
+```
+
+Entries are exact names or prefixes ending in `*`, first match wins; a platform namespace no entry matches stays ungrouped.
+Grouped namespaces keep `ns_class: platform` (platform pod issues, counters and resource filters are unchanged) and carry `ownership_source: platform`; every namespace row says where its ownership came from (`mapping`, `labels`, `platform`, or null when unassigned).
 
 ## The manifest
 

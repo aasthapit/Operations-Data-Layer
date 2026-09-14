@@ -167,6 +167,7 @@ def namespace_dict(n) -> dict:
         "tier": n.tier,
         "environment": n.environment,
         "assigned": True if n.assigned is None else bool(n.assigned),
+        "ownership_source": n.ownership_source,
         "status": n.status,
         "phase": n.phase,
         "requester": n.requester,
@@ -305,7 +306,7 @@ def cluster_detail(c, operators, nodes, namespaces, pod_issues, resource_status,
     The sections are read separately (each is its own key in the store), so the
     caller passes them in rather than the serializer reaching back for them.
     """
-    applications = [n for n in namespaces if n.ns_class == "application"]
+    applications = [n for n in namespaces if n.ns_class == "application" or n.ownership_source == "platform"]
     d = cluster_summary(c)
     d.update({
         "cluster_id": c.cluster_id,

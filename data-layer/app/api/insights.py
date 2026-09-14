@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Query
 from ..manifest import get_manifest
 from ..serialize import pod_issue_dict, resource_dict
 from ..store import FLEET_INDEXED_KINDS, Store
+from .applications import application_rows
 from .cache import cached
 from .deps import get_store_dep, order_key
 
@@ -69,7 +70,7 @@ def _summary(store: Store) -> dict:
     csv_total = store.fleet_resource_count("clusterserviceversions")
     csv_healthy = (store.fleet_resource_count("clusterserviceversions", "succeeded")
                    + store.fleet_resource_count("clusterserviceversions", "unknown"))
-    apps = {n.app_name for n in store.namespaces(ns_class="application") if n.app_name}
+    apps = {n.app_name for n in application_rows(store) if n.app_name}
     return {
         "certificates": {
             "expired": expired,

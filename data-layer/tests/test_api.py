@@ -934,3 +934,42 @@ def test_responses_are_gzipped_when_accepted():
 
     r = TestClient(app).get("/big", headers={"accept-encoding": "gzip"})
     assert r.headers.get("content-encoding") == "gzip" and r.json()["rows"][-1] == 1999
+
+
+def test_platform_app_is_listed_with_the_applications(monkeypatch):
+    from app.collector.collect import assemble
+    from app.collector.healthchecks import run_health_checks
+    from app.settings import settings
+
+    manifest = get_manifest()
+    st = RedisStore(fakeredis.FakeRedis())
+    collected = assemble({"name": "ocp-plat-1", "region": "us-east-1", "environment": "prod",
+                          "managed_available": True}, _east_raw(), {}, manifest)
+    platform = [n for n in collected["namespaces"] if n["ns_class"] == "platform"]
+    assert platform
+    for n in platform[:2]:
+        n.update({"app_name": "openshift-critical", "team": "platform", "tier": "critical",
+                  "assigned": True, "ownership_source": "platform"})
+    collected["applications_total"] += 1
+    checks, overall, score, counts = run_health_checks(
+        collected, settings.supported_floor, manifest.describe()["thresholds"])
+    st.persist_cluster("hub-east", collected, checks, overall, score, counts)
+
+    app = FastAPI()
+    for module in (applications, blast_radius, clusters):
+        app.include_router(module.router)
+    store_module.set_store(st)
+    try:
+        c = TestClient(app)
+        apps = {a["app"]: a for a in c.get("/api/applications").json()["applications"]}
+        crit = apps["openshift-critical"]
+        assert crit["tier"] == "critical" and crit["team"] == "platform"
+        detail = c.get("/api/applications/openshift-critical").json()
+        assert detail["cluster_count"] == 1 and all(n["class"] == "platform" for n in detail["namespaces"])
+        blast = c.get("/api/blast-radius", params={"ocp_version": collected.get("version")}).json()
+        assert "openshift-critical" in {a["app"] for a in blast["applications"]}
+        cluster = c.get("/api/clusters/ocp-plat-1").json()
+        assert "openshift-critical" in {a["name"] for a in cluster["applications"]}
+        assert c.get("/api/clusters", params={"team": "platform"}).json()["count"] == 1
+    finally:
+        store_module.set_store(None)

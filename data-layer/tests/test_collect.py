@@ -349,3 +349,55 @@ def test_assemble_keeps_pod_rollups_when_pods_are_not_due(manifest):
     assert doc["nodes"][0]["pods_running"] == 2
     assert doc["capacity"]["pods_running"] == 2
     assert [i["name"] for i in doc["pod_issues"]] == [i["name"] for i in first["pod_issues"]]
+
+
+def test_mapping_with_label_fallback_and_platform_apps(manifest, tmp_path):
+    """The registry decides; unmapped namespaces may be claimed only by the
+    configured ownership labels; generic labels never group anything; the
+    critical OpenShift namespaces form a platform application."""
+    import dataclasses
+    import json
+
+    from app import appmap as appmap_module
+
+    path = tmp_path / "app-map.json"
+    path.write_text(json.dumps([{"cluster": "c1", "app_id": "1aat", "lob": "wimt", "namespace": "payments",
+                                 "environment": "development", "env": "nonprod"}]))
+    m = dataclasses.replace(
+        manifest,
+        ownership={"app": ["app_id"], "team": ["lob"], "tier": []},
+        applications={"source": "mapping",
+                      "mapping": {"path": str(path), "fields": dict(appmap_module.DEFAULT_FIELDS),
+                                  "fallback": "labels"},
+                      "platform_apps": [{"name": "openshift-critical", "team": "platform", "tier": "critical",
+                                         "namespaces": ["openshift-etcd", "openshift-ingress*"]}]})
+    appmap_module.reset_cache()
+    raw = {
+        "namespaces": [
+            _ns("payments", {"app.kubernetes.io/part-of": "helix-ssa"}),        # mapped: registry wins
+            _ns("ledger", {"app_id": "ldgr", "lob": "cto", "app.kubernetes.io/part-of": "helix-ssa"}),
+            _ns("scratch", {"app.kubernetes.io/part-of": "helix-ssa"}),         # only a generic label
+            _ns("openshift-etcd"), _ns("openshift-ingress-operator"), _ns("openshift-marketplace"),
+        ],
+        "deployments": [_dep("api", "payments"),
+                        _dep("job", "scratch", labels={"app.kubernetes.io/name": "x"})],
+    }
+    doc = assemble({"name": "c1", "region": "us"}, raw, {}, m)
+    by = {n["name"]: n for n in doc["namespaces"]}
+    assert by["payments"]["app_name"] == "1aat" and by["payments"]["ownership_source"] == "mapping"
+    assert by["ledger"]["app_name"] == "ldgr" and by["ledger"]["team"] == "cto"
+    assert by["ledger"]["ownership_source"] == "labels" and by["ledger"]["assigned"] is True
+    assert by["scratch"]["app_name"] is None and by["scratch"]["assigned"] is False
+    for name in ("openshift-etcd", "openshift-ingress-operator"):
+        assert by[name]["app_name"] == "openshift-critical" and by[name]["tier"] == "critical"
+        assert by[name]["ns_class"] == "platform" and by[name]["ownership_source"] == "platform"
+    marketplace = by["openshift-marketplace"]
+    assert marketplace["app_name"] is None and marketplace["assigned"] is False
+    assert doc["applications_total"] == 3           # 1aat, ldgr, openshift-critical
+
+    # without the fallback the label-claimed namespace is unassigned too
+    strict = dataclasses.replace(m, applications={**m.applications, "mapping": {**m.applications["mapping"],
+                                                                                  "fallback": "none"}})
+    appmap_module.reset_cache()
+    by = {n["name"]: n for n in assemble({"name": "c1"}, raw, {}, strict)["namespaces"]}
+    assert by["ledger"]["app_name"] is None and by["payments"]["app_name"] == "1aat"

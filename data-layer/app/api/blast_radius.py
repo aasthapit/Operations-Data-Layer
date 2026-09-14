@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..serialize import UNASSIGNED
 from ..store import Store
+from .applications import application_rows
 from .deps import get_store_dep
 
 router = APIRouter(prefix="/api/blast-radius", tags=["blast-radius"])
@@ -94,7 +95,7 @@ def blast_radius(
     # impacted applications (application namespaces), de-duplicated across clusters
     by_cluster = defaultdict(list)
     if clusters:
-        for n in store.namespaces(ns_class="application", clusters=[c.name for c in clusters]):
+        for n in application_rows(store, clusters=[c.name for c in clusters]):
             by_cluster[n.cluster_name].append(n)
     apps = defaultdict(lambda: {"clusters": [], "team": None, "tier": None, "namespace": None})
     for c in clusters:

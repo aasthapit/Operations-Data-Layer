@@ -31,9 +31,9 @@ export default function Applications({ app, nav, route }) {
   const columns = [
     {
       key: "app", label: "Application", filter: "text",
-      render: (a) => (a.assigned === false
-        ? <span className="muted">{a.app} <span style={{ fontSize: 11 }}>not under a business application</span></span>
-        : a.app),
+      render: (a) => (a.assigned
+        ? <>{a.app}{mapped && a.tier ? <> <Tier tier={a.tier} /></> : null}</>
+        : <span className="muted">{a.app} <span style={{ fontSize: 11 }}>not under a business application</span></span>),
     },
     { key: "team", label: ownerLabel, className: "muted", render: (a) => a.team || "-" },
     mapped

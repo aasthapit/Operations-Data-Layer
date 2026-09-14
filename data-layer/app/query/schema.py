@@ -214,6 +214,9 @@ NAMESPACES = _table(
                                    "test, ist). NULL when unknown. clusters.environment is the cluster's."),
         ("assigned", "BOOLEAN", "FALSE when the namespace is under no business application "
                                 "(only possible with a mapping file)."),
+        ("ownership_source", "VARCHAR", "Where app_name came from: 'mapping' (the registry), 'labels', "
+                                        "'platform' (a configured platform application grouping "
+                                        "OpenShift namespaces), or NULL when unassigned."),
         ("labels", "JSON", "Namespace labels."),
         ("annotations", "JSON", "Allow-listed namespace annotations only."),
         ("requester", "VARCHAR", "openshift.io/requester annotation (who asked for the namespace)."),

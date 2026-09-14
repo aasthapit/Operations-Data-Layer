@@ -23,6 +23,7 @@ from ..serialize import (
 )
 from ..store import Row, Store
 from .admin import require_collector
+from .applications import application_rows
 from .deps import get_store_dep, order_key
 
 router = APIRouter(prefix="/api/clusters", tags=["clusters"])
@@ -59,7 +60,7 @@ def list_clusters(
     items = [cluster_summary(c) for c in clusters]
     if team:
         # filter to clusters running an application owned by `team`
-        keep = {n.cluster_name for n in store.namespaces(ns_class="application", team=team)}
+        keep = {n.cluster_name for n in application_rows(store, team=team)}
         items = [i for i in items if i["name"] in keep]
     if upgrading is not None:
         items = [i for i in items if bool(i["upgrading"]) == upgrading]

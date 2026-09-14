@@ -94,6 +94,13 @@ def _group(rows, clusters_by_name):
     return out
 
 
+def application_rows(store: Store, **filters) -> list:
+    """Namespace rows that count as applications: the application-class
+    namespaces plus platform namespaces grouped as a configured platform app."""
+    return (store.namespaces(ns_class="application", **filters)
+            + store.namespaces(ns_class="platform-app", **filters))
+
+
 GROUP_FIELDS = {"cluster": "name", "hub": "hub_name", "region": "region", "datacenter": "datacenter",
                 "environment": "environment", "version": "ocp_version"}
 
@@ -112,7 +119,7 @@ def application_counts(store: Store, group_by: str) -> tuple[list[dict], dict]:
         groups[key_of[c.name]]["clusters"].add(c.name)
     all_apps: set[str] = set()
     all_teams: set[str] = set()
-    for n in store.namespaces(ns_class="application"):
+    for n in application_rows(store):
         g = groups[key_of.get(n.cluster_name, "unknown")]
         g["namespaces"] += 1
         if n.app_name and (n.assigned is None or n.assigned):
@@ -165,8 +172,7 @@ def list_applications(
     generation and cached; rows carry `clusters` (names) and, only on request,
     the full `placements`, which is what makes the list heavy at scale."""
     def compute():
-        rows = store.namespaces(ns_class="application", team=team,
-                                clusters=[cluster] if cluster else None)
+        rows = application_rows(store, team=team, clusters=[cluster] if cluster else None)
         clusters = {c.name: c for c in store.clusters()}
         if tier:
             rows = [n for n in rows if n.tier == tier]
@@ -202,7 +208,7 @@ def get_application(app: str, store: Store = Depends(get_store_dep)):
     if app == UNASSIGNED:
         rows = [n for n in store.namespaces(ns_class="application") if not n.app_name]
     else:
-        rows = store.namespaces(ns_class="application", app_name=app)
+        rows = application_rows(store, app_name=app)
     if not rows:
         # an application whose namespaces carry no app label is known by its
         # namespace name; that has no index of its own, hence the scan

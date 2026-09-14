@@ -66,8 +66,15 @@ namespaces:
 #            ODL_APP_MAP overrides the path.
 applications:
   source: labels
+  # Platform namespaces grouped as applications of their own (see the fleet
+  # profile for a ready-made "openshift-critical" group):
+  #   platform_apps:
+  #     - {name: openshift-critical, team: platform, tier: critical,
+  #        namespaces: [openshift-etcd, openshift-kube-apiserver, "openshift-ingress*"]}
+  platform_apps: []
   mapping:
     path: app-map.json          # relative to this manifest's directory
+    fallback: none              # labels: claim unmapped namespaces by the ownership labels above
     fields:
       cluster: cluster
       namespace: namespace

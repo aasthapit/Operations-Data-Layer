@@ -139,7 +139,9 @@ class Manifest:
     source: str = ""
     # {source: labels|mapping, mapping: {path, fields}}; see app/appmap.py
     applications: dict = field(default_factory=lambda: {
-        "source": "labels", "mapping": {"path": None, "fields": dict(DEFAULT_FIELDS)}})
+        "source": "labels",
+        "mapping": {"path": None, "fields": dict(DEFAULT_FIELDS), "fallback": "none"},
+        "platform_apps": []})
 
     # -- resources ----------------------------------------------------------
     def enabled(self, key: str) -> bool:
@@ -388,9 +390,24 @@ def parse_manifest(raw: dict, source: str = "") -> Manifest:
     if bad:
         raise ManifestError(f"applications.mapping.fields: unknown field(s): {', '.join(bad)} "
                             f"(known: {', '.join(DEFAULT_FIELDS)})")
+    fallback = mapping.get("fallback", "none")
+    if fallback not in ("none", "labels"):
+        raise ManifestError("applications.mapping.fallback must be none or labels")
+    platform_apps = []
+    for i, entry in enumerate(apps_raw.get("platform_apps") or []):
+        if not isinstance(entry, dict) or not entry.get("name") or not entry.get("namespaces"):
+            raise ManifestError(f"applications.platform_apps[{i}]: needs `name` and a non-empty "
+                                "`namespaces` list (exact names, or prefixes ending in *)")
+        names = entry["namespaces"]
+        if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
+            raise ManifestError(f"applications.platform_apps[{i}]: namespaces must be a list of strings")
+        platform_apps.append({"name": str(entry["name"]), "team": entry.get("team"),
+                              "tier": entry.get("tier"), "namespaces": list(names)})
     applications = {"source": apps_source,
                     "mapping": {"path": mapping.get("path"),
-                                "fields": {**DEFAULT_FIELDS, **(mapping.get("fields") or {})}}}
+                                "fields": {**DEFAULT_FIELDS, **(mapping.get("fields") or {})},
+                                "fallback": fallback},
+                    "platform_apps": platform_apps}
 
     thresholds = dict(raw.get("thresholds") or {})
     bad = sorted(set(thresholds) - set(_DEFAULT_THRESHOLDS))

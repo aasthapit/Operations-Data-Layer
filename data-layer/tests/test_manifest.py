@@ -240,8 +240,34 @@ def test_the_fleet_profile_is_the_default_manifest_with_tiers(manifest):
 
     # everything that is not the schedule is the default manifest's
     assert fleet.platform_names == manifest.platform_names
-    assert fleet.ownership == manifest.ownership
+    assert fleet.ownership["app"] == ["app_id"]   # the profile narrows ownership to the registry's keys
     assert fleet.effective_thresholds() == manifest.effective_thresholds()
     assert fleet.keep_annotations == manifest.keep_annotations
     # and the RBAC it needs is a subset of the default's (two kinds fewer)
     assert set(fleet.enabled_keys()) < set(manifest.enabled_keys())
+
+
+def test_platform_apps_and_mapping_fallback_are_parsed_and_validated():
+    from app.manifest import ManifestError, parse_manifest
+
+    m = parse_manifest({"applications": {
+        "source": "mapping", "mapping": {"fallback": "labels"},
+        "platform_apps": [{"name": "openshift-critical", "tier": "critical",
+                           "namespaces": ["openshift-etcd", "openshift-ingress*"]}]}}, source="t")
+    assert m.applications["mapping"]["fallback"] == "labels"
+    assert m.applications["platform_apps"][0]["namespaces"] == ["openshift-etcd", "openshift-ingress*"]
+    assert parse_manifest({}, source="t").applications["platform_apps"] == []
+    with pytest.raises(ManifestError, match="fallback"):
+        parse_manifest({"applications": {"mapping": {"fallback": "maybe"}}}, source="t")
+    with pytest.raises(ManifestError, match="platform_apps"):
+        parse_manifest({"applications": {"platform_apps": [{"name": "x"}]}}, source="t")
+
+
+def test_fleet_profile_uses_the_registry_with_label_fallback_and_platform_apps():
+    from app.manifest import load_manifest
+
+    m = load_manifest("config/ocp-api-manifest.fleet.yaml")
+    assert m.applications["source"] == "mapping" and m.applications["mapping"]["fallback"] == "labels"
+    assert m.ownership["app"] == ["app_id"] and m.ownership["team"] == ["lob"]
+    names = [g["name"] for g in m.applications["platform_apps"]]
+    assert names == ["openshift-critical", "openshift-platform"]

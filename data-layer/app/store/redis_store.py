@@ -196,7 +196,7 @@ SECTION_FIELDS: dict[str, frozenset[str]] = {
         "replicas_ready", "pods_total", "pods_running", "pods_pending", "pods_failed",
         "pods_succeeded", "restarts_total", "pod_issues", "cpu_requests", "cpu_limits",
         "cpu_usage", "memory_requests", "memory_limits", "memory_usage", "resource_counts",
-        "images", "created_at", "environment", "assigned"}),
+        "images", "created_at", "environment", "assigned", "ownership_source"}),
     "workloads": frozenset({
         "namespace", "ns_class", "kind", "name", "replicas_desired", "replicas_ready",
         "replicas_available", "replicas_updated", "status", "containers", "images",
@@ -529,6 +529,10 @@ class RedisStore(Store):
                                (k.ns_app, row.get("app_name"))):
                 if value:
                     add("sadd", key(value), member)
+            if row.get("ownership_source") == "platform":
+                # platform namespaces grouped as a configured platform app are
+                # listed with the applications without changing their class
+                add("sadd", k.ns_class("platform-app"), member)
             if row.get("cpu_usage") is not None:
                 add("zadd", k.ns_usage("cpu"), member, float(row["cpu_usage"]))
             if row.get("memory_usage") is not None:

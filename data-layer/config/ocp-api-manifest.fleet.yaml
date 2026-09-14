@@ -65,10 +65,14 @@ namespaces:
   # present on the namespace wins (in order); if none is present the most
   # common value across the namespace's workloads is used; `app` finally falls
   # back to the namespace name.
+  # Only these labels may name an application or its line of business when
+  # the registry (app-map.json) does not know a namespace. Generic labels such
+  # as app.kubernetes.io/part-of are deliberately NOT here: on a real estate
+  # they carry platform-wide values and mis-group whole fleets under one name.
   ownership:
-    app:  [odl.io/app, app.kubernetes.io/part-of, app.kubernetes.io/name]
-    team: [odl.io/team, team, owner, app.kubernetes.io/managed-by-team]
-    tier: [odl.io/tier, tier, criticality]
+    app:  [app_id]
+    team: [lob]
+    tier: []
 
 # Where application ownership comes from.
 #   labels   (default) identity, team and tier from the `ownership` label keys
@@ -81,9 +85,14 @@ namespaces:
 #            `fields` names the record keys. Re-read when the file changes.
 #            ODL_APP_MAP overrides the path.
 applications:
-  source: labels
+  # The registry (app-map.json) is the source of ownership. A namespace the
+  # registry does not list may still be claimed by its own `app_id` / `lob`
+  # labels (fallback: labels); anything else is "not under a business
+  # application". Set fallback: none to trust the registry alone.
+  source: mapping
   mapping:
-    path: app-map.json          # relative to this manifest's directory
+    path: app-map.json          # relative to this manifest's directory (ODL_APP_MAP overrides)
+    fallback: labels            # none | labels (only the ownership keys above)
     fields:
       cluster: cluster
       namespace: namespace
@@ -91,6 +100,38 @@ applications:
       team: lob
       environment: environment  # the namespace's environment (development, test, ...)
       cluster_environment: env  # fills the cluster's environment when ACM has none
+  # OpenShift's own namespaces grouped as applications of their own, so the
+  # platform shows up in the applications and blast-radius views with a tier.
+  # Entries are exact namespace names or prefixes ending in `*`; first match wins.
+  platform_apps:
+    - name: openshift-critical
+      team: platform
+      tier: critical
+      namespaces:
+        - openshift-etcd
+        - openshift-kube-apiserver
+        - openshift-kube-controller-manager
+        - openshift-kube-scheduler
+        - openshift-apiserver
+        - openshift-oauth-apiserver
+        - openshift-authentication
+        - openshift-ingress
+        - openshift-ingress-operator
+        - openshift-dns
+        - openshift-ovn-kubernetes
+        - openshift-sdn
+        - openshift-network-operator
+        - openshift-machine-api
+        - openshift-machine-config-operator
+        - openshift-cluster-version
+        - openshift-operator-lifecycle-manager
+        - openshift-monitoring
+        - openshift-image-registry
+        - openshift-console
+    - name: openshift-platform
+      team: platform
+      tier: standard
+      namespaces: ["openshift-*", "kube-*", open-cluster-management*, multicluster-engine]
 
 # Annotations are dropped unless listed here. (kubectl's
 # last-applied-configuration annotation can embed an entire object, including
