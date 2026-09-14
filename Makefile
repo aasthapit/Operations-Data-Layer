@@ -13,7 +13,7 @@ DEV_API_PORT ?= 18002
 .PHONY: help fleet-venv fleet-up fleet-down fleet-seed fleet-status acm-up acm-down acm-status acm-smoke \
         up down logs rebuild ps reset dl-venv test lint rbac \
         dev-venv dev dev-core dev-api dev-ui dev-mcp dev-down collect redis-cli sql ask \
-        local local-remote local-api local-ui local-mcp local-redis redis-up redis-down
+        local local-remote local-api local-ui local-mcp local-redis redis-up redis-down redis-ping
 
 help:
 	@echo "Operations Data Layer"
@@ -56,6 +56,7 @@ help:
 	@echo "  make local-ui      just the Vite dashboard      make local-mcp   just the MCP server"
 	@echo "  make redis-up      just Redis, in a container (127.0.0.1:ODL_REDIS_PORT, persisted volume)"
 	@echo "  make redis-down    stop it (data stays in the volume)"
+	@echo "  make redis-ping    check REDIS_URL from .env (auth, TLS) before starting anything"
 	@echo "  make collect       trigger a fleet sweep on the collector (ODL_API_PORT)"
 	@echo "  make redis-cli     open redis-cli inside the redis container"
 	@echo "  make sql Q='select ...'   run guarded SQL over the fleet snapshot"
@@ -179,6 +180,13 @@ redis-up:
 
 redis-down:
 	docker compose stop redis
+
+# Verifies the connection string (password, ACL user, TLS) without printing it.
+redis-ping:
+	@$(DLPY) -c "import os, redis; u = os.environ.get('REDIS_URL') or 'redis://localhost:$(ODL_REDIS_PORT)/0'; \
+	r = redis.Redis.from_url(u); r.ping(); k = r.connection_pool.connection_kwargs; \
+	print('ok:', k.get('host'), k.get('port'), 'db', k.get('db'), 'user', k.get('username') or '(default)', \
+	'tls', bool(k.get('ssl_cert_reqs') is not None or u.startswith('rediss://')), 'keys', r.dbsize())"
 
 # API_PORT picks the container API by default; `make collect API_PORT=18002` targets a host API.
 API_PORT ?= $(ODL_API_PORT)
