@@ -32,7 +32,7 @@ DEV_API_PORT ?= 18002
 .PHONY: help fleet-venv fleet-up fleet-down fleet-seed fleet-status acm-up acm-down acm-status acm-smoke \
         up down logs rebuild ps reset dl-venv test lint rbac \
         dev-venv dev dev-core dev-api dev-ui dev-mcp dev-down collect redis-cli sql ask \
-        local local-remote local-api local-ui local-mcp local-redis redis-up redis-down redis-ping check-config
+        local local-remote local-api local-ui local-mcp local-redis redis-up redis-down redis-ping check-config deps
 
 help:
 	@echo "Operations Data Layer"
@@ -154,19 +154,24 @@ $(DLPY):
 $(HONCHO): | $(DLPY)
 	$(MAKE) dev-venv
 
-dev dev-core dev-api dev-ui dev-mcp: $(HONCHO)
-local local-remote local-api local-ui local-mcp local-redis: $(HONCHO)
+dev dev-core dev-api dev-ui dev-mcp: deps
+local local-remote local-api local-ui local-mcp local-redis: deps
 redis-ping sql ask test lint rbac check-config: $(DLPY)
 
-dev-venv:
-	@test -n "$(UV)" || command -v python3 >/dev/null || (echo "python3 (3.12+) or uv is required"; exit 1)
+dev-venv: deps
 	@command -v npm >/dev/null || (echo "node + npm (22+) are required for the dashboard"; exit 1)
-	@test -d data-layer/.venv || $(MAKE) dl-venv
-	$(call pipi,data-layer/.venv) honcho
-	@test -d mcp-server/.venv || $(call venv,mcp-server/.venv)
-	$(call pipi,mcp-server/.venv) -r mcp-server/requirements.txt
 	cd dashboard && npm install --no-audit --no-fund
 	@test -f .env || (cp .env.example .env && echo "wrote .env from .env.example (edit the ports if they clash)")
+
+# Python dependencies, synced every time (cheap with uv, seconds with pip): a
+# `git pull` that adds a package must never leave a venv behind. Every
+# dev/local target depends on this.
+deps:
+	@test -n "$(UV)" || command -v python3 >/dev/null || (echo "python3 (3.12+) or uv is required"; exit 1)
+	@test -d data-layer/.venv || $(call venv,data-layer/.venv)
+	$(call pipi,data-layer/.venv) -r data-layer/requirements-dev.txt honcho
+	@test -d mcp-server/.venv || $(call venv,mcp-server/.venv)
+	$(call pipi,mcp-server/.venv) -r mcp-server/requirements.txt
 
 dev:
 	$(HONCHO) start
