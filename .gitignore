@@ -18,6 +18,7 @@ fleet/kubeconfigs/
 data-layer/config/clusters.yaml
 data-layer/config/acm.yaml
 data-layer/config/app-map.json
+Procfile.hubs
 
 # Local / editor
 .DS_Store

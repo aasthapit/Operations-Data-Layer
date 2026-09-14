@@ -155,6 +155,7 @@ Then turn, in order: `COLLECT_WORKERS` (clusters in flight per instance, default
 A sweep in progress is visible as `sweep` on `GET /api/status` and `GET /api/health/overview` (`done` of `total`), and every cluster appears in the UI as soon as it is written.
 For an estate of several ACM hubs, run one collector per hub against the same Redis: `COLLECT_HUBS=man01paa DEV_API_PORT=18002 make local-api`, `COLLECT_HUBS=man02paa DEV_API_PORT=18003 make local-api`, and so on.
 Each instance discovers, collects and prunes only its own hubs' clusters, holds only its own hubs' credentials, and leaves the other hubs' rows to their owners (it still records that they exist, so the fleet view is whole); an unknown hub name is a startup error.
+One collector per hub is the recommended shape for several hubs: on one machine `make local-hubs` generates `Procfile.hubs` from the hubs in your config (each process owns one hub through `COLLECT_HUBS`, on ports 18010, 18011, ...) and runs them with the dashboard and MCP pointed at the first; across machines, put the same `acm.yaml` on each and set `COLLECT_HUBS=<hub>` in that machine's `.env`.
 For a hub with a hundred or more clusters, split it further with `COLLECT_SHARD=i/n`, which takes a slice of the owned clusters: `COLLECT_HUBS=man01paa COLLECT_SHARD=0/3 DEV_API_PORT=18002 make local-api`, `... COLLECT_SHARD=1/3 DEV_API_PORT=18003 ...`, and so on; shard 0 does the end-of-sweep housekeeping.
 
 ### ACM test topology (real OCM + Tekton)

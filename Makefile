@@ -32,7 +32,7 @@ DEV_API_PORT ?= 18002
 .PHONY: help fleet-venv fleet-up fleet-down fleet-seed fleet-status acm-up acm-down acm-status acm-smoke \
         up down logs rebuild ps reset dl-venv test lint rbac \
         dev-venv dev dev-core dev-api dev-ui dev-mcp dev-down collect redis-cli sql ask \
-        local local-remote local-api local-ui local-mcp local-redis redis-up redis-down redis-ping check-config deps
+        local local-remote local-api local-ui local-mcp local-redis local-hubs redis-up redis-down redis-ping check-config deps
 
 help:
 	@echo "Operations Data Layer"
@@ -73,6 +73,7 @@ help:
 	@echo "  make local-remote  the same against a live Redis (REDIS_URL in .env), no local redis-server"
 	@echo "  make local-api     just the API + collector on the host (REDIS_URL / ODL_CONFIG from .env)"
 	@echo "  make local-ui      just the Vite dashboard      make local-mcp   just the MCP server"
+	@echo "  make local-hubs    one collector process per ACM hub from ODL_CONFIG (ports from 18010), plus UI and MCP"
 	@echo "  make redis-up      just Redis, in a container via docker or podman (127.0.0.1:ODL_REDIS_PORT, persisted volume)"
 	@echo "  make redis-down    stop it (data stays in the volume)"
 	@echo "  make redis-ping    check REDIS_URL from .env (auth, TLS) before starting anything"
@@ -155,7 +156,7 @@ $(HONCHO): | $(DLPY)
 	$(MAKE) dev-venv
 
 dev dev-core dev-api dev-ui dev-mcp: deps
-local local-remote local-api local-ui local-mcp local-redis: deps
+local local-remote local-api local-ui local-mcp local-redis local-hubs: deps
 redis-ping sql ask test lint rbac check-config: $(DLPY)
 
 dev-venv: deps
@@ -210,6 +211,16 @@ local-mcp:
 
 local-redis:
 	$(HONCHO) -f Procfile.local start redis
+
+# One collector per hub on this machine: generates Procfile.hubs from the hubs
+# in ODL_CONFIG (each owning one hub via COLLECT_HUBS, ports 18010, 18011, ...),
+# then runs them with the dashboard and MCP pointed at the first.
+local-hubs:
+	@test -n "$(REDIS_URL)" || (echo "set REDIS_URL in .env (e.g. redis://localhost:16379/0)"; exit 1)
+	@cd data-layer && ODL_CONFIG=$${ODL_CONFIG:-$$([ -f config/acm.yaml ] && echo config/acm.yaml || echo config/clusters.yaml)} \
+		.venv/bin/python scripts/gen_procfile_hubs.py > ../Procfile.hubs
+	@echo "--- Procfile.hubs"; cat Procfile.hubs; echo "---"
+	$(HONCHO) -f Procfile.hubs start
 
 # Redis alone, in a container: for `make local-remote` with
 # REDIS_URL=redis://localhost:$(ODL_REDIS_PORT)/0 when you have real clusters but no Redis.
