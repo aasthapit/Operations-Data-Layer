@@ -141,7 +141,8 @@ export default function Overview({ nav }) {
                 </div>
                 <HealthBar counts={g.counts} />
                 <div className="gc-counts">
-                  <span><b>{g.total}</b> total</span>
+                  <span><b>{g.total}</b> {g.total === 1 ? "cluster" : "clusters"}</span>
+                  {g.applications != null && <span><b>{g.applications}</b> {g.applications === 1 ? "application" : "applications"}{g.unassigned_namespaces ? <span className="muted"> (+{g.unassigned_namespaces} ns unassigned)</span> : null}</span>}
                   {g.counts.healthy ? <span style={{ color: "var(--healthy)" }}>{g.counts.healthy} healthy</span> : null}
                   {g.counts.warning ? <span style={{ color: "var(--warning)" }}>{g.counts.warning} warning</span> : null}
                   {g.counts.critical ? <span style={{ color: "var(--critical)" }}>{g.counts.critical} critical</span> : null}

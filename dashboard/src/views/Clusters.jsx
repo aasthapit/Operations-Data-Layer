@@ -44,9 +44,9 @@ const COLUMNS = [
   },
   {
     key: "apps", label: "Apps",
-    sortValue: (c) => c.namespaces.application,
-    filterValue: (c) => `${c.namespaces.application}`,
-    render: (c) => <>{c.namespaces.application} <span className="muted">/ {c.namespaces.platform} platform</span></>,
+    sortValue: (c) => c.applications ?? c.namespaces.application,
+    filterValue: (c) => `${c.applications ?? c.namespaces.application}`,
+    render: (c) => <>{c.applications ?? c.namespaces.application} <span className="muted">/ {c.namespaces.application} ns</span></>,
   },
   {
     key: "pod_issues", label: "Pod issues",
