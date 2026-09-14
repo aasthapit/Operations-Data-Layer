@@ -92,6 +92,58 @@ def _group(rows, clusters_by_name):
     return out
 
 
+GROUP_FIELDS = {"cluster": "name", "hub": "hub_name", "region": "region", "datacenter": "datacenter",
+                "environment": "environment", "version": "ocp_version"}
+
+
+def application_counts(store: Store, group_by: str) -> tuple[list[dict], dict]:
+    """Distinct applications (and teams, namespaces) per cluster or per group
+    of clusters. The unit is the application, not the namespace: with a
+    mapping one application spans several namespaces and an unassigned
+    namespace counts for none."""
+    field = GROUP_FIELDS[group_by]
+    clusters = store.clusters()
+    key_of = {c.name: (c.get(field) or "unknown") for c in clusters}
+    groups: dict[str, dict] = defaultdict(lambda: {"applications": set(), "teams": set(), "clusters": set(),
+                                                   "namespaces": 0, "unassigned_namespaces": 0})
+    for c in clusters:
+        groups[key_of[c.name]]["clusters"].add(c.name)
+    all_apps: set[str] = set()
+    all_teams: set[str] = set()
+    for n in store.namespaces(ns_class="application"):
+        g = groups[key_of.get(n.cluster_name, "unknown")]
+        g["namespaces"] += 1
+        if n.app_name and (n.assigned is None or n.assigned):
+            g["applications"].add(n.app_name)
+            all_apps.add(n.app_name)
+            if n.team:
+                g["teams"].add(n.team)
+                all_teams.add(n.team)
+        else:
+            g["unassigned_namespaces"] += 1
+    rows = [{"key": key, "clusters": len(g["clusters"]), "applications": len(g["applications"]),
+             "teams": len(g["teams"]), "namespaces": g["namespaces"],
+             "unassigned_namespaces": g["unassigned_namespaces"]}
+            for key, g in sorted(groups.items())]
+    totals = {"clusters": len(clusters), "applications": len(all_apps), "teams": len(all_teams),
+              "namespaces": sum(r["namespaces"] for r in rows),
+              "unassigned_namespaces": sum(r["unassigned_namespaces"] for r in rows)}
+    return rows, totals
+
+
+@router.get("/summary")
+def applications_summary(store: Store = Depends(get_store_dep),
+                         group_by: str = Query("hub", description="cluster|hub|region|datacenter|"
+                                                                  "environment|version")):
+    """How many applications run on each cluster, hub, region, datacenter,
+    environment or OCP version (distinct applications, with teams and
+    namespaces alongside)."""
+    if group_by not in GROUP_FIELDS:
+        group_by = "hub"
+    rows, totals = application_counts(store, group_by)
+    return {"group_by": group_by, "groups": rows, "totals": totals}
+
+
 @router.get("")
 def list_applications(
     store: Store = Depends(get_store_dep),

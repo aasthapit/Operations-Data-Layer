@@ -7,6 +7,7 @@ from ..collector import runner
 from ..serialize import _iso
 from ..settings import settings
 from ..store import Store
+from .applications import application_counts
 from .deps import get_store_dep
 
 router = APIRouter(prefix="/api/health", tags=["health"])
@@ -40,6 +41,7 @@ def summary(group_by: str | None = Query(None, description="region|datacenter|en
         status = c.overall_status if c.overall_status in _STATUSES else "unknown"
         groups[key][status] += 1
 
+    apps = {r["key"]: r for r in application_counts(store, group_by)[0]}
     out = []
     for key, counts in sorted(groups.items()):
         total = sum(counts.values())
@@ -47,8 +49,12 @@ def summary(group_by: str | None = Query(None, description="region|datacenter|en
                  "warning" if counts["warning"] else
                  "unknown" if counts["unknown"] and not (counts["healthy"]) else
                  "healthy")
+        a = apps.get(key, {})
         out.append({"key": key, "total": total, "counts": counts,
-                    "rollup_status": worst})
+                    "rollup_status": worst,
+                    "applications": a.get("applications", 0),
+                    "namespaces": a.get("namespaces", 0),
+                    "unassigned_namespaces": a.get("unassigned_namespaces", 0)})
     return {"group_by": group_by, "groups": out}
 
 

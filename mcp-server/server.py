@@ -221,6 +221,16 @@ def list_applications(team: str = "", tier: str = "", environment: str = "",
 
 
 @mcp.tool()
+def applications_summary(group_by: str = "hub") -> dict:
+    """How many applications run on each cluster, hub, region, datacenter,
+    environment or OCP version: distinct applications (not namespaces), with
+    teams, namespaces and namespaces under no application alongside, plus
+    fleet totals. group_by = cluster | hub | region | datacenter | environment
+    | version. Use for "how many apps are on cluster X / hub Y?"."""
+    return _get("/api/applications/summary", {"group_by": group_by})
+
+
+@mcp.tool()
 def get_application(app: str) -> dict:
     """One application everywhere it runs: placements, per-cluster namespace
     detail, and every workload with scrubbed container detail."""

@@ -858,6 +858,7 @@ def _summary_row(name: str, hub_name: str, collected: dict, overall: str, score:
         "pods_running": cap.get("pods_running", 0) or 0,
         "metrics_available": bool(cap.get("metrics_available")),
         "namespaces_application": collected.get("namespaces_application", 0) or 0,
+        "applications_total": collected.get("applications_total", 0) or 0,
         "namespaces_platform": collected.get("namespaces_platform", 0) or 0,
         "workloads_total": collected.get("workloads_total", 0) or 0,
         "pod_issues_total": collected.get("pod_issues_total", 0) or 0,

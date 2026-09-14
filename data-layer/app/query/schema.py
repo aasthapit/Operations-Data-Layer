@@ -116,6 +116,7 @@ CLUSTERS = _table(
         ("pods_running", "INTEGER", "Pods in phase Running."),
         ("metrics_available", "BOOLEAN", "False when metrics.k8s.io did not answer; usage columns are NULL."),
         ("namespaces_application", "INTEGER", "Application namespaces (see the note on applications)."),
+        ("applications_total", "INTEGER", "Distinct applications on the cluster (assigned namespaces only)."),
         ("namespaces_platform", "INTEGER", "Platform (OpenShift / Kubernetes) namespaces."),
         ("workloads_total", "INTEGER", "Deployments + StatefulSets + DaemonSets collected."),
         ("pod_issues_total", "INTEGER", "Pods currently unhealthy on this cluster."),

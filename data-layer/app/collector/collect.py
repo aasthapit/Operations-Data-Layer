@@ -333,6 +333,11 @@ def assemble(meta: dict, raw: dict, status: dict, manifest: Manifest,
     }
     data["namespaces_application"] = sum(1 for n in ns_rows if n["ns_class"] == APPLICATION)
     data["namespaces_platform"] = len(ns_rows) - data["namespaces_application"]
+    # distinct applications, not namespaces: with a mapping one application spans
+    # several namespaces and an unassigned namespace counts for none
+    data["applications_total"] = len({n["app_name"] for n in ns_rows
+                                      if n["ns_class"] == APPLICATION and n.get("app_name")
+                                      and n.get("assigned", True)})
     data["workloads_total"] = len(workloads)
     data["pod_issues_total"] = len(pod_issues)
     data["certs_expiring_total"] = sum(1 for r in resources

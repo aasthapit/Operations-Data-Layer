@@ -272,6 +272,7 @@ Every sweep also appends a health snapshot per cluster, powering the timeline.
 | `GET /api/clusters/{name}/timeline` | health-score + utilization history |
 | `POST /api/clusters/{name}/refresh` | collect and persist this one cluster now, behind a single-flight lock, without waiting for the next sweep (404 unknown cluster, 409 already refreshing) |
 | `GET /api/applications?team=&tier=&environment=&status=` · `GET /api/applications/{app}` | applications (application namespaces) across the fleet |
+| `GET /api/applications/summary?group_by=cluster\|hub\|region\|datacenter\|environment\|version` | how many distinct applications (and teams, namespaces, unassigned namespaces) run on each cluster or group of clusters |
 | `GET /api/versions` · `GET /api/versions/operators?name=` | OCP / cluster-operator version spread |
 | `GET /api/blast-radius?operator=&operator_version=&ocp_version=&olm_operator=&olm_version=&image=` | impacted clusters, applications, workloads |
 | `GET /api/insights/summary` | fleet-wide "needs attention" counters |

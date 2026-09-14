@@ -825,3 +825,22 @@ def test_unassigned_namespaces_group_separately(monkeypatch):
         assert {a["app"] for a in blast["applications"]} >= {"1aat", "(unassigned)"}
     finally:
         store_module.set_store(None)
+
+
+def test_application_counts_per_cluster_and_group(client):
+    clusters = _get(client, "/api/clusters")["clusters"]
+    assert all(isinstance(c["applications"], int) for c in clusters)
+    east = next(c for c in clusters if c["name"] == "ocp-east-1")
+    assert east["applications"] >= 1
+
+    by_hub = _get(client, "/api/applications/summary", group_by="hub")
+    assert by_hub["group_by"] == "hub" and [g["key"] for g in by_hub["groups"]] == ["hub-east", "hub-west"]
+    for g in by_hub["groups"]:
+        assert g["clusters"] == 1 and g["applications"] >= 1 and g["namespaces"] >= g["applications"]
+    assert by_hub["totals"]["clusters"] == 2 and by_hub["totals"]["applications"] >= 1
+    per_cluster = _get(client, "/api/applications/summary", group_by="cluster")["groups"]
+    assert {g["key"]: g["applications"] for g in per_cluster}["ocp-east-1"] == east["applications"]
+    assert _get(client, "/api/applications/summary", group_by="nonsense")["group_by"] == "hub"
+
+    summary = _get(client, "/api/health/summary", group_by="hub")
+    assert all("applications" in g and "unassigned_namespaces" in g for g in summary["groups"])

@@ -99,6 +99,7 @@ def cluster_summary(c) -> dict:
         },
         "nodes": {"ready": c.nodes_ready, "total": c.nodes_total},
         "namespaces": {"application": c.namespaces_application, "platform": c.namespaces_platform},
+        "applications": c.applications_total,
         "workloads": c.workloads_total,
         "pod_issues": c.pod_issues_total,
         "certs_expiring": c.certs_expiring_total,
