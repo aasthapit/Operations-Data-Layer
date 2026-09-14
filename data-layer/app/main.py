@@ -52,6 +52,18 @@ def _wait_for_redis(retries=30, delay=2):
     raise RuntimeError("redis never became reachable")
 
 
+def _require_fleet_config():
+    """Fail at startup, not at the first sweep, when there is nothing to collect from."""
+    path = settings.config_path
+    if os.path.isfile(path):
+        return
+    raise RuntimeError(
+        f"fleet config not found: {path!r} (ODL_CONFIG). Copy data-layer/config/acm.example.yaml "
+        "to config/acm.yaml (a static list of ACM hubs) or clusters.example.yaml to "
+        "config/clusters.yaml (a direct list of endpoints), fill it in, and set ODL_CONFIG; "
+        "or set COLLECTOR_ENABLED=false to serve Redis read-only.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     m = get_manifest()      # fail fast on a bad manifest
@@ -60,6 +72,7 @@ async def lifespan(app: FastAPI):
     if not settings.collector_enabled:
         log.info("collector disabled (COLLECTOR_ENABLED=false): serving Redis read-only")
     else:
+        _require_fleet_config()
         if settings.refresh_on_startup:
             threading.Thread(target=run_collection, args=("startup",),
                              daemon=True).start()
