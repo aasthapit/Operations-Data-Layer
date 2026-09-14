@@ -102,6 +102,20 @@ class Store(ABC):
     @abstractmethod
     def unlock(self, name: str) -> None: ...
 
+    # --------------------------------------------------------------- progress
+    @abstractmethod
+    def set_progress(self, instance: str, progress: dict, ttl_seconds: int) -> None:
+        """Publish one collector instance's sweep progress (running, total,
+        done, ok, failed, started_at, trigger, hubs). Expires after `ttl_seconds`
+        so a dead collector disappears from the aggregate."""
+
+    @abstractmethod
+    def clear_progress(self, instance: str) -> None: ...
+
+    @abstractmethod
+    def progress_all(self) -> list[dict]:
+        """Every collector instance's last published progress, each with `instance`."""
+
     # ------------------------------------------------------------------- runs
     @abstractmethod
     def last_run(self) -> dict | None:

@@ -43,8 +43,19 @@ export default function Applications({ initialApp, nav, onClearApp }) {
     { key: "status", label: "Status", render: (a) => <Pill status={a.status} /> },
     {
       key: "cluster_count", label: "Clusters",
-      filterValue: (a) => `${a.cluster_count} ${(a.hubs || a.regions || []).join(" ")}`,
-      render: (a) => <>{a.cluster_count} <span className="muted">· {(a.hubs || a.regions || []).join(", ")}</span></>,
+      filterValue: (a) => `${a.cluster_count} ${(a.placements || []).map((p) => p.cluster).join(" ")}`,
+      render: (a) => {
+        const names = [...new Set((a.placements || []).map((p) => p.cluster))];
+        const shown = names.slice(0, 3).join(", ");
+        const more = names.length > 3 ? ` +${names.length - 3}` : "";
+        return <>{a.cluster_count} <span className="muted mono" style={{ fontSize: 12 }}>· {shown}{more}</span></>;
+      },
+    },
+    {
+      key: "hubs", label: "Hubs", filter: "select",
+      filterValue: (a) => (a.hubs || []).join(" "),
+      sortValue: (a) => (a.hubs || []).join(","),
+      render: (a) => (a.hubs || []).map((h) => <span key={h} className="tag" style={{ marginRight: 4 }}>{h}</span>),
     },
     {
       key: "environments", label: "Environments",

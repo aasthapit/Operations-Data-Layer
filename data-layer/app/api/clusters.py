@@ -49,6 +49,7 @@ def list_clusters(
     status: str | None = Query(None, description="healthy|warning|critical|unknown"),
     version: str | None = None,
     team: str | None = None,
+    upgrading: bool | None = Query(None, description="only clusters mid-upgrade (true) or not (false)"),
 ):
     # Every one of these is a cluster dimension the store indexes, so the
     # filtering is an intersection of sets rather than a scan.
@@ -60,6 +61,8 @@ def list_clusters(
         # filter to clusters running an application owned by `team`
         keep = {n.cluster_name for n in store.namespaces(ns_class="application", team=team)}
         items = [i for i in items if i["name"] in keep]
+    if upgrading is not None:
+        items = [i for i in items if bool(i["upgrading"]) == upgrading]
     return {"count": len(items), "clusters": items}
 
 

@@ -348,6 +348,12 @@ class Keys:
     def run_last(self) -> str:
         return f"{self._fleet}:run:last"
 
+    def progress(self, instance: str) -> str:
+        return f"{self._fleet}:progress:{instance}"
+
+    def progress_pattern(self) -> str:
+        return f"{self._fleet}:progress:*"
+
 
 def _is_memory(by: str | None) -> bool:
     return str(by or "").lower().startswith("mem")
@@ -601,6 +607,23 @@ class RedisStore(Store):
         self.r.set(self.keys.run_last, _dumps({
             "at": fields.get("finished_at") or datetime.now(UTC),
             "ok": not fields.get("error"), "trigger": run_id.split("-", 1)[-1]}))
+
+    def set_progress(self, instance: str, progress: dict, ttl_seconds: int) -> None:
+        self.r.set(self.keys.progress(instance), _dumps({**progress, "instance": instance}),
+                   ex=max(1, int(ttl_seconds)))
+
+    def clear_progress(self, instance: str) -> None:
+        self.r.delete(self.keys.progress(instance))
+
+    def progress_all(self) -> list[dict]:
+        keys = sorted(self.r.scan_iter(match=self.keys.progress_pattern(), count=200))
+        if not keys:
+            return []
+        out = []
+        for raw in self.r.mget(keys):
+            if raw:
+                out.append(_row(_unpack(raw)))
+        return out
 
     def last_run(self) -> dict | None:
         raw = self.r.get(self.keys.run_last)

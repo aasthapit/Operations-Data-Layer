@@ -90,7 +90,7 @@ def status(store: Store = Depends(get_store_dep)):
         "at": _iso(last["at"]), "ok": last["ok"], "trigger": last["trigger"],
         # What that sweep cost, per stage, summed over its clusters.
         "timings": _last_finished_run(store).get("timings")},
-        "sweep": {**prog, "started_at": _iso(prog["started_at"])}}
+        "sweep": {**prog, "started_at": _iso(prog.get("started_at"))}}
 
 
 @router.get("/runs")

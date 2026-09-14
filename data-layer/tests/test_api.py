@@ -887,3 +887,11 @@ def test_manifest_availability_reports_freshness_per_kind():
         assert d["clusters"][0]["last_synced"]
     finally:
         store_module.set_store(None)
+
+
+def test_clusters_filter_by_upgrading(client):
+    everything = _get(client, "/api/clusters")["clusters"]
+    up = _get(client, "/api/clusters", upgrading="true")["clusters"]
+    not_up = _get(client, "/api/clusters", upgrading="false")["clusters"]
+    assert len(up) + len(not_up) == len(everything)
+    assert all(c["upgrading"] for c in up) and not any(c["upgrading"] for c in not_up)

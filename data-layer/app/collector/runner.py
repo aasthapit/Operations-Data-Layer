@@ -28,6 +28,8 @@ the store (see app/store/base.py and docs/redis-keyspace.md).
 import concurrent.futures
 import logging
 import math
+import os
+import socket
 import threading
 import time
 import zlib
@@ -120,9 +122,60 @@ def in_shard(name: str, shard: tuple[int, int] | None) -> bool:
     return zlib.crc32(name.encode()) % n == i
 
 
-def progress() -> dict:
+def instance_name() -> str:
+    """Who this collector is, for the fleet-wide progress view: the hubs it
+    owns (or "all"), its shard, and host:pid so two identical configs on the
+    same box stay distinct."""
+    hubs = ",".join(owned_hubs()) or "all"
+    shard = f"@{settings.collect_shard}" if settings.collect_shard else ""
+    return f"{hubs}{shard}#{socket.gethostname()}:{os.getpid()}"
+
+
+def _publish_progress(store: Store) -> None:
+    """Mirror this process's progress into Redis so an API served by any
+    process (or none of the collectors) can show the whole fleet's sweep."""
     with _progress_lock:
-        return dict(_progress)
+        snap = dict(_progress)
+    snap["hubs"] = list(owned_hubs())
+    snap["shard"] = settings.collect_shard or None
+    try:
+        # a dead collector's entry must not linger: expire it a few ticks
+        # after its last update, whether or not it was still running
+        store.set_progress(instance_name(), snap, ttl_seconds=3 * settings.refresh_interval_seconds)
+    except Exception as e:  # noqa: BLE001 - progress is a courtesy, never a failure
+        log.debug("progress publish failed: %s", e)
+
+
+def progress() -> dict:
+    """The fleet-wide sweep: every collector's published progress aggregated,
+    plus the list per collector. Falls back to this process alone when the
+    store has nothing (single collector, or Redis unreachable)."""
+    with _progress_lock:
+        local = dict(_progress)
+    try:
+        published = get_store().progress_all()
+    except Exception:  # noqa: BLE001
+        published = []
+    if not published:
+        return {**local, "collectors": []}
+    running = [p for p in published if p.get("running")]
+    considered = running or published
+    total = sum(int(p.get("total") or 0) for p in considered)
+    done = sum(int(p.get("done") or 0) for p in considered)
+    started = [p.get("started_at") for p in running if p.get("started_at")]
+    return {
+        "running": bool(running),
+        "trigger": (running[0].get("trigger") if running else considered[0].get("trigger")),
+        "started_at": min(started) if started else None,
+        "total": total, "done": done,
+        "ok": sum(int(p.get("ok") or 0) for p in considered),
+        "failed": sum(int(p.get("failed") or 0) for p in considered),
+        "collectors": [{"instance": p.get("instance"), "hubs": p.get("hubs") or [],
+                        "shard": p.get("shard"), "running": bool(p.get("running")),
+                        "total": int(p.get("total") or 0), "done": int(p.get("done") or 0),
+                        "failed": int(p.get("failed") or 0), "started_at": p.get("started_at")}
+                       for p in sorted(published, key=lambda p: str(p.get("instance")))],
+    }
 
 # How long a single-cluster refresh may hold its lock before another caller may
 # assume the holder died.
@@ -427,6 +480,7 @@ def run_collection(trigger="manual", full: bool = False) -> dict:
         with _progress_lock:
             _progress.update({"running": True, "trigger": trigger, "started_at": utcnow(),
                               "total": len(mine), "done": 0, "ok": 0, "failed": 0})
+        _publish_progress(store)
 
         # Each worker collects AND persists its cluster, so the write to Redis
         # overlaps with other clusters' collection instead of queueing on this
@@ -443,6 +497,7 @@ def run_collection(trigger="manual", full: bool = False) -> dict:
                 measured.append(timings)
                 with _progress_lock:
                     _progress.update({"done": ok_count + failed, "ok": ok_count, "failed": failed})
+                _publish_progress(store)
 
         if shard is None or shard[0] == 0:
             store.finalize_sweep()       # refcount housekeeping: once per sweep, not per shard
@@ -471,6 +526,7 @@ def run_collection(trigger="manual", full: bool = False) -> dict:
     finally:
         with _progress_lock:
             _progress["running"] = False
+        _publish_progress(store)
         _lock.release()
 
 

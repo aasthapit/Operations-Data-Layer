@@ -298,6 +298,8 @@ def test_a_shard_collects_only_its_clusters_but_prunes_against_the_whole_fleet(f
     n = next(n for n in range(2, 12)
              if any(runner.in_shard(EAST, (i, n)) != runner.in_shard(WEST, (i, n)) for i in range(n)))
     shard_of_east = next(i for i in range(n) if runner.in_shard(EAST, (i, n)))
+    for entry in store.progress_all():          # the unsharded run's entry, under another instance name
+        store.clear_progress(entry["instance"])
     monkeypatch.setattr(runner.settings, "collect_shard", f"{shard_of_east}/{n}")
     before = store.get_cluster(WEST).last_synced
     result = runner.run_collection("manual")
@@ -495,3 +497,20 @@ def test_p95_is_the_worst_cluster_not_the_average():
     assert runner._p95([7]) == 7
     assert runner._p95([1] * 9 + [900]) == 900       # the tail is what p95 is for
     assert runner._p95(list(range(1, 101))) == 95    # the 95th of a hundred
+
+
+def test_progress_aggregates_every_collector(fleet, store):
+    runner.run_collection("manual")
+    mine = runner.progress()
+    assert mine["running"] is False and mine["total"] == 2 and mine["done"] == 2
+    assert [c["instance"] for c in mine["collectors"]] == [runner.instance_name()]
+    # another collector, mid-sweep on its own hub, published into the same Redis
+    store.set_progress("hub-far#other:9", {"running": True, "trigger": "scheduled", "total": 114, "done": 71,
+                                           "ok": 70, "failed": 1, "hubs": ["hub-far"],
+                                           "started_at": "2026-09-14T10:00:00+00:00"}, ttl_seconds=60)
+    agg = runner.progress()
+    assert agg["running"] is True and agg["total"] == 114 and agg["done"] == 71 and agg["failed"] == 1
+    from datetime import UTC, datetime
+    assert agg["started_at"] == datetime(2026, 9, 14, 10, tzinfo=UTC)     # restored like every row
+    assert len(agg["collectors"]) == 2
+    assert {c["hubs"][0] for c in agg["collectors"] if c["hubs"]} == {"hub-far"}

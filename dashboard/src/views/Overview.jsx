@@ -59,15 +59,20 @@ export default function Overview({ nav }) {
             <div style={{ width: `${sw.total ? Math.round((100 * sw.done) / sw.total) : 0}%`, height: "100%", background: "var(--accent, #4f8cff)" }} />
           </div>
           <span className="muted" style={{ fontSize: 12 }}>started {fmtTime(sw.started_at)}</span>
+          {(sw.collectors || []).length > 1 && (
+            <span className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+              {sw.collectors.map((c) => `${(c.hubs || []).join(",") || "all"}${c.shard ? " " + c.shard : ""} ${c.done}/${c.total}${c.running ? "" : " done"}`).join(" · ")}
+            </span>
+          )}
         </div>
       )}
       <div>
         <div className="stats">
           <Stat label="Clusters" value={d.clusters_total} kind="accent" onClick={() => nav.goClusters()} />
-          <Stat label="Healthy" value={d.counts.healthy} kind="healthy" />
-          <Stat label="Warning" value={d.counts.warning} kind="warning" />
-          <Stat label="Critical" value={d.counts.critical} kind="critical" />
-          <Stat label="Upgrading" value={d.upgrading} kind="accent" />
+          <Stat label="Healthy" value={d.counts.healthy} kind="healthy" onClick={() => nav.goClusters("status", "healthy")} />
+          <Stat label="Warning" value={d.counts.warning} kind="warning" onClick={() => nav.goClusters("status", "warning")} />
+          <Stat label="Critical" value={d.counts.critical} kind="critical" onClick={() => nav.goClusters("status", "critical")} />
+          <Stat label="Upgrading" value={d.upgrading} kind="accent" onClick={() => nav.goClusters("upgrading", "true")} />
           <Stat label="Applications" value={i ? i.applications : "…"} kind="accent" onClick={() => nav.openApp(null)} />
         </div>
       </div>

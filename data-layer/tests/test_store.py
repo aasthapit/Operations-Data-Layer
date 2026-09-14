@@ -537,3 +537,14 @@ def test_update_summary_sets_fields_without_rewriting(store, manifest, documents
     assert after.ocp_version == before.ocp_version and after.last_synced == before.last_synced
     store.update_summary("no-such-cluster", timings={})       # a no-op, not an error
     assert store.get_cluster("no-such-cluster") is None
+
+
+def test_progress_is_published_per_instance_and_expires(store):
+    store.set_progress("hubA#h:1", {"running": True, "total": 10, "done": 3}, ttl_seconds=60)
+    store.set_progress("hubB#h:2", {"running": False, "total": 5, "done": 5}, ttl_seconds=60)
+    rows = {p["instance"]: p for p in store.progress_all()}
+    assert rows["hubA#h:1"]["done"] == 3 and rows["hubB#h:2"]["running"] is False
+    store.clear_progress("hubA#h:1")
+    assert [p["instance"] for p in store.progress_all()] == ["hubB#h:2"]
+    store.set_progress("hubC#h:3", {"running": True, "total": 1, "done": 0}, ttl_seconds=1)
+    assert store.r.ttl(store.keys.progress("hubC#h:3")) >= 0     # expires on its own
