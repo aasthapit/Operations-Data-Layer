@@ -147,7 +147,9 @@ In `shared` mode the collector never touches the hub's Secrets at all.
 `managed_access` can be set once under `defaults:` for every hub, and overridden per hub.
 
 In `shared` mode the cluster's API URL comes from, in order: what ACM recorded on the `ManagedCluster` (`spec.managedClusterClientConfigs`), the hub's or the defaults' `managed_api_url` template (`https://api.{name}.ocp.example.net:6443`, `{name}` being the `ManagedCluster` name), or the console URL claim (`console-openshift-console.apps.<domain>` becomes `api.<domain>:6443`).
-`make check-config` prints the URL that will be used for each cluster before any sweep runs.
+`make check-config` prints the URL that will be used for each cluster before any sweep runs, and which CA verifies it.
+
+TLS to a managed cluster is verified against the CA ACM recorded for it on the `ManagedCluster` (`managedClusterClientConfigs[].caBundle`, usually the cluster's own CA) combined with the hub's `ca_cert` when one is configured; a cluster whose API certificate is signed by a CA ACM does not know still needs `ca_cert` or `insecure_skip_tls_verify` on its hub.
 
 For a large estate, ACM-hub discovery scales better because you onboard a hub once instead of maintaining a per-cluster list.
 The direct list is the simplest way to get started and to onboard clusters that are not under ACM.

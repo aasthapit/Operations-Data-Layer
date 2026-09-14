@@ -250,3 +250,14 @@ def test_a_bundle_is_capped_and_says_so(manifest):
              "data": {"ca-bundle.crt": (pem * 2).decode()}}
     small_facts = parsers.parse_configmap(small, manifest)["summary"]["certificates"]
     assert len(small_facts) == 2 and all("truncated" not in f for f in small_facts)
+
+
+def test_managedcluster_keeps_the_client_url_and_ca_bundle():
+    from app.collector.parsers import normalize_managedcluster
+
+    mc = {"metadata": {"name": "c1"},
+          "spec": {"managedClusterClientConfigs": [{"url": "https://api.c1:6443", "caBundle": "QUJD"}]},
+          "status": {}}
+    meta = normalize_managedcluster(mc)
+    assert meta["client_url"] == "https://api.c1:6443" and meta["client_ca_bundle"] == "QUJD"
+    assert normalize_managedcluster({"metadata": {"name": "c2"}})["client_ca_bundle"] is None

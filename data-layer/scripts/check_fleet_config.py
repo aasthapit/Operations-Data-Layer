@@ -60,7 +60,10 @@ def check_hub(hub) -> bool:
     for mc in managed[:SAMPLE]:
         meta = normalize_managedcluster(mc)
         if hub.managed_access != "secret":
-            print(f"    {meta['name']}: API URL {runner.managed_api_url(hub, meta) or 'UNKNOWN'}")
+            ca = "ACM-recorded CA" if meta.get("client_ca_bundle") else (
+                f"ca_cert {hub.ca_cert}" if hub.ca_cert else "system CA bundle")
+            url = runner.managed_api_url(hub, meta) or "UNKNOWN"
+            print(f"    {meta['name']}: API URL {url} (verify: {ca})")
         connect = runner._managed_connect(hub, hb, meta)
         bundle, err, ms = _timed(connect)
         if err:

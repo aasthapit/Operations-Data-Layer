@@ -133,6 +133,11 @@ def normalize_managedcluster(mc: dict) -> dict:
         "client_url": next((c.get("url") for c in
                             (mc.get("spec") or {}).get("managedClusterClientConfigs") or []
                             if c.get("url")), None),
+        # The CA that signs that API server, as ACM recorded it (base64 PEM):
+        # a managed cluster's own CA is rarely the corporate one.
+        "client_ca_bundle": next((c.get("caBundle") for c in
+                                  (mc.get("spec") or {}).get("managedClusterClientConfigs") or []
+                                  if c.get("caBundle")), None),
         "console_url": claims.get("consoleurl.cluster.open-cluster-management.io"),
     }
 

@@ -514,3 +514,36 @@ def test_progress_aggregates_every_collector(fleet, store):
     assert agg["started_at"] == datetime(2026, 9, 14, 10, tzinfo=UTC)     # restored like every row
     assert len(agg["collectors"]) == 2
     assert {c["hubs"][0] for c in agg["collectors"] if c["hubs"]} == {"hub-far"}
+
+
+def test_shared_access_verifies_against_the_cluster_ca_recorded_by_acm(store, monkeypatch, tmp_path):
+    import base64
+
+    from app.config_loader import FleetConfig, HubConfig
+
+    corp = tmp_path / "corp-ca.pem"
+    corp.write_text("-----BEGIN CERTIFICATE-----\nCORP\n-----END CERTIFICATE-----\n")
+    cluster_pem = "-----BEGIN CERTIFICATE-----\nCLUSTER\n-----END CERTIFICATE-----\n"
+    hub = HubConfig(name="acm", api_url="https://api.acm:6443", managed_access="shared",
+                    ca_cert=str(corp), auth={"type": "password", "username": "svc", "password": "pw"})
+    monkeypatch.setattr(runner, "load_config", lambda: FleetConfig({}, [hub], []))
+    verify_by_url, ca_by_url = {}, {}
+    monkeypatch.setattr(runner, "resolve_bearer_token",
+                        lambda url, auth, verify=True: verify_by_url.__setitem__(url, verify) or "tok")
+    monkeypatch.setattr(
+        runner.kube, "bundle_from_endpoint",
+        lambda url, token, verify=True, ca_cert=None: ca_by_url.__setitem__(url, ca_cert) or "b")
+    mc = _managed("imported-3", "https://api.imported-3:6443")
+    mc["spec"]["managedClusterClientConfigs"][0]["caBundle"] = base64.b64encode(cluster_pem.encode()).decode()
+    monkeypatch.setattr(runner.kube, "list_managedclusters", lambda hb: [mc])
+
+    (target,), _ = runner._discover(store)
+    target.connect()
+    cluster_url = "https://api.imported-3:6443"
+    bundle_path = verify_by_url[cluster_url]
+    assert bundle_path == ca_by_url[cluster_url] and bundle_path.endswith(".pem")
+    assert verify_by_url["https://api.acm:6443"] == str(corp)      # the hub itself: its own ca_cert
+    content = open(bundle_path).read()
+    assert "CLUSTER" in content and "CORP" in content        # the cluster's CA plus the corporate one
+    assert runner.cluster_ca_bundle(hub, {"name": "x"}) == str(corp)   # no ACM bundle: hub ca_cert
+    assert runner.cluster_ca_bundle(HubConfig(name="h", api_url="https://h"), {"name": "x"}) is None

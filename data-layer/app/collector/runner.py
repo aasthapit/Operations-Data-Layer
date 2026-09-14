@@ -25,11 +25,14 @@ Two knobs partition the work across processes, and they compose:
 Reads never touch a cluster - the API serves whatever the last sweep wrote into
 the store (see app/store/base.py and docs/redis-keyspace.md).
 """
+import base64
 import concurrent.futures
+import hashlib
 import logging
 import math
 import os
 import socket
+import tempfile
 import threading
 import time
 import zlib
@@ -248,11 +251,12 @@ def _managed_connect(hub, hb: kube.ApiBundle, meta: dict) -> Callable[[], kube.A
             raise RuntimeError(
                 f"ManagedCluster {name}: no API URL (none recorded by ACM, no console URL claim, "
                 f"and hub {hub.name} has no managed_api_url template)")
-        verify = _tls_verify(hub.insecure_skip_tls_verify, hub.ca_cert)
+        ca = cluster_ca_bundle(hub, meta)
+        verify = _tls_verify(hub.insecure_skip_tls_verify, ca)
         token = resolve_bearer_token(url, hub.auth, verify=verify)
         if token is None:
             raise RuntimeError(f"hub {hub.name}: shared access needs auth of type token or password")
-        return kube.bundle_from_endpoint(url, token, verify=bool(verify), ca_cert=hub.ca_cert)
+        return kube.bundle_from_endpoint(url, token, verify=bool(verify), ca_cert=ca)
 
     def connect():
         if hub.managed_access == "secret":
@@ -268,6 +272,46 @@ def _managed_connect(hub, hb: kube.ApiBundle, meta: dict) -> Callable[[], kube.A
             return via_shared()
 
     return connect
+
+
+_CA_DIR = os.path.join(tempfile.gettempdir(), "odl-ca")
+
+
+def cluster_ca_bundle(hub, meta: dict) -> str | None:
+    """The CA bundle file to verify a managed cluster's API server with.
+
+    Managed clusters usually present a certificate signed by their own CA,
+    not the corporate one, so the hub's `ca_cert` alone fails with
+    "self-signed certificate in certificate chain". ACM records each
+    cluster's CA on the ManagedCluster (managedClusterClientConfigs[].caBundle);
+    that PEM, plus the hub's `ca_cert` when configured, is written once to a
+    content-addressed file under the temp dir and reused. Returns the hub's
+    `ca_cert` (possibly None) when ACM recorded no bundle.
+    """
+    raw = meta.get("client_ca_bundle")
+    if not raw:
+        return hub.ca_cert
+    try:
+        pem = base64.b64decode(raw).decode()
+    except (ValueError, UnicodeDecodeError) as e:
+        log.warning("%s: ACM caBundle is not base64 PEM (%s); using the hub's ca_cert", meta.get("name"), e)
+        return hub.ca_cert
+    parts = [pem.strip()]
+    if hub.ca_cert:
+        try:
+            with open(hub.ca_cert) as f:
+                parts.append(f.read().strip())
+        except OSError as e:
+            log.warning("hub %s: ca_cert %s unreadable (%s)", hub.name, hub.ca_cert, e)
+    bundle = "\n".join(parts) + "\n"
+    path = os.path.join(_CA_DIR, hashlib.sha1(bundle.encode()).hexdigest() + ".pem")
+    if not os.path.exists(path):
+        os.makedirs(_CA_DIR, exist_ok=True)
+        tmp = path + f".{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            f.write(bundle)
+        os.replace(tmp, path)          # atomic: a concurrent worker never sees a partial file
+    return path
 
 
 def managed_api_url(hub, meta: dict) -> str | None:
