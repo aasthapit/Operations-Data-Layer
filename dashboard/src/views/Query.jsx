@@ -7,10 +7,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useFetch } from "../hooks";
-import { DataTable, ErrorBanner, Pill, SkeletonLines, SkeletonTable, fmtTime } from "../components";
-import Chart, {
-  CHART_TYPES, categoryFields, emptyChart, inferFields, normalizeChart, resolveSpec,
-} from "../Chart";
+import { ErrorBanner, SkeletonLines, SkeletonTable, fmtTime } from "../components";
+import Chart, { inferFields, resolveSpec } from "../Chart";
+import ChartControls, { chartNoneText } from "../ChartControls";
+import ResultTable from "../ResultTable";
+import AddToDashboard from "../dashboards/AddToDashboard";
 import {
   AGGREGATES, TREND_EXAMPLES, aggAlias, aggNeedsColumn, aggNumericOnly, availableColumns, buildSql,
   canJoinClusters, clampLimit, clusterContextDefaults, clusterContextOn, decodeState,
@@ -643,6 +644,9 @@ export default function Query({ nav, route }) {
             onFlash={flash}
             chart={state.chart}
             onChart={(chart) => patch({ chart })}
+            sql={ranSql || sqlText}
+            panelTitle={askState.answer ? askState.question : state.table}
+            onAdded={(dashboardId) => nav.goDashboard(dashboardId)}
           />
         </div>
       </div>
@@ -922,42 +926,6 @@ function AskBox({ state, examples, onChange, onAsk, onExample }) {
 // --------------------------------------------------------------------------- //
 // results
 // --------------------------------------------------------------------------- //
-const STATUS_WORD = /^[a-z][a-z-]{1,19}$/;
-
-// A cluster name is always worth a link; a bare `name` only when the builder
-// knows the query is over clusters (custom SQL can call anything `name`).
-function linkKindFor(name, mode, table) {
-  if (name === "cluster_name" || name === "cluster") return "cluster";
-  if (name === "name" && mode === "builder" && table === "clusters") return "cluster";
-  if (name === "app_name" || name === "application") return "app";
-  return null;
-}
-
-function Cell({ name, value, link, nav }) {
-  if (value == null) return <span className="muted">—</span>;
-  if (typeof value === "boolean") {
-    return <span className={`mono${value ? "" : " muted"}`}>{String(value)}</span>;
-  }
-  if (typeof value === "number") return <span className="mono">{value}</span>;
-  if (typeof value === "object") {
-    const text = JSON.stringify(value);
-    return <span className="mono q-trunc" title={text}>{text}</span>;
-  }
-  const text = String(value);
-  if (link === "cluster" && text) {
-    return <span className="link mono" onClick={() => nav.openCluster(text)}>{text}</span>;
-  }
-  if (link === "app" && text) {
-    return <span className="link" onClick={() => nav.openApp(text)}>{text}</span>;
-  }
-  if (/(^|_)overall_status$/.test(name)) return <Pill status={text} />;
-  if (/(^|_)status$/.test(name) && STATUS_WORD.test(text)) {
-    return <span className={`chip ${text}`}>{text}</span>;
-  }
-  if (text.length > 48) return <span className="q-trunc" title={text}>{text}</span>;
-  return text;
-}
-
 // --------------------------------------------------------------------------- //
 // the chart above the table
 // --------------------------------------------------------------------------- //
@@ -970,143 +938,24 @@ function ChartPanel({ result, chart, onChange }) {
     () => inferFields(result.columns, result.column_types, result.rows),
     [result]);
   const spec = useMemo(() => resolveSpec(fields, result.rows, chart), [fields, result.rows, chart]);
-  const choice = normalizeChart(chart);
 
   if (!result.row_count) return null;
-
-  const numbers = fields.filter((f) => f.kind === "number");
-  const cats = categoryFields(fields);
-  const times = fields.filter((f) => f.kind === "time");
-  const line = spec?.type === "line";
-  const xOptions = line ? times : [...cats, ...times];
-  const yOptions = numbers.filter((f) => f.name !== spec?.x);
-  const seriesOptions = cats.filter((f) => f.name !== spec?.x);
-
-  const set = (fragment) => onChange({ ...choice, ...fragment });
-  // Switching the type starts the picks over, which is also the way back to
-  // "let the chart decide".
-  const setType = (type) => onChange({ ...emptyChart(), type });
-  const toggleY = (name) => {
-    if (!spec) return;
-    // one measure per line when a series column already owns the colours
-    if (line && spec.series) { set({ y: [name] }); return; }
-    const on = spec.y.includes(name);
-    const next = on ? spec.y.filter((n) => n !== name) : [...spec.y, name];
-    if (next.length) set({ y: next });
-  };
+  const none = chartNoneText(chart);
 
   return (
     <div className="chart-panel">
-      <div className="chart-controls">
-        <label className="chart-ctl">
-          <span>Chart</span>
-          <select value={choice.type} onChange={(e) => setType(e.target.value)}>
-            {CHART_TYPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-          </select>
-        </label>
-
-        {spec && (
-          <>
-            <label className="chart-ctl">
-              <span>{line ? "Time" : "Category"}</span>
-              <select value={spec.x} onChange={(e) => set({ x: e.target.value })}>
-                {xOptions.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
-              </select>
-            </label>
-
-            {line && (
-              <label className="chart-ctl">
-                <span>Series</span>
-                <select
-                  value={spec.series}
-                  onChange={(e) => set({ series: e.target.value, y: spec.y.slice(0, 1) })}
-                >
-                  <option value="">none</option>
-                  {seriesOptions.map((f) => (
-                    <option key={f.name} value={f.name}>{f.name} ({f.distinct})</option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            <div className="chart-ctl">
-              <span>{line && spec.series ? "Measure" : "Measures"}</span>
-              <div className="chart-ys">
-                {yOptions.map((f) => (
-                  <button
-                    key={f.name}
-                    type="button"
-                    className={`q-mini${spec.y.includes(f.name) ? " active" : ""}`}
-                    aria-pressed={spec.y.includes(f.name)}
-                    onClick={() => toggleY(f.name)}
-                  >
-                    {f.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {line && (
-              <label className="q-check chart-ctl-check"
-                title="Stack the series into a running total - for counts, not for scores">
-                <input type="checkbox" checked={spec.stack}
-                  onChange={(e) => set({ stack: e.target.checked })} />
-                <span>Stack</span>
-              </label>
-            )}
-          </>
-        )}
-      </div>
-
+      <ChartControls fields={fields} spec={spec} chart={chart} onChange={onChange} />
       {spec ? (
         <Chart fields={fields} rows={result.rows} spec={spec} height={280} />
-      ) : choice.type === "none" ? null : (
-        <div className="chart-none">
-          {choice.type === "auto"
-            ? "No chart for this result - it has no time axis and no single category to group by."
-            : `A ${choice.type === "line" ? "line needs a time column and a number" : "bar chart needs a category and a number"}; this result has neither.`}
-        </div>
-      )}
+      ) : none ? (
+        <div className="chart-none">{none}</div>
+      ) : null}
     </div>
   );
 }
 
-function Results({ result, running, mode, table, nav, onFlash, chart, onChart }) {
-  const rows = useMemo(
-    () => (result ? result.rows.map((values, i) => ({ i, values })) : []), [result]);
-
-  const columns = useMemo(() => {
-    if (!result) return [];
-    return result.columns.map((name, i) => {
-      // A column whose every present value is a number is a measure: right-align
-      // it and sort it as a number rather than as text.
-      let numeric = false;
-      for (const row of result.rows) {
-        const v = row[i];
-        if (v == null) continue;
-        if (typeof v !== "number") { numeric = false; break; }
-        numeric = true;
-      }
-      const link = linkKindFor(name, mode, table);
-      return {
-        key: `${i}:${name}`,
-        label: name,
-        filter: "text",
-        // A result cell never wraps: short values stay on one line and long
-        // ones are truncated with the full text in the title, so the table
-        // scrolls sideways instead of growing rows three lines tall.
-        className: "nowrap",
-        align: numeric ? "right" : undefined,
-        sortValue: (r) => r.values[i],
-        filterValue: (r) => {
-          const v = r.values[i];
-          if (v == null) return "";
-          return typeof v === "object" ? JSON.stringify(v) : String(v);
-        },
-        render: (r) => <Cell name={name} value={r.values[i]} link={link} nav={nav} />,
-      };
-    });
-  }, [result, mode, table, nav]);
+function Results({ result, running, mode, table, nav, onFlash, chart, onChart, sql, panelTitle, onAdded }) {
+  const [adding, setAdding] = useState(false);
 
   if (!result) {
     return (
@@ -1135,6 +984,9 @@ function Results({ result, running, mode, table, nav, onFlash, chart, onChart })
               {" "}{result.columns.length} columns</span>
           </h3>
           <div className="q-actions">
+            <button type="button" className="btn" disabled={!sql.trim()} onClick={() => setAdding(true)}>
+              Add to dashboard
+            </button>
             <button type="button" className="btn" disabled={!result.row_count} onClick={csv}>
               Download CSV
             </button>
@@ -1145,16 +997,24 @@ function Results({ result, running, mode, table, nav, onFlash, chart, onChart })
         </div>
       </div>
       <ChartPanel result={result} chart={chart} onChange={onChart} />
-      <DataTable
+      <ResultTable
         id="query.results"
-        columns={columns}
-        rows={rows}
-        rowKey={(r) => r.i}
+        result={result}
+        nav={nav}
+        mode={mode}
+        table={table}
         dense
         scroll
-        empty="The query ran and returned no rows."
-        searchPlaceholder="Search results"
       />
+      {adding && (
+        <AddToDashboard
+          sql={sql}
+          chart={chart}
+          defaultTitle={panelTitle}
+          onClose={() => setAdding(false)}
+          onAdded={(id) => { setAdding(false); onAdded(id); }}
+        />
+      )}
     </div>
   );
 }

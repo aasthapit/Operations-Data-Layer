@@ -174,7 +174,7 @@ fleet at a time on smaller Docker allocations.
 - **[docs/architecture.md](docs/architecture.md)** - components, collection flow, auth flow, storage model, natural-language queries, blast radius, and deployment, with diagrams.
 - **[docs/findings.md](docs/findings.md)** - notable findings: what only the OCP API can tell us versus Prometheus and logs, the scale numbers, store behaviour, and the read-only value the API can still add (ingress and egress posture, resilience, security) versus what needs an actions plane (dumps, exec).
 - **[docs/redis-keyspace.md](docs/redis-keyspace.md)** - the Redis keyspace contract: every key, its type, and who writes and reads it.
-- **[docs/nl-query.md](docs/nl-query.md)** - natural-language queries: the DuckDB snapshot, the guard, the semantic layer, the settings, and how to add a golden question.
+- **[docs/nl-query.md](docs/nl-query.md)** - natural-language queries and dashboards: the DuckDB snapshot, the guard, the semantic layer, the batch endpoint, the dashboard definition format, the settings, and how to add a golden question or a dashboard.
 - **[docs/adr/](docs/adr/)** - the architecture decision records: [Redis as the fleet state store](docs/adr/0001-redis-as-fleet-state-store.md), [natural-language queries](docs/adr/0002-natural-language-queries.md), [operating at enterprise scale](docs/adr/0003-enterprise-scale.md).
 - **[docs/ocp-api-manifest.md](docs/ocp-api-manifest.md)** - the OCP API manifest: what is collected, the scrub policy, applications vs platform namespaces, utilization from `metrics.k8s.io`, RBAC generation, adding a resource.
 - **[docs/insight-catalog.md](docs/insight-catalog.md)** - the questions a platform team asks, which are answered from the OCP API today, and the reasoning behind the "everything from the API, scrubbed" decision.
@@ -235,10 +235,12 @@ FLEET_PARALLEL=2 make fleet-up                                             # gen
   the parallel scheduled sweep.
 * `app/store/` - the keyspace contract and the Redis store: atomic per-cluster
   writes, fleet indexes, ledgers, TTL. See [docs/redis-keyspace.md](docs/redis-keyspace.md).
-* `app/query/` - natural-language queries: the DuckDB snapshot rebuilt from the
-  store (`snapshot.py`), the semantic layer the model reads (`schema.py`), the
-  guard that validates generated SQL (`guard.py`), and the generate/execute
-  loop (`llm.py`, `service.py`). See [docs/nl-query.md](docs/nl-query.md).
+* `app/query/` - natural-language queries and dashboards: the DuckDB snapshot
+  rebuilt from the store (`snapshot.py`), the semantic layer the model reads
+  (`schema.py`), the guard that validates generated SQL (`guard.py`), the
+  generate/execute loop (`llm.py`, `service.py`), and the dashboard format and
+  its variable substitution (`dashboards.py`, `params.py`).
+  See [docs/nl-query.md](docs/nl-query.md).
 * `app/api/` - the REST surface.
 
 ### Applications = namespaces
@@ -296,7 +298,11 @@ Every sweep also appends a health snapshot per cluster, powering the timeline.
 | `GET /api/query/schema` | tables, columns, semantics and current snapshot state for natural-language queries (see [docs/nl-query.md](docs/nl-query.md)) |
 | `POST /api/query/sql` | run one read-only SQL `SELECT` yourself against the fleet snapshot |
 | `POST /api/query/ask` | ask a question in English; the model writes the SQL and the answer comes back with it, the explanation and the assumptions |
+| `POST /api/query/batch` | run several SELECTs, with `{{variable}}` substitution, against one snapshot build; a failing query is an error under its own id |
 | `POST /api/query/refresh-snapshot` | rebuild the SQL snapshot from Redis now, instead of waiting for the next sweep |
+| `GET /api/dashboards` | saved and built-in query dashboards, as summary rows |
+| `GET/PUT/DELETE /api/dashboards/{id}` | read, save or remove one dashboard definition (built-ins are read-only: 409) |
+| `POST /api/dashboards/{id}/run` | run every panel of a dashboard, and its variables' option queries, in one batch against one snapshot |
 
 Interactive docs at `/docs`.
 

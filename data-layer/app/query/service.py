@@ -7,6 +7,12 @@ execution it puts the two limits that keep one query from hurting the process:
 a wall-clock timeout (DuckDB is interrupted from a timer thread) and the row
 cap the guard wrote into the statement.
 
+`run_batch` is the same execution, several times over one snapshot build: a
+dashboard asks a dozen questions about one moment, so its panels must not each
+see a different rebuild. It takes the connection once, runs every query on a
+cursor of it, reports one `generation` for all of them, and keeps going when
+one query fails - a broken panel is a broken panel, not a broken dashboard.
+
 `ask` is the self-correcting loop: generate, validate, execute; if the guard
 refuses the SQL or DuckDB cannot run it, tell the model exactly what went
 wrong and let it try once more. Two attempts is deliberate - a model that
@@ -20,6 +26,7 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -153,13 +160,17 @@ def _interrupt(cursor) -> None:
         log.debug("interrupt raced with the query finishing: %s", e)
 
 
-def run_sql(sql: str, limit: int | None = None, store: Store | None = None) -> QueryResult:
-    """Validate, then run, one SELECT against the snapshot."""
-    cap = effective_limit(limit)
-    validated = validate(sql, cap)
+def _execute(conn, validated: str, cap: int, timeout: float, generation: int) -> QueryResult:
+    """Run already-validated SQL on a cursor of `conn`, bounded by `timeout`.
 
-    cursor = manager.get(store).cursor()
-    timer = threading.Timer(query_config.timeout_seconds, _interrupt, args=(cursor,))
+    The cursor, not the connection: DuckDB connections are not thread-safe but
+    their cursors are independent, and a cursor is also what can be interrupted
+    without touching anything else running on the same snapshot. Taking the
+    connection as an argument is what lets a batch run every one of its queries
+    against a single build (see `run_batch`).
+    """
+    cursor = conn.cursor()
+    timer = threading.Timer(timeout, _interrupt, args=(cursor,))
     timer.daemon = True
     t0 = time.time()
     try:
@@ -172,8 +183,7 @@ def run_sql(sql: str, limit: int | None = None, store: Store | None = None) -> Q
         rows = [[_jsonable(v) for v in row] for row in cursor.fetchall()]
     except duckdb.InterruptException as e:
         raise QueryTimeout(
-            f"the query was still running after {query_config.timeout_seconds:g}s "
-            f"and was cancelled") from e
+            f"the query was still running after {timeout:g}s and was cancelled") from e
     except duckdb.Error as e:
         raise QueryExecutionError(str(e).strip().splitlines()[0]) from e
     finally:
@@ -182,7 +192,86 @@ def run_sql(sql: str, limit: int | None = None, store: Store | None = None) -> Q
     elapsed = int((time.time() - t0) * 1000)
     return QueryResult(sql=validated, columns=columns, column_types=column_types, rows=rows,
                        row_count=len(rows), truncated=len(rows) >= cap, elapsed_ms=elapsed,
-                       generation=manager.info().generation)
+                       generation=generation)
+
+
+def run_sql(sql: str, limit: int | None = None, store: Store | None = None) -> QueryResult:
+    """Validate, then run, one SELECT against the snapshot."""
+    cap = effective_limit(limit)
+    validated = validate(sql, cap)
+    conn = manager.get(store)
+    return _execute(conn, validated, cap, query_config.timeout_seconds,
+                    manager.info().generation)
+
+
+# --------------------------------------------------------------------------- #
+# batches
+# --------------------------------------------------------------------------- #
+# A dashboard is several questions about one moment, so the panels of a
+# dashboard must not each see a different snapshot: a batch takes the
+# connection once and runs every query on a cursor of it, and every result
+# reports the same `generation`. The wall budget is a multiple of the
+# single-query timeout rather than a sum of them, because 24 slow panels
+# should fail as a slow dashboard, not as a request that runs for four
+# minutes.
+BATCH_BUDGET_FACTOR = 3
+
+
+@dataclass
+class BatchQuery:
+    """One query of a batch. `sql` is final text - variables are already gone."""
+    id: str
+    sql: str
+    limit: int | None = None
+
+
+@dataclass
+class BatchRun:
+    # id -> QueryResult.as_dict(), or {"error": reason, "sql": the sql it tried}
+    results: dict[str, dict]
+    generation: int
+
+
+def batch_budget() -> float:
+    """The wall-clock budget one batch may spend, over all of its queries."""
+    return BATCH_BUDGET_FACTOR * query_config.timeout_seconds
+
+
+def run_batch(queries: Sequence[BatchQuery], store: Store | None = None,
+              budget: float | None = None) -> BatchRun:
+    """Run several validated-on-the-way-in queries against one snapshot build.
+
+    One failing query is not a failing batch: its id carries the reason and the
+    SQL that produced it, and the rest of the panels still render. The same is
+    true of the budget - the queries that got to run keep their answers, and
+    the ones that did not say so.
+    """
+    conn = manager.get(store)
+    generation = manager.info().generation
+    budget = batch_budget() if budget is None else budget
+    deadline = time.time() + budget
+    results: dict[str, dict] = {}
+    for query in queries:
+        cap = effective_limit(query.limit)
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            results[query.id] = {
+                "error": f"the batch spent its {budget:g}s budget before this query ran",
+                "sql": query.sql,
+            }
+            continue
+        try:
+            validated = validate(query.sql, cap)
+        except QueryRejected as e:
+            results[query.id] = {"error": e.reason, "sql": query.sql}
+            continue
+        try:
+            timeout = min(query_config.timeout_seconds, remaining)
+            results[query.id] = _execute(conn, validated, cap, timeout, generation).as_dict()
+        except QueryExecutionError as e:         # QueryTimeout is one of these
+            log.info("batch query %r failed: %s", query.id, e)
+            results[query.id] = {"error": str(e), "sql": validated}
+    return BatchRun(results=results, generation=generation)
 
 
 # --------------------------------------------------------------------------- #

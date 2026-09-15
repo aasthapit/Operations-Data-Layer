@@ -21,6 +21,7 @@ operator at 4.15.18 is buggy?"*, *"what OCP versions are we running?"*.
 | `refresh_data` | trigger a fresh collection sweep of the whole fleet |
 | `refresh_cluster(name)` | re-collect one cluster now and wait for it, without sweeping the fleet (404 unknown cluster, 409 already refreshing) |
 | `ask_fleet(question)` · `run_fleet_sql(sql, limit)` · `fleet_schema()` | ad-hoc questions answered in SQL over a snapshot of the fleet state |
+| `list_dashboards()` · `run_dashboard(id, params_json)` | saved multi-panel dashboards: several of those queries answered together against one snapshot |
 
 Nothing an agent can retrieve contains ConfigMap / Secret values, certificate material or env values - those are scrubbed before storage.
 
@@ -31,6 +32,9 @@ Every tool above `refresh_cluster` answers one known question, and is cheaper an
 Call `fleet_schema()` first to see the tables and columns, then `ask_fleet` to let the model write the SQL, or `run_fleet_sql` directly if you already know the query (to re-run or refine what `ask_fleet` produced, or when you want exact control over the joins and columns).
 Both `ask_fleet` and `run_fleet_sql` return the SQL that ran along with the rows - always show it to the user next to the answer so they can check it.
 Only a single read-only `SELECT` (or `WITH ... SELECT`) over the allowlisted tables is accepted; anything that writes, reads files or reaches outside the snapshot is rejected, and every query is row-capped and time-limited.
+
+`list_dashboards()` and `run_dashboard(id, params_json)` are the rounded version of the same thing: a dashboard is several guarded queries answered together against one snapshot, so one call gives a whole picture of a hub, an application, a cluster or the fleet's trends.
+The run returns each variable's valid options, so a wrong or missing parameter tells you what to pick instead of failing; a panel that fails does not fail the rest.
 See [docs/nl-query.md](../docs/nl-query.md) and [ADR-0002](../docs/adr/0002-natural-language-queries.md) for the full design.
 
 ## Run it locally over stdio (recommended for Claude Code)

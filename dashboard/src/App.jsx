@@ -3,6 +3,8 @@ import { api } from "./api";
 import { invalidate } from "./cache";
 import { useRoute } from "./router";
 import Overview from "./views/Overview";
+import Dashboards from "./views/Dashboards";
+import DashboardView from "./views/DashboardView";
 import Clusters from "./views/Clusters";
 import ClusterDetail from "./views/ClusterDetail";
 import Applications from "./views/Applications";
@@ -18,6 +20,7 @@ import { ErrorBoundary } from "./components";
 // [root segment, label, where the tab button goes]
 const TABS = [
   ["", "Overview", "/"],
+  ["dashboards", "Dashboards", "/dashboards"],
   ["clusters", "Clusters", "/clusters"],
   ["applications", "Applications", "/applications"],
   ["versions", "Versions", "/versions"],
@@ -37,6 +40,7 @@ const enc = encodeURIComponent;
 function titleFor([root, second, third]) {
   switch (root) {
     case undefined: return "Overview";
+    case "dashboards": return second ? `Dashboards · ${second}` : "Dashboards";
     case "clusters": return second ? `${second}${third ? ` · ${third}` : ""}` : "Clusters";
     case "applications": return second || "Applications";
     case "versions": return "Versions";
@@ -75,6 +79,7 @@ export default function App() {
     },
     goBlast: (query) => navigate("/blast", query || {}),
     goInsights: (section) => navigate(`/insights/${section || DEFAULT_INSIGHT}`),
+    goDashboard: (id, query) => navigate(id ? `/dashboards/${enc(id)}` : "/dashboards", query || {}),
     goPatchJob: (id) => navigate(`/patching/${enc(id)}`),
     back,
   }), [navigate, back]);
@@ -112,7 +117,11 @@ export default function App() {
 
       <div className="content">
         <ErrorBoundary key={route.path}>
-        {root === "clusters" && second ? (
+        {root === "dashboards" && second ? (
+          <DashboardView id={second} route={route} nav={nav} />
+        ) : root === "dashboards" ? (
+          <Dashboards route={route} nav={nav} />
+        ) : root === "clusters" && second ? (
           <ClusterDetail name={second} tab={third} nav={nav} />
         ) : root === "clusters" ? (
           <Clusters route={route} onOpen={nav.openCluster} />

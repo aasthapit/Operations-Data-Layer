@@ -1,0 +1,142 @@
+# One hub, whole: what it runs, who owns it, what is wrong, what changed.
+# The dashboard an operator opens when they are told "something is up on
+# man01paa" and have nothing else to go on.
+id: hub-overview
+title: Hub overview
+description: >-
+  Everything one ACM hub manages: its clusters, the applications on them, where
+  the pods are unhappy, what changed today and which certificates are running
+  out.
+
+variables:
+  - name: hub
+    label: Hub
+    type: select
+    required: true
+    sql: |
+      SELECT DISTINCT hub_name AS value
+      FROM clusters
+      WHERE hub_name IS NOT NULL
+      ORDER BY 1
+
+panels:
+  - id: clusters
+    title: Clusters in {{hub}}
+    description: Every managed cluster of this hub, worst first.
+    w: 7
+    h: 3
+    chart: {type: none}
+    sql: |
+      SELECT name,
+             overall_status AS status,
+             ocp_version AS version,
+             environment,
+             nodes_total AS nodes,
+             applications_total AS applications
+      FROM clusters
+      WHERE hub_name = {{hub}}
+      ORDER BY CASE overall_status
+                 WHEN 'critical' THEN 0 WHEN 'warning' THEN 1
+                 WHEN 'unknown' THEN 2 ELSE 3 END,
+               name
+
+  - id: health-status
+    title: Cluster health in {{hub}}
+    description: How the hub's clusters divide between healthy, warning and critical.
+    w: 5
+    h: 3
+    chart: {type: bars, x: status, y: [clusters]}
+    sql: |
+      SELECT overall_status AS status, count(*) AS clusters
+      FROM clusters
+      WHERE hub_name = {{hub}}
+      GROUP BY status
+      ORDER BY clusters DESC
+
+  - id: applications
+    title: Applications in {{hub}}
+    description: >-
+      Application namespaces are the applications; an unassigned namespace
+      belongs to no business application and is left out.
+    w: 7
+    h: 3
+    chart: {type: none}
+    sql: |
+      SELECT ns.app_name,
+             any_value(ns.team) AS team,
+             count(*) AS namespaces,
+             count(DISTINCT ns.cluster_name) AS clusters
+      FROM namespaces AS ns
+      JOIN clusters AS c ON c.name = ns.cluster_name
+      WHERE c.hub_name = {{hub}}
+        AND ns.ns_class = 'application'
+        AND ns.assigned
+      GROUP BY ns.app_name
+      ORDER BY namespaces DESC, ns.app_name
+
+  - id: namespaces-per-cluster
+    title: Application namespaces per cluster
+    w: 5
+    h: 3
+    chart: {type: bars, x: cluster_name, y: [namespaces]}
+    sql: |
+      SELECT ns.cluster_name, count(*) AS namespaces
+      FROM namespaces AS ns
+      JOIN clusters AS c ON c.name = ns.cluster_name
+      WHERE c.hub_name = {{hub}}
+        AND ns.ns_class = 'application'
+      GROUP BY ns.cluster_name
+      ORDER BY namespaces DESC
+
+  - id: pod-trouble
+    title: Crash loops and pod issues, last 24 hours
+    description: >-
+      The hourly series, so a day fits; each point is the worst the cluster got
+      inside that hour.
+    w: 12
+    h: 3
+    chart: {type: line, x: snapshot_at, series: cluster_name}
+    sql: |
+      SELECT hs.snapshot_at, hs.cluster_name, hs.crashloops, hs.pod_issues
+      FROM health_snapshots AS hs
+      JOIN clusters AS c ON c.name = hs.cluster_name
+      WHERE c.hub_name = {{hub}}
+        AND hs.resolution = 'hour'
+        AND hs.snapshot_at >= now() - INTERVAL 24 HOUR
+      ORDER BY hs.snapshot_at, hs.cluster_name
+
+  - id: recent-changes
+    title: What changed in {{hub}} today
+    description: The change log of the hub's clusters over the last 24 hours.
+    w: 7
+    h: 3
+    limit: 200
+    chart: {type: none}
+    sql: |
+      SELECT ch.changed_at, ch.cluster_name, ch.kind, ch.subject,
+             ch.before, ch.after, ch.message
+      FROM changes AS ch
+      JOIN clusters AS c ON c.name = ch.cluster_name
+      WHERE c.hub_name = {{hub}}
+        AND ch.changed_at >= now() - INTERVAL 24 HOUR
+      ORDER BY ch.changed_at DESC
+
+  - id: expiring-certificates
+    title: Certificates expiring within 30 days
+    description: >-
+      Certificate-bearing Secrets and ConfigMaps; only the expiry facts are
+      collected, never the material.
+    w: 5
+    h: 3
+    chart: {type: none}
+    sql: |
+      SELECT r.cluster_name, r.namespace, r.name,
+             r.expires_at,
+             date_diff('day', now(), r.expires_at) AS days_left,
+             r.status
+      FROM resources AS r
+      JOIN clusters AS c ON c.name = r.cluster_name
+      WHERE c.hub_name = {{hub}}
+        AND r.expires_at IS NOT NULL
+        AND r.expires_at <= now() + INTERVAL 30 DAY
+      ORDER BY r.expires_at

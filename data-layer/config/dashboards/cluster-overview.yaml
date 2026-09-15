@@ -1,0 +1,119 @@
+# One cluster, from the rollup down to the checks behind it. The order of the
+# panels is the order of the question: how is it, why, what is it made of, and
+# what has been done to it lately.
+id: cluster-overview
+title: Cluster overview
+description: >-
+  One cluster in full: its summary row, the health checks behind that status,
+  the platform operators, its nodes, what is using it, and how it has been
+  trending.
+
+variables:
+  - name: cluster
+    label: Cluster
+    type: select
+    required: true
+    sql: |
+      SELECT DISTINCT name AS value
+      FROM clusters
+      ORDER BY 1
+
+panels:
+  - id: summary
+    title: "{{cluster}}"
+    description: The rollup the fleet views are built from.
+    w: 12
+    h: 2
+    limit: 1
+    chart: {type: none}
+    sql: |
+      SELECT name, hub_name, environment, region, ocp_version, channel,
+             overall_status, health_score,
+             nodes_ready, nodes_total, pods_running, pods_total,
+             applications_total, pod_issues_total, certs_expiring_total,
+             last_synced
+      FROM clusters
+      WHERE name = {{cluster}}
+
+  - id: health-checks
+    title: Health checks
+    description: Failing first; these are what the status and the score are computed from.
+    w: 7
+    h: 3
+    chart: {type: none}
+    sql: |
+      SELECT name, title, status, severity, message
+      FROM health_checks
+      WHERE cluster_name = {{cluster}}
+      ORDER BY CASE status WHEN 'fail' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END, name
+
+  - id: operators
+    title: Cluster operators needing attention
+    description: >-
+      OpenShift's own operators that are degraded, mid-rollout or unavailable.
+      An empty panel means the platform is settled.
+    w: 5
+    h: 3
+    chart: {type: none}
+    sql: |
+      SELECT name, version, available, progressing, degraded, message
+      FROM cluster_operators
+      WHERE cluster_name = {{cluster}}
+        AND (degraded OR progressing OR NOT available)
+      ORDER BY degraded DESC, progressing DESC, name
+
+  - id: nodes
+    title: Nodes
+    w: 7
+    h: 3
+    chart: {type: none}
+    sql: |
+      SELECT name, ready, schedulable, kubelet_version, instance_type, zone,
+             cpu_allocatable, cpu_usage, memory_allocatable, memory_usage,
+             pods_running, pods_capacity
+      FROM nodes
+      WHERE cluster_name = {{cluster}}
+      ORDER BY name
+
+  - id: top-namespaces
+    title: Namespaces using the most CPU
+    description: >-
+      Live usage from metrics.k8s.io, so a cluster serving no metrics has an
+      empty panel rather than a wrong one.
+    w: 5
+    h: 3
+    limit: 10
+    chart: {type: bars, x: namespace, y: [cpu_cores]}
+    sql: |
+      SELECT name AS namespace, ns_class, cpu_usage AS cpu_cores, pods_running
+      FROM namespaces
+      WHERE cluster_name = {{cluster}} AND cpu_usage IS NOT NULL
+      ORDER BY cpu_usage DESC
+      LIMIT 10
+
+  - id: trend
+    title: Health and crash loops, last 7 days
+    description: Hourly buckets; the score is the value at the end of each hour.
+    w: 12
+    h: 3
+    chart: {type: line, x: snapshot_at}
+    sql: |
+      SELECT snapshot_at, health_score, crashloops, pod_issues, warning_events
+      FROM health_snapshots
+      WHERE cluster_name = {{cluster}}
+        AND resolution = 'hour'
+        AND snapshot_at >= now() - INTERVAL 7 DAY
+      ORDER BY snapshot_at
+
+  - id: changes
+    title: What changed on {{cluster}}, last 7 days
+    w: 12
+    h: 3
+    limit: 200
+    chart: {type: none}
+    sql: |
+      SELECT changed_at, kind, subject, before, after, message
+      FROM changes
+      WHERE cluster_name = {{cluster}}
+        AND changed_at >= now() - INTERVAL 7 DAY
+      ORDER BY changed_at DESC

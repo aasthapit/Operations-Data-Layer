@@ -323,16 +323,18 @@ function formatTimeFull(t, unit) {
 // --------------------------------------------------------------------------- //
 // scales
 // --------------------------------------------------------------------------- //
-function niceTicks(min, max, count) {
+// minStep is 1 for a count: "0, 0.5, 1, 1.5, 2 clusters" is not a thing, and an
+// axis that offers half a cluster is worse than one with fewer gridlines.
+function niceTicks(min, max, count, minStep = 0) {
   if (!Number.isFinite(min) || !Number.isFinite(max)) return { ticks: [0, 1], lo: 0, hi: 1 };
   if (min === max) {
     const pad = Math.abs(min) || 1;
-    return niceTicks(min - pad / 2, max + pad / 2, count);
+    return niceTicks(min - pad / 2, max + pad / 2, count, minStep);
   }
   const raw = (max - min) / Math.max(2, count);
   const mag = 10 ** Math.floor(Math.log10(raw));
   const norm = raw / mag;
-  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+  const step = Math.max(minStep, (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag);
   const lo = Math.floor(min / step) * step;
   const hi = Math.ceil(max / step) * step;
   const ticks = [];
@@ -579,6 +581,8 @@ function buildLineModel(fields, rows, spec) {
     lo = Math.min(0, ...values);
     hi = Math.max(...values, 0);
   }
+  const plotted = series.flatMap((s) => s.points.map((p) => p.v)).filter((v) => v != null);
+  const integer = plotted.every(Number.isInteger);
 
   const units = new Set(series.map((s) => s.unit));
   return {
@@ -590,6 +594,7 @@ function buildLineModel(fields, rows, spec) {
     xMax: stamps[stamps.length - 1],
     yMin: lo,
     yMax: hi,
+    integer,
     unit: units.size === 1 ? [...units][0] : "",
     xLabel: x.name,
     measureLabel: seriesField ? measures[0].name : spec.y.join(", "),
@@ -622,6 +627,7 @@ function buildBarModel(fields, rows, spec) {
     note: rows.length > BAR_CAP ? `the first ${BAR_CAP} of ${rows.length} rows` : "",
     lo: Math.min(0, ...flat),
     hi: Math.max(0, ...flat),
+    integer: flat.every(Number.isInteger),
     unit: units.size === 1 ? [...units][0] : "",
     xLabel: x.name,
   };
@@ -741,7 +747,10 @@ function barPath(x, y, w, h, r, horizontal) {
     + `h${w - 2 * radius}a${radius},${radius} 0 0 1 ${radius},${radius}v${h - radius}Z`;
 }
 
-const PAD_TOP = 10;
+// Enough headroom for the value label a vertical bar chart draws above its
+// tallest bar: at 10px the glyphs of a bar that reaches the top gridline were
+// clipped by the top of the SVG.
+const PAD_TOP = 16;
 const AXIS_H = 24;
 
 // --------------------------------------------------------------------------- //
@@ -755,7 +764,7 @@ function LineChart({ model, height }) {
   const layout = useMemo(() => {
     if (!width) return null;
     const { ticks: yTicks, lo, hi } = niceTicks(model.yMin, model.yMax,
-      Math.max(2, Math.floor(height / 48)));
+      Math.max(2, Math.floor(height / 48)), model.integer ? 1 : 0);
     const yLabels = yTicks.map((t) => formatTick(t, model.unit));
     const left = Math.min(90, Math.max(...yLabels.map((t) => textWidth(t))) + 10);
 
@@ -959,7 +968,7 @@ function BarChart({ model, height }) {
   // The value labels' width decides how much room the bars leave for them.
   const widestValue = useMemo(() => Math.max(0, ...model.items.flatMap(
     (it) => it.values.map((v, j) => (v == null ? 0 : textWidth(formatValue(v, model.series[j].unit)))))), [model]);
-  const vertical = useMemo(() => niceTicks(model.lo, model.hi, 4), [model]);
+  const vertical = useMemo(() => niceTicks(model.lo, model.hi, 4, model.integer ? 1 : 0), [model]);
 
   const left = horizontal
     ? Math.min(Math.max(56, longest + 12), Math.round((width || 600) * 0.38))
@@ -968,7 +977,7 @@ function BarChart({ model, height }) {
   const plotW = Math.max(40, (width || 600) - left - right);
 
   const scale = horizontal
-    ? niceTicks(model.lo, model.hi, Math.max(2, Math.floor(plotW / 110)))
+    ? niceTicks(model.lo, model.hi, Math.max(2, Math.floor(plotW / 110)), model.integer ? 1 : 0)
     : vertical;
   const { ticks, lo, hi } = scale;
   const zero = Math.max(lo, Math.min(0, hi));

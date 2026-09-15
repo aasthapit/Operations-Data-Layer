@@ -1,0 +1,111 @@
+# The fleet over time rather than the fleet right now: the only dashboard here
+# whose panels all come from the two history tables. `days` picks the window;
+# the resolution is chosen per panel to match what that window can show
+# (hourly holds a month, daily holds two years).
+id: fleet-trends
+title: Fleet trends
+description: >-
+  How the whole estate has been moving: crash loops per hub, warning events per
+  day, the checks that fail most, the versions that changed, and how the
+  applications are spread.
+
+variables:
+  - name: days
+    label: Days
+    type: number
+    default: 7
+
+panels:
+  - id: crashloops-per-hub
+    title: Crash loops per hub, last {{days}} days
+    description: >-
+      Hourly buckets summed across each hub's clusters; a bucket's value is the
+      worst each cluster got inside that hour.
+    w: 12
+    h: 3
+    chart: {type: line, x: hour, series: hub_name, y: [crashloops]}
+    sql: |
+      SELECT date_trunc('hour', hs.snapshot_at) AS hour,
+             c.hub_name,
+             sum(hs.crashloops) AS crashloops
+      FROM health_snapshots AS hs
+      JOIN clusters AS c ON c.name = hs.cluster_name
+      WHERE hs.resolution = 'hour'
+        AND hs.snapshot_at >= now() - INTERVAL ({{days}}) DAY
+      GROUP BY hour, c.hub_name
+      ORDER BY hour, c.hub_name
+
+  - id: warning-events-per-day
+    title: Warning events per day, last {{days}} days
+    description: >-
+      The daily series. Each cluster's value is the worst count it was holding
+      that day, capped by the manifest's events limit.
+    w: 6
+    h: 3
+    chart: {type: line, x: day, y: [warning_events]}
+    sql: |
+      SELECT hs.snapshot_at AS day,
+             sum(hs.warning_events) AS warning_events,
+             sum(hs.pod_issues) AS pod_issues
+      FROM health_snapshots AS hs
+      WHERE hs.resolution = 'day'
+        AND hs.snapshot_at >= now() - INTERVAL ({{days}}) DAY
+      GROUP BY day
+      ORDER BY day
+
+  - id: failing-checks
+    title: Checks that fail most, last {{days}} days
+    description: >-
+      Counted over hourly buckets, so a check that failed all day counts once
+      per hour. UNNEST sits in a subquery because DuckDB refuses it beside a
+      GROUP BY.
+    w: 6
+    h: 3
+    chart: {type: bars, x: check_name, y: [buckets]}
+    sql: |
+      SELECT check_name,
+             count(*) AS buckets,
+             count(DISTINCT cluster_name) AS clusters
+      FROM (
+        SELECT cluster_name,
+               unnest(CAST(checks_failed_names AS VARCHAR[])) AS check_name
+        FROM health_snapshots
+        WHERE resolution = 'hour'
+          AND snapshot_at >= now() - INTERVAL ({{days}}) DAY
+      )
+      GROUP BY check_name
+      ORDER BY buckets DESC, check_name
+
+  - id: version-changes
+    title: Version changes, last {{days}} days
+    description: One row per cluster that moved, with the versions it moved between.
+    w: 7
+    h: 3
+    limit: 200
+    chart: {type: none}
+    sql: |
+      SELECT ch.changed_at, ch.cluster_name, c.hub_name,
+             ch.before AS from_version, ch.after AS to_version, ch.message
+      FROM changes AS ch
+      JOIN clusters AS c ON c.name = ch.cluster_name
+      WHERE ch.kind = 'version'
+        AND ch.changed_at >= now() - INTERVAL ({{days}}) DAY
+      ORDER BY ch.changed_at DESC
+
+  - id: applications-per-hub
+    title: Applications and clusters per hub
+    description: >-
+      Today's shape of the estate, for reading the trends above against. A hub
+      with no assigned namespaces still appears, with zero applications.
+    w: 5
+    h: 3
+    chart: {type: bars, x: hub_name, y: [applications]}
+    sql: |
+      SELECT c.hub_name,
+             count(DISTINCT ns.app_name) AS applications,
+             count(DISTINCT c.name) AS clusters
+      FROM clusters AS c
+      LEFT JOIN namespaces AS ns
+        ON ns.cluster_name = c.name AND ns.ns_class = 'application' AND ns.assigned
+      GROUP BY c.hub_name
+      ORDER BY applications DESC, c.hub_name

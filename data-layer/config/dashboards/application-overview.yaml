@@ -1,0 +1,111 @@
+# One application across the whole estate. An application is a set of
+# namespaces that share an app_name, so every panel here starts from
+# `namespaces` and joins outwards - the same definition the REST API uses.
+id: application-overview
+title: Application overview
+description: >-
+  Where one application runs, what it runs, and what is wrong with it - across
+  every cluster and hub that hosts a namespace of it.
+
+variables:
+  - name: app
+    label: Application
+    type: select
+    required: true
+    sql: |
+      SELECT DISTINCT app_name AS value
+      FROM namespaces
+      WHERE assigned AND app_name IS NOT NULL
+      ORDER BY 1
+
+panels:
+  - id: placements
+    title: Where {{app}} runs
+    description: One row per namespace of this application.
+    w: 12
+    h: 3
+    chart: {type: none}
+    sql: |
+      SELECT ns.cluster_name,
+             c.hub_name,
+             ns.name AS namespace,
+             coalesce(ns.environment, c.environment) AS environment,
+             ns.status,
+             ns.pods_running,
+             ns.pods_total,
+             ns.pod_issues
+      FROM namespaces AS ns
+      JOIN clusters AS c ON c.name = ns.cluster_name
+      WHERE ns.app_name = {{app}} AND ns.assigned
+      ORDER BY ns.cluster_name, ns.name
+
+  - id: workloads
+    title: Workloads of {{app}}
+    description: Deployments, StatefulSets and DaemonSets, with their replica state.
+    w: 7
+    h: 3
+    limit: 200
+    chart: {type: none}
+    sql: |
+      SELECT w.cluster_name, w.namespace, w.kind, w.name,
+             w.replicas_ready, w.replicas_desired, w.status
+      FROM workloads AS w
+      JOIN namespaces AS ns
+        ON ns.cluster_name = w.cluster_name AND ns.name = w.namespace
+      WHERE ns.app_name = {{app}} AND ns.assigned
+      ORDER BY w.status, w.cluster_name, w.namespace, w.name
+
+  - id: pod-issues
+    title: Unhealthy pods of {{app}}
+    description: A pod that is healthy is not in this table, so an empty panel is good news.
+    w: 5
+    h: 3
+    chart: {type: none}
+    sql: |
+      SELECT p.cluster_name, p.namespace, p.name AS pod, p.reason,
+             p.restarts, p.containers_ready, p.message
+      FROM pod_issues AS p
+      JOIN namespaces AS ns
+        ON ns.cluster_name = p.cluster_name AND ns.name = p.namespace
+      WHERE ns.app_name = {{app}} AND ns.assigned
+      ORDER BY p.restarts DESC, p.cluster_name, p.name
+
+  - id: images
+    title: Images {{app}} runs
+    description: The blast radius of an image, seen from the application's side.
+    w: 5
+    h: 3
+    chart: {type: none}
+    sql: |
+      SELECT wi.image,
+             count(DISTINCT wi.cluster_name) AS clusters,
+             count(*) AS containers
+      FROM workload_images AS wi
+      JOIN namespaces AS ns
+        ON ns.cluster_name = wi.cluster_name AND ns.name = wi.namespace
+      WHERE ns.app_name = {{app}} AND ns.assigned
+      GROUP BY wi.image
+      ORDER BY clusters DESC, wi.image
+
+  - id: trend
+    title: Restarts and pod issues where {{app}} runs, last 24 hours
+    description: >-
+      Container restarts are a running total, so the series is the difference
+      between consecutive hours. The clusters are the ones hosting this
+      application; the counters are the whole cluster's, not the application's.
+    w: 7
+    h: 3
+    chart: {type: line, x: snapshot_at, series: cluster_name}
+    sql: |
+      SELECT hs.snapshot_at,
+             hs.cluster_name,
+             greatest(hs.restarts_total - lag(hs.restarts_total) OVER (
+                 PARTITION BY hs.cluster_name ORDER BY hs.snapshot_at), 0) AS restarts,
+             hs.pod_issues
+      FROM health_snapshots AS hs
+      WHERE hs.resolution = 'hour'
+        AND hs.snapshot_at >= now() - INTERVAL 24 HOUR
+        AND hs.cluster_name IN (
+          SELECT DISTINCT cluster_name FROM namespaces
+          WHERE app_name = {{app}} AND assigned)
+      ORDER BY hs.snapshot_at, hs.cluster_name

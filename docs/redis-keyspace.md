@@ -103,6 +103,7 @@ Two rules keep the log honest: a cluster seen for the first time records nothing
 | `odl:{fleet}:idx:ref:<kind>:<name>` | SET | `<cluster>\|<namespace>\|<wkind>\|<wname>\|<via>` workloads referencing a Secret / ConfigMap / PVC / ServiceAccount of that name. |
 | `odl:{fleet}:runs` | LIST | Newest-first JSON collection runs, trimmed to 200. |
 | `odl:{fleet}:run:last` | STRING | JSON of the last run summary (`at`, `ok`, `trigger`). |
+| `odl:{fleet}:dashboards` | HASH | dashboard id -> JSON query-dashboard definition (variables and panels; see [docs/nl-query.md](nl-query.md)). The one key here that is not collected fleet state: it holds what people wrote, so nothing in the sweep touches it, it is never expired and it is not ledgered. Built-in dashboards ship as YAML in `data-layer/config/dashboards/` and are not in Redis. |
 
 Fleet-indexed resource kinds: `resourcequotas`, `machineconfigpools`, `clusterserviceversions`, `subscriptions`, `persistentvolumeclaims`, `persistentvolumes`, `storageclasses`, `routes`, `events`, `clusterrolebindings`.
 Every other kind (`configmaps`, `secrets`, `services`, `ingresses`, `networkpolicies`, `cronjobs`, `horizontalpodautoscalers`) is large, rarely queried fleet-wide, and is only read from the per-cluster `resources` section; a fleet-wide inventory query over such a kind iterates clusters and stops at the requested limit.

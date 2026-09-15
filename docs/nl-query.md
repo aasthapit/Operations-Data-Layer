@@ -147,6 +147,7 @@ They are fleet data, which means they are untrusted text: they are labelled as d
 |---|---|
 | `GET /api/query/schema` | Tables, columns, notes, examples, snapshot row counts and limits |
 | `POST /api/query/sql` | Run one SELECT yourself. Body `{sql, limit?}`. 400 if the guard refuses it or DuckDB errors, 504 on timeout |
+| `POST /api/query/batch` | Run up to 24 SELECTs, with variables, against one snapshot build. Body `{queries: [{id, sql, limit?}], params}`. One failing query is an error under its own id, not a failed request |
 | `POST /api/query/ask` | Ask a question. Body `{question, limit?}`. Returns the SQL, the explanation, the assumptions, the confidence and the rows. 503 without model credentials, 422 when both attempts fail (the body carries each attempt's SQL and error) |
 | `POST /api/query/refresh-snapshot` | Rebuild the snapshot now |
 
@@ -154,8 +155,170 @@ Both query responses carry `columns` and `column_types` alongside the rows.
 The types are DuckDB's own names (`TIMESTAMP`, `BIGINT`, `DOUBLE`, `VARCHAR`, `BOOLEAN`), and they are what lets a caller pick a rendering: a TIMESTAMP first column with a numeric second one is a time series, two VARCHARs are a table.
 Nothing in the values says which, because JSON has no types and a timestamp arrives as a string.
 
-The MCP server exposes the same three as `ask_fleet`, `run_fleet_sql` and `fleet_schema`.
+The MCP server exposes the same three as `ask_fleet`, `run_fleet_sql` and `fleet_schema`, and the dashboards below as `list_dashboards` and `run_dashboard`.
 Their descriptions tell an agent to prefer the purpose-built tools for questions those already answer, to use SQL for ad-hoc joins and aggregations, and to always show the user the SQL.
+
+## Dashboards
+
+A question is one query; an answer people act on is usually several.
+"How is man01paa?" is the clusters it manages, the applications on them, where the pods are unhappy, what changed today and which certificates run out this month - five queries about one moment, which is exactly what a dashboard is here.
+
+A dashboard is a JSON document and nothing else: variables, and panels that are a title, a SQL query, a size on a 12-column grid and an opaque `chart` object the front end interprets.
+There is no panel type registry and no chart library on this side of the wire.
+Definitions are stored server-side (`odl:{fleet}:dashboards`), so a dashboard is something a team has rather than something one browser remembers.
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/dashboards` | Summary rows: id, title, description, builtin, panel count, variable names, updated_at. Built-ins first, then saved, each sorted by title |
+| `GET /api/dashboards/{id}` | The full definition |
+| `PUT /api/dashboards/{id}` | Create or replace a saved dashboard. 400 with the field path when it does not validate, 409 on a built-in id |
+| `DELETE /api/dashboards/{id}` | Remove a saved dashboard. 404 when there is none, 409 on a built-in id |
+| `POST /api/dashboards/{id}/run` | Body `{params}`. Runs the option queries and every panel in one batch and returns the definition, the effective params, the options per variable, a result or an error per panel, and the generation that answered |
+
+### The definition
+
+```json
+{
+  "id": "hub-overview",
+  "title": "Hub overview",
+  "description": "Everything one ACM hub manages.",
+  "builtin": true,
+  "variables": [
+    {"name": "hub", "label": "Hub", "type": "select", "multi": false, "required": true,
+     "default": null,
+     "sql": "SELECT DISTINCT hub_name AS value FROM clusters ORDER BY 1"}
+  ],
+  "panels": [
+    {"id": "clusters", "title": "Clusters in {{hub}}", "description": "...",
+     "sql": "SELECT name, overall_status FROM clusters WHERE hub_name = {{hub}} ORDER BY name",
+     "chart": {"type": "auto"}, "w": 6, "h": 2, "limit": 500}
+  ],
+  "updated_at": "2026-09-14T09:12:44.120391+00:00",
+  "updated_by": null
+}
+```
+
+| Field | Rule |
+|---|---|
+| `id` | A slug: lowercase letters, digits, `-` and `_`. The id in the URL wins over the id in the body, so a copy-pasted definition saved under a new id becomes that dashboard |
+| `variables[].name` | A placeholder name (`[A-Za-z_][A-Za-z0-9_]*`), unique in the dashboard |
+| `variables[].type` | `select` (needs `sql`), `text` or `number` (must not have `sql`) |
+| `variables[].sql` | A query returning a `value` column and an optional `label`; it feeds the selector. It may not itself use variables (see below) |
+| `variables[].multi` | `true` makes the value a list, which substitutes as `('a', 'b')` for an `IN` |
+| `variables[].default` | Used when no value is sent. `required` is a hint to the UI, not a reason to refuse a run |
+| `panels[].id` | A slug, unique in the dashboard; it is what keys the results |
+| `panels[].sql` | Non-empty, and every `{{name}}` in it must be a declared variable |
+| `panels[].title` | Interpolated the same way, so a panel can say which hub it is about |
+| `panels[].chart` | Opaque to the API: stored and handed back untouched. Defaults to `{"type": "auto"}`. The front end reads `type` (`auto`, `line`, `bars`, `none`), `x`, `y` (a list of columns), `series` and `stack`; `table`, `bar` and a string `y` are accepted as aliases |
+| `panels[].w` / `h` | 1-12 grid columns, 1-6 grid rows |
+| `panels[].limit` | 1 to `ODL_QUERY_MAX_ROWS`; the guard writes it into the query |
+| panels | At most 40 |
+
+Validation failures are `400`s carrying a list of `{field, error}`, where `field` is the path of the thing that is wrong (`panels.2.sql`).
+That is a message an editor can put next to the box the user is typing in, which "invalid dashboard" is not.
+Unknown fields are refused rather than silently dropped, so `panel:` instead of `panels:` is a message rather than an empty dashboard.
+
+### Variables
+
+Placeholders are `{{name}}`, and they are replaced by **SQL literals** before the guard sees the statement (`app/query/params.py`):
+
+| Value | Becomes |
+|---|---|
+| `"man01paa"` | `'man01paa'` (inner quotes doubled) |
+| `7`, `7.5` | `7`, `7.5` |
+| `true` / `false` | `TRUE` / `FALSE` |
+| `null` | `NULL` |
+| `["a", "b"]` | `('a', 'b')` |
+| `[]` | `(NULL)` - matches nothing, which is what an empty selection means |
+
+There is no `{{name:raw}}` and there never will be one.
+A hole that can carry SQL is an injection point, and the guard exists precisely so that no such point is reachable: substitution happens first, so `validate` checks the text that will actually run.
+A value with a quote in it stays one string - `hub-east' OR '1'='1` is a hub nobody has, not a predicate - and anything shaped like a placeholder that is not one (`{{ hub }}`, `{{hub:raw}}`) is refused where it is written.
+
+A placeholder with no value is a `400` naming it on `/api/query/batch`.
+On a dashboard run it is not an error at all: the UI has to draw the selector before anyone can pick a hub, so the options come back and only the panels that reference the missing variable are returned as `{"error": "variable hub is not set"}`.
+
+A variable's own options query may not use variables.
+Options and panels are resolved in one batch against one snapshot, so a selector chained to another selector cannot be filled in the same pass; refusing it when the dashboard is saved is better than resolving nothing when it is run.
+
+Panel titles are interpolated by the client from the `params` the run returns - they are plain text, so nothing needs escaping there, and the backend's job is only to guarantee that every name in a title is a declared variable.
+
+### Running one
+
+```
+POST /api/dashboards/hub-overview/run   {"params": {"hub": "man01paa"}}
+```
+
+```json
+{"dashboard": {...}, "params": {"hub": "man01paa"},
+ "variables": {"hub": {"options": [{"value": "man01paa", "label": "man01paa"}]}},
+ "results": {"clusters": {"sql": "...", "columns": [...], "column_types": [...], "rows": [...],
+                          "row_count": 12, "truncated": false, "elapsed_ms": 3, "generation": 7},
+             "applications": {"error": "...", "sql": "..."}},
+ "generation": 7, "snapshot": {...}}
+```
+
+The option queries share the batch with the panels, so the selector a user sees and the numbers beside it describe the same moment.
+Every panel reports the `generation` that answered it, and it is the same one for all of them: a dashboard whose panels straddled a rebuild would quietly disagree with itself.
+
+`POST /api/query/batch` is the same machinery without a stored definition - it is what a front end uses for a page it assembles itself:
+
+```json
+{"queries": [{"id": "clusters", "sql": "SELECT ... WHERE hub_name = {{hub}}", "limit": 500},
+             {"id": "apps", "sql": "SELECT ..."}],
+ "params": {"hub": "man01paa", "days": 7}}
+```
+
+Both share the same rules: up to 24 queries per batch request (a dashboard may have 40 panels), each query validated on its own and capped by its own `limit`, each bounded by `ODL_QUERY_TIMEOUT_SECONDS`, and the whole batch bounded by three times that.
+A query that fails - the guard refused it, DuckDB could not run it, or the batch ran out of budget before it started - comes back as `{"error": ..., "sql": ...}` under its own id while the rest still answer.
+A broken panel is a broken panel, not a broken page.
+
+### The built-ins
+
+Four dashboards ship with the data layer, as YAML in `data-layer/config/dashboards/`.
+They are read-only: they are part of the image and an upgrade replaces them, so a change saved over one would be lost - `PUT` and `DELETE` on a built-in id answer `409 clone it under another id`.
+
+| Dashboard | Variables | Panels |
+|---|---|---|
+| `hub-overview` | `hub` | Clusters, health distribution, applications, namespaces per cluster, crash loops and pod issues over 24h, today's changes, certificates expiring within 30 days |
+| `application-overview` | `app` | Placements, workloads, unhealthy pods, images, restarts and pod issues over 24h |
+| `cluster-overview` | `cluster` | Summary row, health checks, operators needing attention, nodes, top namespaces by CPU, health and crash loops over 7 days, changes over 7 days |
+| `fleet-trends` | `days` (number, default 7) | Crash loops per hub per hour, warning events per day, the checks that fail most, version changes, applications and clusters per hub |
+
+Every panel of every built-in is executed against the two-cluster fixture in `tests/test_dashboards.py`, with the variables filled from the dashboards' own option queries.
+A column renamed in `app/query/schema.py` therefore breaks a test rather than a dashboard in production.
+
+### Adding one
+
+Write a YAML file in `data-layer/config/dashboards/` (built-in, shipped) or `PUT` a JSON definition (saved, editable):
+
+```yaml
+id: storage-pressure
+title: Storage pressure
+description: PVCs that are not bound, by cluster.
+variables:
+  - name: env
+    label: Environment
+    type: select
+    sql: |
+      SELECT DISTINCT environment AS value FROM clusters WHERE environment IS NOT NULL ORDER BY 1
+panels:
+  - id: pending-pvcs
+    title: Pending PVCs in {{env}}
+    w: 12
+    h: 3
+    chart: {type: none}
+    sql: |
+      SELECT r.cluster_name, r.namespace, r.name, r.status
+      FROM resources AS r
+      JOIN clusters AS c ON c.name = r.cluster_name
+      WHERE r.key = 'persistentvolumeclaims' AND r.status <> 'bound' AND c.environment = {{env}}
+      ORDER BY r.cluster_name, r.namespace
+```
+
+The file is validated at startup with the same models the API uses, so a built-in that cannot run is a startup error naming the file, not a 500 at somebody's first request.
+`ODL_DASHBOARDS_DIR` points the loader somewhere else.
+The SQL is subject to the guard like every other query here, which is the answer to "what can a dashboard do?": exactly what `/api/query/sql` can do, and nothing more.
 
 ## Adding a golden question
 

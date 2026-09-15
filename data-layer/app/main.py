@@ -20,6 +20,7 @@ from .api import (
     applications,
     blast_radius,
     clusters,
+    dashboards,
     health,
     insights,
     manifest,
@@ -29,6 +30,7 @@ from .api import (
 )
 from .collector.runner import run_collection, validate_hub_selection
 from .manifest import get_manifest
+from .query.dashboards import builtin_dashboards
 from .scheduler import start_scheduler, stop_scheduler
 from .settings import settings
 from .store import get_store
@@ -95,6 +97,9 @@ def _warm_query_snapshot() -> None:
 async def lifespan(app: FastAPI):
     m = get_manifest()      # fail fast on a bad manifest
     log.info("manifest %s: %d resources enabled", m.source, len(m.enabled_keys()))
+    # Built-in dashboards are part of the image: a broken one is a startup
+    # error naming the file, not a 500 at somebody's first request.
+    log.info("%d built-in dashboards", len(builtin_dashboards()))
     _wait_for_redis()
     if not settings.collector_enabled:
         log.info("collector disabled (COLLECTOR_ENABLED=false): serving Redis read-only")
@@ -140,6 +145,7 @@ app.include_router(metrics.router)
 app.include_router(manifest.router)
 app.include_router(admin.router)
 app.include_router(query.router)
+app.include_router(dashboards.router)
 
 
 @app.get("/healthz", tags=["meta"])

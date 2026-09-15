@@ -452,6 +452,12 @@ class Keys:
     def cache(self, name: str) -> str:
         return f"{self._fleet}:cache:{name}"
 
+    @property
+    def dashboards(self) -> str:
+        """Saved query dashboards, id -> JSON definition. Fleet-wide and
+        permanent: they are what people wrote, not what the collector found."""
+        return f"{self._fleet}:dashboards"
+
     def progress_pattern(self) -> str:
         return f"{self._fleet}:progress:*"
 
@@ -717,6 +723,26 @@ class RedisStore(Store):
 
     def cache_set(self, key: str, value: dict, ttl_seconds: int) -> None:
         self.r.set(self.keys.cache(key), _pack(value), ex=max(1, int(ttl_seconds)))
+
+    # ------------------------------------------------------------- dashboards
+    # One HASH for the fleet, id -> definition. A dashboard is small and there
+    # are tens of them at most, so the whole list is one HGETALL and there is
+    # no index to keep in step; nothing here participates in the sweep's
+    # ledger, because a definition is not a fleet contribution that can vanish
+    # when a cluster does.
+    def dashboards(self) -> list[dict]:
+        return [d for d in (_unpack(raw) for raw in self.r.hvals(self.keys.dashboards))
+                if isinstance(d, dict)]
+
+    def dashboard_get(self, dashboard_id: str) -> dict | None:
+        found = _unpack(self.r.hget(self.keys.dashboards, dashboard_id))
+        return found if isinstance(found, dict) else None
+
+    def dashboard_set(self, dashboard_id: str, definition: dict) -> None:
+        self.r.hset(self.keys.dashboards, dashboard_id, _pack(definition))
+
+    def dashboard_delete(self, dashboard_id: str) -> bool:
+        return bool(self.r.hdel(self.keys.dashboards, dashboard_id))
 
     def prune_vanished(self, seen: dict[str, set[str]]) -> list[str]:
         names = self.cluster_names()

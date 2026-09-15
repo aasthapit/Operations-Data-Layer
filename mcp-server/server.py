@@ -7,9 +7,11 @@ natural language. Everything the data layer knows was read from the clusters'
 own API servers; ConfigMap / Secret values, certificates and env values are
 never collected, so nothing here can leak them.
 
-Most tools answer one known question. The last three (`ask_fleet`,
-`run_fleet_sql`, `fleet_schema`) answer the questions nobody anticipated, by
-running SQL over a snapshot of the same data - see docs/nl-query.md.
+Most tools answer one known question. `ask_fleet`, `run_fleet_sql` and
+`fleet_schema` answer the questions nobody anticipated, by running SQL over a
+snapshot of the same data, and `list_dashboards` / `run_dashboard` answer the
+rounded ones - a dashboard is several of those queries answered together
+against one snapshot. See docs/nl-query.md.
 
 Transport is selectable via MCP_TRANSPORT (stdio | sse | streamable-http).
 stdio is the default and is what Claude Code / Claude Desktop use locally.
@@ -18,6 +20,7 @@ Config:
   MCP_API_BASE   base URL of the data layer API (default http://localhost:18000)
   MCP_TRANSPORT  stdio (default) | sse | streamable-http
 """
+import json
 import os
 
 import httpx
@@ -472,6 +475,43 @@ def fleet_schema() -> dict:
     summary column), worked example queries, and what the current snapshot
     holds (row counts, when it was built). Read this before writing SQL."""
     return _get("/api/query/schema")
+
+
+# --------------------------------------------------------------------------- #
+# dashboards (saved multi-panel queries)
+# --------------------------------------------------------------------------- #
+@mcp.tool()
+def list_dashboards() -> dict:
+    """The saved query dashboards: id, title, description, how many panels and
+    which variables each one takes. A dashboard is several guarded SQL queries
+    answered together against one snapshot, so `run_dashboard` is the cheapest
+    way to get a rounded picture of a hub, an application, a cluster or the
+    fleet's trends - one call instead of a dozen. Built-in dashboards ship with
+    the data layer; the rest were written by people."""
+    return _get("/api/dashboards")
+
+
+@mcp.tool()
+def run_dashboard(id: str, params_json: str = "") -> dict:
+    """Run one dashboard and return every panel's rows. `id` comes from
+    list_dashboards; `params_json` is a JSON object of its variables, e.g.
+    '{"hub": "man01paa"}' or '{"days": 30}' (omit it to use the defaults).
+    Returns the definition, the effective parameters, the options for each
+    variable (so you can see the valid values and re-run with one), and a
+    result or an error per panel - a panel that fails does not fail the rest.
+    A variable with no value is not an error: its panels come back saying it is
+    not set, and the options tell you what to pick. Every panel carries the SQL
+    that produced it; show it with the numbers."""
+    if params_json.strip():
+        try:
+            params = json.loads(params_json)
+        except ValueError as e:
+            return {"error": f"params_json is not valid JSON: {e}"}
+        if not isinstance(params, dict):
+            return {"error": "params_json must be a JSON object of variable values"}
+    else:
+        params = {}
+    return _post_json(f"/api/dashboards/{id}/run", {"params": params})
 
 
 @mcp.tool()

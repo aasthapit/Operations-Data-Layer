@@ -125,6 +125,26 @@ class Store(ABC):
     @abstractmethod
     def cache_set(self, key: str, value: dict, ttl_seconds: int) -> None: ...
 
+    # ------------------------------------------------------------- dashboards
+    # The one thing in the store that is not collected fleet state: query
+    # dashboards are definitions people write and share, so they are keyed by
+    # id, never expire, and survive every sweep (see app/query/dashboards.py).
+    @abstractmethod
+    def dashboards(self) -> list[dict]:
+        """Every saved dashboard definition. Built-ins are not in the store."""
+
+    @abstractmethod
+    def dashboard_get(self, dashboard_id: str) -> dict | None:
+        """One saved definition, or None."""
+
+    @abstractmethod
+    def dashboard_set(self, dashboard_id: str, definition: dict) -> None:
+        """Create or replace one saved definition."""
+
+    @abstractmethod
+    def dashboard_delete(self, dashboard_id: str) -> bool:
+        """Remove one; True when it was there."""
+
     # --------------------------------------------------------------- progress
     @abstractmethod
     def set_progress(self, instance: str, progress: dict, ttl_seconds: int) -> None:
