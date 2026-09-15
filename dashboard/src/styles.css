@@ -572,6 +572,9 @@ td.nowrap, th.nowrap { white-space: nowrap; }
 
 .db-panel-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 4px 4px; }
 .db-panel.is-chart .db-panel-body { overflow: hidden; padding: 10px 14px 6px; }
+/* A panel the agent is in the middle of rewriting: the rows below are still the
+   old answer, so the card steps back rather than pretending to be current. */
+.db-panel.is-busy { opacity: 0.5; transition: opacity 120ms ease-out; }
 .db-panel .dt-wrap { --dt-top: 0px; }
 .db-panel .dt-bar { padding: 0 10px 8px; }
 .db-panel .dt .dt-head th { top: 0; }
@@ -668,4 +671,117 @@ td.nowrap, th.nowrap { white-space: nowrap; }
 .db-vars select[multiple] option:checked {
   background: var(--accent-dim) linear-gradient(0deg, var(--accent-dim), var(--accent-dim));
   color: #fff;
+}
+
+/* ----- generate (the agent's dashboard) ----------------------------------
+   A conversation that stays put on the left and the dashboard it is building
+   filling the rest, which below the breakpoint becomes the conversation first
+   and the grid under it. Everything on the right is the dashboards page's own
+   CSS - .db-grid, .db-panel, .db-vars - because a generated dashboard and a
+   saved one are the same thing; only the pieces that are particular to a run in
+   progress are named here. */
+.gen-layout { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 16px; align-items: start; }
+.gen-board { display: grid; gap: 16px; min-width: 0; }
+.gen-board-head { min-width: 0; }
+
+.gen-chat {
+  padding: 0; display: flex; flex-direction: column; overflow: hidden;
+  position: sticky; top: calc(var(--topbar-h) + 24px);
+  height: calc(100vh - var(--topbar-h) - 48px); min-height: 420px;
+}
+.gen-thread {
+  flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain;
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+}
+
+@media (max-width: 1080px) {
+  .gen-layout { grid-template-columns: minmax(0, 1fr); }
+  .gen-chat { position: static; height: auto; max-height: none; }
+  .gen-thread { max-height: 460px; }
+}
+
+/* ----- what was said ----- */
+.gen-said {
+  align-self: flex-end; max-width: 92%; margin: 2px 0;
+  background: var(--accent-dim); color: #fff; border-radius: 10px 10px 3px 10px;
+  padding: 7px 11px; font-size: 13px;
+}
+.gen-text { margin: 2px 0; font-size: 13px; color: var(--text); white-space: pre-wrap; }
+.gen-note { margin: 2px 0; font-size: 12.5px; color: var(--text-faint); }
+.gen-note.is-error { color: var(--critical); }
+.gen-cost {
+  margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border-soft);
+  color: var(--text-faint); font-size: 11.5px; font-variant-numeric: tabular-nums;
+}
+.gen-working { color: var(--text-dim); font-size: 12.5px; animation: gen-pulse 1.4s ease-in-out infinite; }
+
+/* ----- what was done -----
+   One tool call. The arguments are not shown: the SQL is on the panel it made,
+   and this line is meant to read as an action rather than as a function call. */
+.gen-act { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.gen-act-mark {
+  flex: none; width: 15px; height: 15px; margin-top: 1px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--bg-elev-2); color: var(--text-faint);
+  font-size: 9.5px; font-weight: 700; line-height: 13px; text-align: center;
+}
+.gen-act.is-streaming .gen-act-mark, .gen-act.is-running .gen-act-mark {
+  border-color: var(--accent); animation: gen-pulse 1.2s ease-in-out infinite;
+}
+.gen-act.is-done .gen-act-mark { border-color: var(--healthy); color: var(--healthy); }
+.gen-act.is-error .gen-act-mark { border-color: var(--critical); color: var(--critical); }
+.gen-act-body { min-width: 0; flex: 1; }
+.gen-act-label { font-size: 12.5px; color: var(--text-dim); }
+.gen-act.is-done .gen-act-label { color: var(--text); }
+.gen-act-meta {
+  color: var(--text-faint); font-size: 11.5px; margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The guard's refusals name every table it knows, which is three lines the user
+   does not need until they do: clamped here, whole in the tooltip. */
+.gen-act-error {
+  color: var(--critical); font-size: 11.5px; margin-top: 2px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* ----- the empty state ----- */
+.gen-intro { color: var(--text-dim); font-size: 13px; }
+.gen-intro p { margin: 0 0 12px; }
+.gen-intro .q-title { margin-bottom: 8px; }
+.gen-example {
+  display: block; width: 100%; text-align: left; margin-bottom: 6px;
+  background: none; border: 1px dashed var(--border); color: var(--text-dim);
+  border-radius: 7px; padding: 7px 10px; font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.gen-example:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.gen-example:disabled { opacity: 0.45; cursor: default; }
+
+/* ----- the composer ----- */
+.gen-composer {
+  flex: none; display: flex; align-items: flex-end; gap: 8px;
+  padding: 10px 12px; border-top: 1px solid var(--border); background: var(--bg-elev-2);
+}
+.gen-composer textarea {
+  flex: 1; min-width: 0; resize: none; overflow-y: auto; max-height: 160px;
+  padding: 8px 10px; line-height: 1.45; font-size: 13px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+}
+.gen-composer .btn { flex: none; }
+
+/* ----- a panel that is still being written ----- */
+.db-panel.gen-pending { border: 1px dashed var(--border); background: var(--bg-elev); }
+.gen-pending .db-panel-head { border-bottom-style: dashed; }
+.gen-pending .db-panel-title { color: var(--text-dim); font-style: italic; }
+.gen-pending .db-panel-meta { animation: gen-pulse 1.4s ease-in-out infinite; }
+
+/* ----- a fact about the server, said calmly ----- */
+.gen-banner {
+  padding: 12px 15px; border-radius: 8px; background: var(--bg-elev);
+  border: 1px solid var(--border); color: var(--text-dim); font-size: 13px;
+}
+.gen-banner strong { color: var(--text); }
+.gen-banner .q-desc { margin-top: 8px; }
+
+@keyframes gen-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .gen-working, .gen-act-mark, .gen-pending .db-panel-meta { animation: none; }
 }

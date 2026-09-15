@@ -360,6 +360,7 @@ export default function Query({ nav, route }) {
         onChange={(question) => setAskState((a) => ({ ...a, question }))}
         onAsk={askQuestion}
         onExample={loadExample}
+        onBuild={() => route.navigate("/generate", { q: askState.question.trim() })}
       />
 
       <div className="q-layout">
@@ -846,7 +847,7 @@ function FilterRow({ filter, columns, onChange, onRemove }) {
 // --------------------------------------------------------------------------- //
 // ask
 // --------------------------------------------------------------------------- //
-function AskBox({ state, examples, onChange, onAsk, onExample }) {
+function AskBox({ state, examples, onChange, onAsk, onExample, onBuild }) {
   const disabled = !!state.unavailable || state.busy;
   const answer = state.answer;
   return (
@@ -874,6 +875,15 @@ function AskBox({ state, examples, onChange, onAsk, onExample }) {
           {state.busy ? "Asking…" : "Ask"}
         </button>
       </div>
+
+      {/* Some questions are a dashboard rather than a row - the same words, and
+          the agent composes several panels out of them. */}
+      {state.question.trim() && (
+        <div className="q-desc">
+          <span className="link" onClick={onBuild}>Build a dashboard from this question</span>
+          {" "}- several panels instead of one answer.
+        </div>
+      )}
 
       {state.unavailable && (
         <div className="q-desc">

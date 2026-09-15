@@ -4,6 +4,7 @@
 // panel). All three close on Escape and on a click outside, and all three are
 // built from the same tokens as every card in the app.
 import { useEffect, useRef, useState } from "react";
+import { isSlug, slugify } from "./model";
 
 // Escape closes; a click outside closes; focus moves in when it opens and back
 // to where it was when it leaves.
@@ -102,6 +103,43 @@ export function Drawer({ title, children, footer, onClose }) {
         {footer && <div className="db-drawer-foot">{footer}</div>}
       </div>
     </div>
+  );
+}
+
+// Naming a dashboard is naming a URL: the id it is saved under is the link it
+// will be shared as for the rest of its life. Cloning one, saving one under a
+// new name and saving what the agent just generated all ask the same question,
+// so they ask it with the same dialog.
+export function IdDialog({
+  title, intro, defaultId, busy, error, submitLabel = "Continue", onCancel, onSubmit,
+}) {
+  const [value, setValue] = useState(defaultId);
+  const id = slugify(value);
+  const ok = isSlug(id);
+  return (
+    <Modal
+      title={title}
+      onClose={onCancel}
+      footer={(
+        <>
+          <button type="button" className="btn" onClick={onCancel}>Cancel</button>
+          <button type="button" className="btn primary" disabled={!ok || busy}
+            onClick={() => onSubmit(id)}>
+            {busy ? "Saving…" : submitLabel}
+          </button>
+        </>
+      )}
+    >
+      <p className="q-desc" style={{ marginTop: 0 }}>{intro}</p>
+      <label className="db-field wide">
+        <span className="db-field-label">Id</span>
+        <input type="text" className="mono" value={value} autoFocus
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && ok) onSubmit(id); }} />
+        {error ? <span className="db-field-error">{error}</span>
+          : <span className="db-field-hint">The URL will be /dashboards/{id || "…"}</span>}
+      </label>
+    </Modal>
   );
 }
 

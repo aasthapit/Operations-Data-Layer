@@ -5,6 +5,7 @@ import { useRoute } from "./router";
 import Overview from "./views/Overview";
 import Dashboards from "./views/Dashboards";
 import DashboardView from "./views/DashboardView";
+import Generate from "./views/Generate";
 import Clusters from "./views/Clusters";
 import ClusterDetail from "./views/ClusterDetail";
 import Applications from "./views/Applications";
@@ -21,6 +22,7 @@ import { ErrorBoundary } from "./components";
 const TABS = [
   ["", "Overview", "/"],
   ["dashboards", "Dashboards", "/dashboards"],
+  ["generate", "Generate", "/generate"],
   ["clusters", "Clusters", "/clusters"],
   ["applications", "Applications", "/applications"],
   ["versions", "Versions", "/versions"],
@@ -41,6 +43,7 @@ function titleFor([root, second, third]) {
   switch (root) {
     case undefined: return "Overview";
     case "dashboards": return second ? `Dashboards · ${second}` : "Dashboards";
+    case "generate": return "Generate";
     case "clusters": return second ? `${second}${third ? ` · ${third}` : ""}` : "Clusters";
     case "applications": return second || "Applications";
     case "versions": return "Versions";
@@ -121,6 +124,8 @@ export default function App() {
           <DashboardView id={second} route={route} nav={nav} />
         ) : root === "dashboards" ? (
           <Dashboards route={route} nav={nav} />
+        ) : root === "generate" ? (
+          <Generate route={route} nav={nav} />
         ) : root === "clusters" && second ? (
           <ClusterDetail name={second} tab={third} nav={nav} />
         ) : root === "clusters" ? (

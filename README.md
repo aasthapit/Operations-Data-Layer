@@ -241,6 +241,11 @@ FLEET_PARALLEL=2 make fleet-up                                             # gen
   generate/execute loop (`llm.py`, `service.py`), and the dashboard format and
   its variable substitution (`dashboards.py`, `params.py`).
   See [docs/nl-query.md](docs/nl-query.md).
+* `app/agent/` - generative dashboards (experimental): a tool-using loop that
+  composes a dashboard definition from a question and streams every step as
+  AG-UI events (`run.py`, `events.py`), the tools that validate each mutation
+  before it becomes state (`tools.py`, `state.py`) and the model adapter behind
+  an injectable seam (`model.py`). See [ADR-0004](docs/adr/0004-generative-ui.md).
 * `app/api/` - the REST surface.
 
 ### Applications = namespaces
@@ -303,6 +308,8 @@ Every sweep also appends a health snapshot per cluster, powering the timeline.
 | `GET /api/dashboards` | saved and built-in query dashboards, as summary rows |
 | `GET/PUT/DELETE /api/dashboards/{id}` | read, save or remove one dashboard definition (built-ins are read-only: 409) |
 | `POST /api/dashboards/{id}/run` | run every panel of a dashboard, and its variables' option queries, in one batch against one snapshot |
+| `GET /api/agent` | whether a dashboard can be generated from a question right now, with which model and under which limits |
+| `POST /api/agent/run` | build or refine a dashboard from a question; an AG-UI event stream (`text/event-stream`) of the model's narration, its tool calls and the state as it changes (experimental, see [docs/nl-query.md](docs/nl-query.md)) |
 
 Interactive docs at `/docs`.
 

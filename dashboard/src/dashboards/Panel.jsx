@@ -22,7 +22,7 @@ const article = (word) => (/^[aeiou]/i.test(word) ? "an" : "a");
 const FILTER_MIN_H = 3;
 
 export default function Panel({
-  panel, definition, result, params, loading, nav, editing,
+  panel, definition, result, params, loading, nav, editing, busy,
   onOpenQuery, onEdit, onRemove, onMove, first, last,
 }) {
   const title = interpolateText(panel.title, params);
@@ -45,9 +45,13 @@ export default function Panel({
 
   return (
     <section
-      className={`db-panel card${spec ? " is-chart" : ""}`}
+      // `busy` is a panel the agent is in the middle of rewriting: the rows on
+      // screen are the old answer, so the panel says so rather than pretending
+      // they are the new one.
+      className={`db-panel card${spec ? " is-chart" : ""}${busy ? " is-busy" : ""}`}
       style={{ "--w": panel.w, "--h": panel.h }}
       aria-label={title}
+      aria-busy={busy || undefined}
     >
       <header className="db-panel-head">
         <h4 className="db-panel-title" title={title}>

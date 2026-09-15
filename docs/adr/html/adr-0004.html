@@ -1,0 +1,461 @@
+<title>Dashboards from a Question</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap');
+
+:root{
+  color-scheme: light;
+  --ground:#EEF2F1;
+  --surface:#FFFFFF;
+  --ink:#14201D;
+  --muted:#5B6B67;
+  --line:#C9D3D0;
+  --accent:#0F766E;
+  --accent-ink:#0B5A54;
+  --warn:#B45309;
+  --crit:#B91C1C;
+  --good:#15803D;
+  --shadow:rgba(20,32,29,.12);
+  --sans:"IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --display:"Newsreader", ui-serif, Georgia, "Times New Roman", Times, serif;
+  scroll-behavior: smooth;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#0D1413;
+    --surface:#142020;
+    --ink:#E4ECEA;
+    --muted:#94A6A1;
+    --line:#253431;
+    --accent:#3FB8A8;
+    --accent-ink:#7FD9CC;
+    --warn:#F59E0B;
+    --crit:#F87171;
+    --good:#4ADE80;
+    --shadow:rgba(0,0,0,.45);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#0D1413;
+  --surface:#142020;
+  --ink:#E4ECEA;
+  --muted:#94A6A1;
+  --line:#253431;
+  --accent:#3FB8A8;
+  --accent-ink:#7FD9CC;
+  --warn:#F59E0B;
+  --crit:#F87171;
+  --good:#4ADE80;
+  --shadow:rgba(0,0,0,.45);
+}
+
+body{
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.6;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+*, *::before, *::after{ box-sizing: border-box; }
+
+.page{ max-width: 1180px; margin: 0 auto; padding: clamp(22px, 4vw, 48px) clamp(16px, 4vw, 40px) 64px; }
+
+.eyebrow{
+  font-family: var(--sans);
+  font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 6px;
+}
+h1{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 500;
+  font-size: clamp(32px, 5.4vw, 50px); line-height: 1.06; letter-spacing: -.015em;
+  text-wrap: balance; margin: 0 0 14px;
+}
+h2{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 600;
+  font-size: clamp(22px, 3vw, 30px); line-height: 1.18; letter-spacing: -.01em;
+  text-wrap: balance; margin: 0 0 14px;
+}
+h3{ font-family: var(--sans); font-weight: 600; font-size: 16px; margin: 30px 0 10px; }
+p{ margin: 0 0 14px; }
+strong{ font-weight: 600; }
+a{ color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+a:hover{ color: var(--accent); }
+code, .mono{ font-family: var(--mono); font-size: .88em; color: var(--accent-ink); word-break: break-word; }
+
+.masthead{ border-bottom: 2px solid var(--ink); padding-bottom: 22px; margin-bottom: clamp(24px, 4vw, 40px); }
+.standfirst{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 500;
+  font-size: clamp(17px, 2.2vw, 21px); line-height: 1.42; color: var(--muted);
+  max-width: 62ch; margin: 0;
+}
+
+.layout{ display: grid; gap: clamp(26px, 4vw, 54px); grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 940px){
+  .layout{ grid-template-columns: 260px minmax(0, 1fr); }
+  .rail{ position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow-y: auto; }
+}
+.rail{ align-self: start; }
+.glance{ background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--accent); padding: 18px 18px 16px; }
+.pill{
+  display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--good); border: 1px solid currentColor; border-radius: 999px; padding: 3px 10px; margin-bottom: 14px;
+}
+.meta{ margin: 0; font-size: 13.5px; }
+.meta dt{ font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 12px; }
+.meta dd{ margin: 2px 0 0; color: var(--ink); line-height: 1.45; }
+.meta dd .mono{ font-size: 12.5px; }
+.toc{ margin-top: 22px; border-top: 1px solid var(--line); padding-top: 14px; }
+.toc ol{ list-style: none; margin: 0; padding: 0; }
+.toc li{ margin: 0; border-bottom: 1px solid var(--line); }
+.toc li:last-child{ border-bottom: 0; }
+.toc a{ display: block; padding: 7px 0; font-size: 13.5px; line-height: 1.35; color: var(--ink); text-decoration: none; }
+.toc a:hover{ color: var(--accent); }
+
+.record > section{ margin-bottom: clamp(36px, 5vw, 56px); scroll-margin-top: 24px; }
+.record > section > p,
+.record > section > ul > li,
+.record > section > ol > li{ max-width: 68ch; }
+.record ul, .record ol{ margin: 0 0 14px; padding-left: 1.15em; }
+.record li{ margin-bottom: 8px; }
+.record ol{ padding-left: 1.3em; }
+.record ol li::marker{ font-family: var(--mono); font-size: .86em; color: var(--muted); }
+
+.finding{ border-left: 3px solid var(--accent); background: var(--surface); padding: 18px 22px; margin: 26px 0 0; }
+.finding p{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 500;
+  font-size: clamp(19px, 2.6vw, 24px); line-height: 1.32; margin: 0; max-width: 44ch;
+}
+
+.scroll{ overflow-x: auto; margin: 0 0 6px; -webkit-overflow-scrolling: touch; }
+table{ width: 100%; border-collapse: collapse; font-size: 14.5px; line-height: 1.48; font-variant-numeric: tabular-nums; }
+.scroll table{ min-width: 560px; }
+.scroll.wide table{ min-width: 720px; }
+caption{
+  caption-side: top; text-align: left; font-size: 11.5px; font-weight: 600; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); padding-bottom: 8px;
+}
+th{
+  text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); padding: 0 14px 8px 0; border-bottom: 2px solid var(--line); vertical-align: bottom;
+}
+td{ padding: 9px 14px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th:last-child, td:last-child{ padding-right: 0; }
+th.num, td.num{ text-align: right; font-family: var(--mono); white-space: nowrap; }
+td.key{ font-family: var(--mono); font-size: 12.5px; color: var(--accent-ink); white-space: nowrap; }
+td.tag{ font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+td.pending{ font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+.tnote{ font-size: 13px; color: var(--muted); margin: 10px 0 0; max-width: 68ch; }
+
+figure{ margin: 26px 0 0; background: var(--surface); border: 1px solid var(--line); padding: 18px clamp(14px, 2.4vw, 22px) 16px; position: relative; }
+figcaption{ margin-bottom: 14px; }
+figcaption .ftitle{ font-family: var(--sans); font-weight: 600; font-size: 16px; line-height: 1.3; margin: 0; }
+figcaption .fsub{ font-size: 13px; color: var(--muted); margin: 4px 0 0; max-width: 62ch; }
+.chart svg{ display: block; width: 100%; height: auto; }
+.chart .scroll svg{ min-width: 520px; }
+.bar{ fill: var(--accent); }
+.mark.is-hot{ stroke: var(--ink); stroke-width: 1.5; }
+.hit{ fill: transparent; stroke: transparent; stroke-width: 2; }
+.hit:focus-visible{ stroke: var(--ink); outline: none; }
+.axis{ stroke: var(--line); stroke-width: 1; }
+.grid{ stroke: var(--line); stroke-width: 1; }
+.refline{ stroke: var(--muted); stroke-width: 1; stroke-dasharray: 5 4; }
+.t-cat{ font-family: var(--sans); font-size: 12.5px; fill: var(--muted); }
+.t-val{ font-family: var(--mono); font-size: 12px; font-weight: 500; fill: var(--ink); font-variant-numeric: tabular-nums; }
+.t-tick{ font-family: var(--mono); font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.t-unit{ font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; fill: var(--muted); }
+.t-axis{ font-family: var(--sans); font-size: 12px; fill: var(--muted); }
+.t-ref{ font-family: var(--sans); font-size: 11.5px; fill: var(--muted); }
+.tip{
+  position: absolute; z-index: 6; pointer-events: none;
+  background: var(--surface); border: 1px solid var(--line);
+  padding: 7px 11px; max-width: 260px; box-shadow: 0 2px 12px var(--shadow);
+}
+.tip .tv{ display: block; font-family: var(--mono); font-weight: 500; font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.tip .tl{ display: block; font-size: 12px; line-height: 1.35; color: var(--muted); margin-top: 2px; }
+
+/* ---------- mermaid, themed from the tokens ---------- */
+pre.mermaid{ margin: 0; background: transparent; font-family: var(--sans); text-align: left; min-width: 580px; }
+pre.mermaid svg{ max-width: 100%; height: auto; }
+.mermaid .node rect,
+.mermaid .node polygon,
+.mermaid .node circle,
+.mermaid .node ellipse,
+.mermaid .node path,
+.mermaid .cluster rect{
+  fill: var(--surface) !important;
+  stroke: var(--line) !important;
+  stroke-width: 1.25px !important;
+}
+.mermaid .nodeLabel,
+.mermaid .nodeLabel p,
+.mermaid .label,
+.mermaid .label text,
+.mermaid text.nodeLabel,
+.mermaid span.nodeLabel{
+  color: var(--ink) !important;
+  fill: var(--ink) !important;
+  font-family: var(--sans) !important;
+  font-size: 13px !important;
+  line-height: 1.35 !important;
+}
+.mermaid .edgeLabel,
+.mermaid .edgeLabel p,
+.mermaid .edgeLabel rect,
+.mermaid .edgeLabel foreignObject div,
+.mermaid .edgeLabel span{
+  color: var(--muted) !important;
+  fill: var(--muted) !important;
+  background: var(--surface) !important;
+  background-color: var(--surface) !important;
+  font-family: var(--sans) !important;
+  font-size: 12px !important;
+}
+.mermaid .edgePath .path,
+.mermaid .flowchart-link,
+.mermaid path.path{ stroke: var(--accent) !important; stroke-width: 1.5px !important; }
+.mermaid .arrowheadPath,
+.mermaid marker path,
+.mermaid defs marker path{ fill: var(--accent) !important; stroke: var(--accent) !important; }
+
+.source{ margin-top: clamp(30px, 5vw, 48px); border-top: 1px solid var(--line); padding-top: 14px; font-size: 13px; color: var(--muted); }
+.source .mono{ color: var(--muted); }
+
+:where(a, button, [tabindex]):focus-visible{ outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce){
+  :root{ scroll-behavior: auto; }
+  *, *::before, *::after{ animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow">ADR-0004 · Operations Data Layer · Experiment</p>
+    <h1>Dashboards from a Question</h1>
+    <p class="standfirst">A question in plain English becomes a multi-panel dashboard, built one validated panel at a time and streamed to the browser as it takes shape. The model composes from the vocabulary the dashboards feature already has; it never writes UI, SQL runs only through the guard, and the result saves like any other dashboard.</p>
+  </header>
+
+  <div class="layout">
+    <aside class="rail">
+      <div class="glance">
+        <span class="pill" style="color: var(--warn)">Experimental</span>
+        <dl class="meta">
+          <dt>Branch</dt>
+          <dd><span class="mono">feat/generative-ui</span>, cut from <span class="mono">feat/redis-store-nl-query</span></dd>
+          <dt>Worktree</dt>
+          <dd><span class="mono">~/Git/odl-genui</span></dd>
+          <dt>Endpoint</dt>
+          <dd><span class="mono">POST /api/agent/run</span> (AG-UI over server-sent events)</dd>
+          <dt>View</dt>
+          <dd><span class="mono">/generate</span> in the dashboard</dd>
+          <dt>Builds on</dt>
+          <dd>ADR-0002 (question to SQL), the dashboards feature (batched queries, variables)</dd>
+          <dt>Decided</dt>
+          <dd>September 2026</dd>
+        </dl>
+        <nav class="toc" aria-label="Sections">
+          <ol>
+            <li><a href="#context">Context</a></li>
+            <li><a href="#options">Options considered</a></li>
+            <li><a href="#decision">Decision</a></li>
+            <li><a href="#flow">How a run flows</a></li>
+            <li><a href="#protocol">The event stream</a></li>
+            <li><a href="#tools">The tools</a></li>
+            <li><a href="#limits">Limits and settings</a></li>
+            <li><a href="#built">What was built</a></li>
+            <li><a href="#judge">How to judge it</a></li>
+            <li><a href="#consequences">Consequences</a></li>
+          </ol>
+        </nav>
+      </div>
+    </aside>
+
+    <main class="record">
+
+      <section id="context">
+        <h2>Context</h2>
+        <p>The query plane answers one question with one SQL statement (<code>POST /api/query/ask</code>), and a saved dashboard runs many statements against one snapshot (<code>POST /api/dashboards/{id}/run</code>). Neither goes from a question to a <em>view</em>. "What are the apps, namespaces and clusters under hub-east, and how healthy are they" is three or four panels, each a table or a chart, laid out together; today a person writes each panel by hand.</p>
+        <p>The ask is a mechanism that turns a question written in English into a dashboard with tables and visualizations, built on the fly, that the person can refine in the same conversation. The industry calls this generative UI, and AG-UI (the Agent-User Interaction protocol) is the open event protocol most front-end agent frameworks speak for it.</p>
+        <div class="finding">
+          <p>Generative UI here means composing from a fixed vocabulary of validated parts, never free-form markup from the model. That boundary is what makes the result safe, saveable and reproducible.</p>
+        </div>
+      </section>
+
+      <section id="options">
+        <h2>Options considered</h2>
+        <div class="scroll wide">
+          <table>
+            <caption>Five ways to get from a question to a view</caption>
+            <thead><tr><th>Option</th><th>What it is</th><th>Why, or why not</th></tr></thead>
+            <tbody>
+              <tr><td class="key">A · one-shot plan</td><td>The model returns a whole dashboard definition as structured output; the API validates it, runs it, returns it</td><td>Cheapest. No feedback loop: a panel whose SQL fails stays broken, a refinement regenerates everything, and nothing renders until the whole plan is back (20 to 40 s on a six-panel plan).</td></tr>
+              <tr><td class="key">B · AG-UI agent run</td><td>A server-side tool-using loop builds the dashboard one validated panel at a time in shared state; every change streams to the browser as an AG-UI event; follow-ups edit the same state</td><td><strong>Chosen.</strong> Progressive, self-correcting, refinable, protocol-standard. More moving parts: a stream, a loop, tool schemas, run limits.</td></tr>
+              <tr><td class="key">C · CopilotKit end to end</td><td>CopilotKit's React provider and runtime speaking AG-UI to our agent</td><td>A large dependency and a second runtime for a chat widget the product does not need. Kept open as a consumer of the same stream.</td></tr>
+              <tr><td class="key">D · Vercel AI SDK generative UI</td><td>React Server Components streaming UI from the model</td><td>Needs Next.js and RSC; the dashboard is a Vite app.</td></tr>
+              <tr><td class="key">E · MCP Apps / MCP-UI</td><td>Tools return UI resources that a chat host renders</td><td>A different product: our data inside someone else's chat. Interesting for the MCP server later, not for the in-product dashboard.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="decision">
+        <h2>Decision</h2>
+        <p>Build option B, as an experiment on its own branch, under five rules.</p>
+        <ol>
+          <li><strong>The shared state is a dashboard definition.</strong> The agent's state is <code>{"dashboard": …, "params": …}</code> where <code>dashboard</code> is exactly the shape <code>/api/dashboards</code> saves: a title, variables, and panels that are a query, a chart choice and a size on a 12-column grid. The result saves with the existing <code>PUT</code>, re-runs unchanged, and can be reviewed as plain data.</li>
+          <li><strong>Every mutation is validated before it becomes state.</strong> The model changes the dashboard only through tools. A panel's SQL passes the same guard as every other query and is dry-run against the snapshot; a failure goes back to the model as the tool result and the state does not change. The model never reaches Redis, DuckDB or the file system; the worst outcome of a bad answer is an empty panel.</li>
+          <li><strong>The wire protocol is AG-UI.</strong> The endpoint takes an AG-UI run input (thread, run, messages, state) and answers with a stream of AG-UI events. The browser keeps the thread and sends it back on every follow-up, so the API holds no session and scales like every other endpoint. The events are emitted by a small module of our own rather than the <code>ag-ui-protocol</code> package, which pins <code>pydantic&gt;=2.11</code> while the service pins 2.10; swapping it in later is a one-file change.</li>
+          <li><strong>The dashboard renders the state it already knows how to render.</strong> A Generate view holds the conversation on one side and the live dashboard on the other. Panels appear as their state delta arrives and run through the existing batch runtime, so a generated dashboard and a saved one are the same components, charts, tables and variable bar. Without credentials, or on an API build without the endpoint, the view says so and nothing else breaks.</li>
+          <li><strong>Runs are bounded.</strong> At most 12 model turns, at most 12 panels, a 150-second wall clock, the existing per-query timeout, and the run stops when the browser disconnects. The model and effort are separate settings from the single-question path, because a composing agent wants a faster model than a one-shot SQL writer may.</li>
+        </ol>
+      </section>
+
+      <section id="flow">
+        <h2>How a run flows</h2>
+        <figure>
+          <figcaption>
+            <p class="ftitle">One question, one stream, one dashboard</p>
+            <p class="fsub">The loop runs in a worker thread inside the API; every accepted change leaves as a JSON Patch before the tool result goes back to the model.</p>
+          </figcaption>
+          <div class="scroll">
+<pre class="mermaid">
+flowchart LR
+  U[Generate view] -- "POST /api/agent/run<br/>messages + state" --> A[Agent loop]
+  A -- "system prompt: schema + rules<br/>tools + thread" --> M[Claude]
+  M -- "narration<br/>tool calls" --> A
+  A -- "add_panel(sql, chart)" --> T[Tool]
+  T -- "guard + dry run" --> Q[DuckDB snapshot]
+  Q -- "columns, rows<br/>or error" --> T
+  T -- "STATE_DELTA<br/>TOOL_CALL_RESULT" --> A
+  A -- "server-sent events" --> U
+  U -- "run panels via<br/>/api/query/batch" --> Q
+</pre>
+          </div>
+        </figure>
+      </section>
+
+      <section id="protocol">
+        <h2>The event stream</h2>
+        <p>Each event is one <code>data: {json}</code> frame with a <code>type</code> and the field names the AG-UI specification uses. The order is fixed so a client can hold state without guessing.</p>
+        <div class="scroll wide">
+          <table>
+            <caption>Events a run emits, in order</caption>
+            <thead><tr><th>Event</th><th>Fields</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td class="key">RUN_STARTED</td><td class="tag">threadId, runId</td><td>The run began; a 503 or 422 would have come before this.</td></tr>
+              <tr><td class="key">STATE_SNAPSHOT</td><td class="tag">snapshot</td><td>The normalised state the server will mutate; the client replaces its copy.</td></tr>
+              <tr><td class="key">STEP_STARTED / STEP_FINISHED</td><td class="tag">stepName</td><td>One model turn.</td></tr>
+              <tr><td class="key">TEXT_MESSAGE_START / CONTENT / END</td><td class="tag">messageId, role, delta</td><td>The model's narration, streamed as it is written.</td></tr>
+              <tr><td class="key">TOOL_CALL_START / ARGS / END</td><td class="tag">toolCallId, toolCallName, parentMessageId, delta</td><td>A tool call and its arguments as partial JSON; the view already knows the panel's title before it exists.</td></tr>
+              <tr><td class="key">STATE_DELTA</td><td class="tag">delta (RFC 6902)</td><td>Emitted only for an accepted mutation, and always before its result.</td></tr>
+              <tr><td class="key">TOOL_CALL_RESULT</td><td class="tag">messageId, toolCallId, content, role</td><td>What the model sees: columns, a few sample rows and the row count, or the error.</td></tr>
+              <tr><td class="key">MESSAGES_SNAPSHOT</td><td class="tag">messages</td><td>The whole thread, so the client can send it back verbatim on the next turn.</td></tr>
+              <tr><td class="key">RUN_FINISHED</td><td class="tag">threadId, runId, result</td><td>Turns, tool calls, panels, wall clock and token usage for the run.</td></tr>
+              <tr><td class="key">RUN_ERROR</td><td class="tag">message, code</td><td>One of <span class="mono">unavailable</span>, <span class="mono">limit</span>, <span class="mono">timeout</span>, <span class="mono">internal</span>, <span class="mono">cancelled</span>; the stream ends.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tnote">The final state at RUN_FINISHED equals the snapshot with every delta applied; the tests assert it, and the eval script rebuilds the client's view the same way to prove the two agree.</p>
+      </section>
+
+      <section id="tools">
+        <h2>The tools</h2>
+        <div class="scroll wide">
+          <table>
+            <caption>What the model may do, and what refuses it</caption>
+            <thead><tr><th>Tool</th><th>Effect</th><th>Refused when</th></tr></thead>
+            <tbody>
+              <tr><td class="key">preview_sql</td><td>Runs a query and returns up to ten rows; changes nothing</td><td>The guard rejects it, DuckDB cannot run it, or a variable it uses is unset</td></tr>
+              <tr><td class="key">set_dashboard</td><td>Sets the title, and the description when given</td><td>The title is blank</td></tr>
+              <tr><td class="key">add_panel</td><td>Dry-runs the SQL, then appends a panel with a chart choice (auto, line, bars, none), axes and a size</td><td>The dry run fails, the panel cap is reached, or the whole definition no longer validates</td></tr>
+              <tr><td class="key">update_panel</td><td>Replaces a panel by id after dry-running its effective SQL</td><td>Unknown id, or the same reasons as add_panel</td></tr>
+              <tr><td class="key">remove_panel</td><td>Removes a panel by id</td><td>Unknown id</td></tr>
+              <tr><td class="key">add_variable</td><td>Adds a select, text or number input; a select's options query is dry-run; a default also sets the parameter</td><td>The options query fails or uses a variable, or the name is not a placeholder name</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tnote">Tool argument errors (a missing field, a wrong type) come back as tool results too, never as exceptions, so the model can correct itself within the run.</p>
+      </section>
+
+      <section id="limits">
+        <h2>Limits and settings</h2>
+        <div class="scroll">
+          <table>
+            <caption>Environment variables, all optional</caption>
+            <thead><tr><th>Setting</th><th class="num">Default</th><th>What it bounds</th></tr></thead>
+            <tbody>
+              <tr><td class="key">ODL_AGENT_MODEL</td><td class="num">ODL_QUERY_MODEL</td><td>The composing model; a faster one than the SQL writer is a legitimate choice</td></tr>
+              <tr><td class="key">ODL_AGENT_EFFORT</td><td class="num">medium</td><td>How hard it thinks per turn</td></tr>
+              <tr><td class="key">ODL_AGENT_MAX_TURNS</td><td class="num">12</td><td>Model calls per run; a run past this ends with a <span class="mono">limit</span> error</td></tr>
+              <tr><td class="key">ODL_AGENT_MAX_PANELS</td><td class="num">12</td><td>Panels in one generated dashboard, never above the format's 40</td></tr>
+              <tr><td class="key">ODL_AGENT_TIMEOUT_SECONDS</td><td class="num">150</td><td>Wall clock per run</td></tr>
+              <tr><td class="key">ODL_AGENT_MAX_TOKENS</td><td class="num">4096</td><td>Output tokens per turn</td></tr>
+              <tr><td class="key">ODL_QUERY_TIMEOUT_SECONDS</td><td class="num">10</td><td>Each dry run and preview, unchanged from the query plane</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="built">
+        <h2>What was built</h2>
+        <h3>Data layer</h3>
+        <ul>
+          <li><code>app/agent/</code>: <span class="mono">config</span> (limits), <span class="mono">events</span> (the fifteen AG-UI builders and SSE framing), <span class="mono">state</span> (the empty dashboard and an all-or-nothing JSON Patch applier), <span class="mono">tools</span> (six tools with pydantic argument models, dry run before every mutation, whole-definition re-validation), <span class="mono">messages</span> (AG-UI to Anthropic and back), <span class="mono">prompt</span> (a cached system block with the schema and composition rules; live fleet values prepended to the last user turn as data), <span class="mono">model</span> (the streaming Anthropic adapter behind a seam tests replace), <span class="mono">run</span> (the loop).</li>
+          <li><code>app/api/agent.py</code>: <span class="mono">GET /api/agent</span> for availability and limits, <span class="mono">POST /api/agent/run</span> streaming from a worker thread through a queue, cancelled when the client disconnects.</li>
+          <li><code>scripts/eval_generate.py</code>: runs the golden questions against a live API, rebuilds the client's state from the stream, re-runs the finished definition through the batch endpoint and prints turns, tool calls, panels, errors, wall clock and tokens.</li>
+          <li>84 tests: event field names and framing, the patch applier, every tool's success and refusal paths, event order, snapshot plus deltas equals final state, thread round-trip, turn and time limits, cancellation, and the endpoint's 503, 422 and full stream.</li>
+          <li>The credential check moved to client construction, so <span class="mono">GET /api/agent</span> and <span class="mono">/api/query/ask</span> report "unavailable" on a box with no key instead of every run ending in an error.</li>
+          <li>The container's nginx streams <span class="mono">/api/agent/</span> unbuffered.</li>
+        </ul>
+        <h3>Dashboard</h3>
+                <ul>
+          <li><code>src/agent/</code>: <span class="mono">client</span> (a fetch-and-ReadableStream reader for server-sent events, the JSON Patch applier), <span class="mono">useAgentRun</span> (the thread, the state, a transcript of narration and tool activity, stop and reset, persistence in session storage so reload and back/forward keep the conversation), <span class="mono">fixture</span> (a scripted stream for development without credentials).</li>
+          <li><code>views/Generate.jsx</code> at <span class="mono">/generate</span>: the conversation on the left with examples and a composer, the live dashboard on the right using the dashboards page's own variable bar, grid and panels. A panel being added shows as a placeholder whose title assembles from the streaming arguments; a panel being updated dims until its delta lands; panels run through the batch runtime as the state changes. "Save as dashboard" writes the definition through the existing <span class="mono">PUT</span> and opens it in the Dashboards tab.</li>
+          <li>Entry points: "Generate from a question" on the Dashboards list, and "Build a dashboard from this question" under the Query page's ask box, which carries the question in <span class="mono">?q=</span>.</li>
+          <li>Degrades in place: an API without the endpoint, or without credentials, gets a banner with the reason and the rest of the application is untouched.</li>
+        </ul>
+      </section>
+
+      <section id="judge">
+        <h2>How to judge it</h2>
+        <ol>
+          <li>The golden questions each produce a dashboard with the expected panels and no panel in error, on the local fleet.</li>
+          <li>A follow-up edits the existing dashboard rather than rebuilding it (panel ids survive).</li>
+          <li>Median wall clock and cost per generation, per model, recorded below.</li>
+          <li>The generated dashboards save and re-run unchanged from the Dashboards tab.</li>
+        </ol>
+        <div class="scroll">
+          <table>
+            <caption>Measured</caption>
+            <thead><tr><th>Run</th><th class="num">Turns</th><th class="num">Tool calls</th><th class="num">Panels</th><th class="num">Panels in error</th><th class="num">Wall clock</th><th class="num">Tokens in / out</th></tr></thead>
+            <tbody>
+              <tr><td>Scripted model, real fleet, real HTTP stream (5 clusters)</td><td class="num">4</td><td class="num">7</td><td class="num">5</td><td class="num">0</td><td class="num">n/a</td><td class="num">n/a</td></tr>
+              <tr><td>claude-opus-5, golden questions</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td></tr>
+              <tr><td>claude-sonnet-5, golden questions</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tnote">The development machine has no Anthropic credentials, so the model rows wait for a run where <span class="mono">ANTHROPIC_API_KEY</span> is set: start the API from the worktree and run <span class="mono">scripts/eval_generate.py --api http://localhost:18003</span>, once per model via <span class="mono">ODL_AGENT_MODEL</span>.</p>
+      </section>
+
+      <section id="consequences">
+        <h2>Consequences</h2>
+        <ul>
+          <li>A question becomes a dashboard in one conversation, and the person can say "make the second one a bar chart" or "add pending pods per namespace" without starting over.</li>
+          <li>The same stream can drive any AG-UI client (CopilotKit, a chat host, a terminal); the dashboard is not the only consumer.</li>
+          <li>A generation costs one model turn per tool call plus one per narration, roughly 6 to 12 calls for a five-panel dashboard; the eval records the numbers the model choice should rest on.</li>
+          <li>The dashboards contract (definition shape, guard, batch runtime) is now load-bearing for two features; the shared tests keep both honest.</li>
+          <li>Nothing in the existing product changes: the endpoint and the view are additive, and the branch stays an experiment until the numbers say it should merge.</li>
+        </ul>
+      </section>
+
+      <p class="source">Source: <span class="mono">docs/adr/0004-generative-ui.md</span> on <span class="mono">feat/generative-ui</span>; implementation under <span class="mono">data-layer/app/agent/</span> and <span class="mono">dashboard/src/agent/</span>.</p>
+    </main>
+  </div>
+</div>

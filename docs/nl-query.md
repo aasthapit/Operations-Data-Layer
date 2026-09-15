@@ -320,6 +320,111 @@ The file is validated at startup with the same models the API uses, so a built-i
 `ODL_DASHBOARDS_DIR` points the loader somewhere else.
 The SQL is subject to the guard like every other query here, which is the answer to "what can a dashboard do?": exactly what `/api/query/sql` can do, and nothing more.
 
+## Generative dashboards (experimental)
+
+A question is one query; a dashboard is several; this is the thing that turns the first into the second.
+"Apps, namespaces and clusters under hub man01paa" is four panels and a hub selector, and until now somebody had to write each one by hand.
+
+`POST /api/agent/run` takes the question and answers with a stream of events: a model with six tools composes a dashboard definition one validated panel at a time, and every change reaches the browser as it happens, so the page fills in while the model is still writing.
+A follow-up in the same thread edits the same dashboard rather than starting over.
+The decision, the options that were weighed and how the experiment will be judged are in [ADR-0004](adr/0004-generative-ui.md).
+
+Generative UI here means composing from the vocabulary the dashboards feature already has, never free-form HTML or code from the model.
+What comes out is a definition `PUT /api/dashboards/{id}` accepts, which is what makes it saveable, re-runnable and reviewable as plain data.
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/agent` | `{available, model, reason, limits}` - whether a run can start, which model would run it, and the turn / panel / wall-clock caps |
+| `POST /api/agent/run` | An AG-UI `RunAgentInput` (`threadId`, `runId`, `state`, `messages`) in; a `text/event-stream` of AG-UI events out. 503 without model credentials, 422 when the body is not a run input or the thread does not end with a user message |
+
+### The event stream
+
+The wire protocol is [AG-UI](https://docs.ag-ui.com), the event protocol most front-end agent frameworks speak, so the same stream can drive our Generate view, a CopilotKit app or a terminal.
+One event per `data:` frame, field names camelCase exactly as the specification writes them:
+
+| Event | Carries | When |
+|---|---|---|
+| `RUN_STARTED` | `threadId`, `runId` | first |
+| `STATE_SNAPSHOT` | `snapshot` | immediately after, the baseline the deltas apply to |
+| `STEP_STARTED` / `STEP_FINISHED` | `stepName: "model"` | around each model turn |
+| `TEXT_MESSAGE_START` / `_CONTENT` / `_END` | `messageId`, `delta` | the model's narration, as it is written |
+| `TOOL_CALL_START` / `_ARGS` / `_END` | `toolCallId`, `toolCallName`, `parentMessageId`, `delta` | a tool call, arguments streamed as partial JSON |
+| `STATE_DELTA` | `delta`: RFC 6902 operations | after a mutation is accepted, **before** its result |
+| `TOOL_CALL_RESULT` | `messageId`, `toolCallId`, `content` | what the tool answered, as a compact JSON string |
+| `MESSAGES_SNAPSHOT` | `messages` | at the end: the whole thread, to send back verbatim on the next run |
+| `RUN_FINISHED` | `result`: turns, tool calls, panels, elapsed ms, token usage | last, on success |
+| `RUN_ERROR` | `message`, `code` | last, on failure: `unavailable`, `limit`, `timeout`, `internal` or `cancelled` |
+
+Two orderings are contractual.
+A mutation's `STATE_DELTA` always precedes the `TOOL_CALL_RESULT` that describes it, so a client can render on the delta alone.
+And a failure is always an event, never a stream that stops: by the time a run can fail there is no status code left to send.
+
+The API holds no session.
+The browser keeps the thread - the messages and the state - and sends all of it back on every follow-up, so the endpoint scales like every other one here and survives a restart.
+
+The events are built by `app/agent/events.py` rather than by the `ag-ui-protocol` package, which pins `pydantic>=2.11` while the service pins 2.10.4; swapping it in later is a one-file change.
+
+### The state
+
+```json
+{"dashboard": {"id": "generated", "title": "...", "variables": [...], "panels": [...]},
+ "params": {"hub": "man01paa"}}
+```
+
+The dashboard is exactly the definition shape documented above, and the params are what the variables are currently set to.
+A run with no state starts from an empty dashboard titled "Untitled dashboard"; a run given one refines it.
+
+Changes arrive as RFC 6902 patches over six paths: `/dashboard/title`, `/dashboard/description`, `/dashboard/panels/-` (append), `/dashboard/panels/<index>` (replace or remove), `/dashboard/variables/-` and `/params/<name>`.
+The server applies each operation to its own copy with the applier in `app/agent/state.py` and re-validates the whole definition with `parse_dashboard` afterwards, so the state is a definition the dashboards API would accept at every instant - and the copy the browser rebuilds from the deltas is the copy the server holds.
+
+### The tools
+
+The model never reaches Redis, DuckDB or the file system.
+It emits tool calls, and every SQL string it writes goes through the same guard as every other query here and is dry-run against the snapshot before the panel holding it is allowed into the state.
+The worst outcome of a bad answer is a panel that is not there.
+
+| Tool | What it does |
+|---|---|
+| `preview_sql` | Run a SELECT and see the first rows. Changes nothing. For when the model is unsure of a column or a value |
+| `set_dashboard` | Title and description |
+| `add_panel` | Dry-run the SQL, then append a panel: id slugged from the title, chart object, size on the 12-column grid |
+| `update_panel` | Change a panel by id; only the fields given are changed, and the panel keeps its id and its place |
+| `remove_panel` | Remove a panel by id |
+| `add_variable` | Declare a variable (and dry-run its options query); a `default` also lands in `params` |
+
+A tool that refuses answers `{"error": ..., "sql": ...}` and changes nothing, which is the loop's error handling: the model reads the error, fixes its SQL and calls again, at most twice per panel.
+An argument the schema rejects is a result too, never an exception - an exception would end the run and lose the panels already built.
+
+### Limits
+
+A run is bounded by `ODL_AGENT_MAX_TURNS` model turns, `ODL_AGENT_MAX_PANELS` panels (never above the dashboard format's own cap of 40), `ODL_AGENT_TIMEOUT_SECONDS` of wall clock, and the ordinary per-query timeout for each panel's SQL.
+The stream also stops when the browser goes away: the cancel flag is checked before every model call and every tool, so a closed tab stops a run that is costing money.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `ODL_AGENT_MODEL` | `ODL_QUERY_MODEL` | The model that composes the dashboard |
+| `ODL_AGENT_EFFORT` | `medium` | Thinking effort per turn |
+| `ODL_AGENT_MAX_TOKENS` | `4096` | Output cap per turn |
+| `ODL_AGENT_MAX_TURNS` | `12` | Model calls per run |
+| `ODL_AGENT_MAX_PANELS` | `12` | Panels one generated dashboard may hold |
+| `ODL_AGENT_TIMEOUT_SECONDS` | `150` | Wall clock for a whole run |
+
+Behind a proxy, the path needs buffering off or the events arrive in one lump at the end (`dashboard/nginx.conf` does this for `/api/agent/`).
+
+### Running the generation eval
+
+```bash
+cd data-layer
+.venv/bin/python scripts/eval_generate.py --api http://localhost:18000
+```
+
+It asks the first five golden questions plus "apps, namespaces and clusters under hub {the first hub}", consumes each stream, rebuilds the definition the browser would hold, and re-runs every panel of it through `POST /api/query/batch`.
+The table reports turns, tool calls, panels, panels in error, wall clock and input / output / cache-read tokens per question.
+A panel that errors on the re-run is a panel the user would have seen empty, and it is the only pass/fail signal; exit status is 1 if there is one, so the script can gate a change.
+The model is the data layer's own setting and cannot be overridden per request, so the table prints what `GET /api/agent` reports.
+
+Tests never call the model: `app.agent.model.set_model()` swaps in a scripted adapter, exactly as `set_generator` does for the query plane, and `tests/test_agent_*.py` use it to prove the event order, the patch applier, every tool's success and failure paths and the endpoint's status codes.
+
 ## Adding a golden question
 
 `data-layer/tests/golden_questions.yaml` is the regression suite and the eval set.

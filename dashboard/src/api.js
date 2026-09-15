@@ -1,5 +1,8 @@
 // Typed-ish fetch helpers for the Operations Data Layer API.
-const BASE = import.meta.env.VITE_API_BASE || "";
+// Exported because the agent stream is a fetch of its own: it reads a response
+// body rather than a JSON document, so it cannot go through fetchJson - but it
+// must reach the same API as everything else.
+export const BASE = import.meta.env.VITE_API_BASE || "";
 
 function qs(params = {}) {
   const q = new URLSearchParams(
@@ -163,6 +166,10 @@ export const api = {
     `/api/dashboards/${enc(id)}/run`,
     { params },
   ),
+
+  // generative dashboards (AG-UI). The run itself is a stream, so it lives in
+  // agent/client.js; this is only "is the feature there, and with what model".
+  agent: () => get("/api/agent"),
 
   // manifest
   manifest: () => get("/api/manifest"),

@@ -75,6 +75,12 @@ export default function Dashboards({ route }) {
         </div>
         <div className="db-head-actions">
           <button type="button" className="btn" disabled={loading} onClick={reload}>↻ Refresh</button>
+          {/* The other way to make one: describe it and let the agent compose it
+              from these same panels. It lands here once it is saved. */}
+          <button type="button" className="btn"
+            onClick={() => route.navigate("/generate", fixture ? { fixture: "1" } : {})}>
+            Generate from a question
+          </button>
           <button type="button" className="btn primary" onClick={() => setDialog("new")}>
             New dashboard
           </button>

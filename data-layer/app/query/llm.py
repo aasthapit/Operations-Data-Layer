@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
+from contextlib import contextmanager
 
 from pydantic import BaseModel, Field
 
@@ -109,36 +110,32 @@ def _get_client():
         if _client is None:
             import anthropic
             try:
-                _client = anthropic.Anthropic()
+                client = anthropic.Anthropic()
             except Exception as e:  # noqa: BLE001 - any construction failure means no credentials
                 raise QueryUnavailable(_MISSING_CREDENTIALS) from e
+            # SDK 1.x constructs happily with no credentials at all and only
+            # fails when it assembles the request headers. Check here, once,
+            # so `available()` and GET /api/agent say "unavailable" up front
+            # instead of every run ending in an error the user cannot fix.
+            if not (client.api_key or client.auth_token
+                    or getattr(client, "credentials", None)):
+                raise QueryUnavailable(_MISSING_CREDENTIALS)
+            _client = client
         return _client
 
 
-def _user_message(question: str, error_feedback: str | None) -> str:
-    if not error_feedback:
-        return f"Question: {question}"
-    return (f"Question: {question}\n\n"
-            f"Your previous attempt did not work. Fix it.\n\n"
-            f"{error_feedback}")
+@contextmanager
+def mapped_errors():
+    """Every way the SDK can fail, as a QueryUnavailable the API can serve.
 
-
-def _anthropic_generate(question: str, schema_text: str,
-                        error_feedback: str | None = None) -> SqlPlan:
+    It lives here, and not inline in the call below, because the agent
+    (`app/agent/model.py`) streams from the same client and has to turn the
+    same failures into the same messages - one mapping, one place to change it.
+    """
     import anthropic
 
-    client = _get_client()
-    system = _INSTRUCTIONS.format(max_rows=query_config.max_rows) + "\n\n" + schema_text
     try:
-        response = client.messages.parse(
-            model=query_config.model,
-            max_tokens=query_config.max_tokens,
-            system=[{"type": "text", "text": system,
-                     "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": _user_message(question, error_feedback)}],
-            output_config={"effort": query_config.effort},
-            output_format=SqlPlan,
-        )
+        yield
     except TypeError as e:
         # SDK 1.x builds a client happily with no credentials at all and only
         # complains when it assembles the request headers - with a TypeError,
@@ -154,6 +151,30 @@ def _anthropic_generate(question: str, schema_text: str,
         raise QueryUnavailable("the model API is unreachable from the data layer") from e
     except anthropic.AnthropicError as e:  # anything else the SDK raises
         raise QueryUnavailable(f"the model API call failed: {e}") from e
+
+
+def _user_message(question: str, error_feedback: str | None) -> str:
+    if not error_feedback:
+        return f"Question: {question}"
+    return (f"Question: {question}\n\n"
+            f"Your previous attempt did not work. Fix it.\n\n"
+            f"{error_feedback}")
+
+
+def _anthropic_generate(question: str, schema_text: str,
+                        error_feedback: str | None = None) -> SqlPlan:
+    client = _get_client()
+    system = _INSTRUCTIONS.format(max_rows=query_config.max_rows) + "\n\n" + schema_text
+    with mapped_errors():
+        response = client.messages.parse(
+            model=query_config.model,
+            max_tokens=query_config.max_tokens,
+            system=[{"type": "text", "text": system,
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": _user_message(question, error_feedback)}],
+            output_config={"effort": query_config.effort},
+            output_format=SqlPlan,
+        )
 
     if response.stop_reason == "refusal":
         detail = getattr(response, "stop_details", None)

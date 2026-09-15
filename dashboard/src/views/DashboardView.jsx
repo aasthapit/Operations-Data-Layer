@@ -17,11 +17,11 @@ import { ErrorBanner, SkeletonLines, fmtAge } from "../components";
 import Panel from "../dashboards/Panel";
 import VariablesBar from "../dashboards/VariablesBar";
 import { PanelDrawer, VariablesDrawer } from "../dashboards/editor";
-import { Modal } from "../dashboards/ui";
+import { IdDialog, Modal } from "../dashboards/ui";
 import { definitionDescriptor, draftRunDescriptor, runDescriptor } from "../dashboards/runtime";
 import {
-  emptyDefinition, emptyPanel, errorAt, fieldErrors, forSave, interpolateText, isSlug,
-  normalizeDefinition, paramsFromQuery, queryLinkState, queryValue, slugify, substituteSql,
+  emptyDefinition, emptyPanel, errorAt, fieldErrors, forSave, interpolateText,
+  normalizeDefinition, paramsFromQuery, queryLinkState, queryValue, substituteSql,
   validateDefinition,
 } from "../dashboards/model";
 
@@ -427,37 +427,6 @@ function variablesInUrl(query) {
 // --------------------------------------------------------------------------- //
 // pieces
 // --------------------------------------------------------------------------- //
-function IdDialog({ title, intro, defaultId, busy, error, onCancel, onSubmit }) {
-  const [value, setValue] = useState(defaultId);
-  const id = slugify(value);
-  const ok = isSlug(id);
-  return (
-    <Modal
-      title={title}
-      onClose={onCancel}
-      footer={(
-        <>
-          <button type="button" className="btn" onClick={onCancel}>Cancel</button>
-          <button type="button" className="btn primary" disabled={!ok || busy}
-            onClick={() => onSubmit(id)}>
-            {busy ? "Saving…" : "Continue"}
-          </button>
-        </>
-      )}
-    >
-      <p className="q-desc" style={{ marginTop: 0 }}>{intro}</p>
-      <label className="db-field wide">
-        <span className="db-field-label">Id</span>
-        <input type="text" className="mono" value={value} autoFocus
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && ok) onSubmit(id); }} />
-        {error ? <span className="db-field-error">{error}</span>
-          : <span className="db-field-hint">The URL will be /dashboards/{id || "…"}</span>}
-      </label>
-    </Modal>
-  );
-}
-
 // The dashboards API is the newest thing in the data layer, so a build without
 // it is the likeliest reason a dashboard will not load. Say which it is.
 function MissingDashboard({ id, error, route, fixture }) {

@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api import (
     admin,
+    agent,
     applications,
     blast_radius,
     clusters,
@@ -146,6 +147,7 @@ app.include_router(manifest.router)
 app.include_router(admin.router)
 app.include_router(query.router)
 app.include_router(dashboards.router)
+app.include_router(agent.router)
 
 
 @app.get("/healthz", tags=["meta"])
