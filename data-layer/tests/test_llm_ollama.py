@@ -55,6 +55,9 @@ class Response:
         for line in self._lines:
             yield line if isinstance(line, bytes) else json.dumps(line).encode()
 
+    def close(self):
+        """A streamed response is closed when it is abandoned, as requests does."""
+
 
 class Session:
     """A session that answers from a script and records what it was asked."""
@@ -590,3 +593,58 @@ def test_an_explicit_model_or_timeout_still_wins_over_the_provider_default():
 def test_without_the_setting_nothing_about_the_hosted_path_changes():
     assert configured() == {"provider": "anthropic", "query_model": "claude-opus-5",
                             "agent_model": "claude-opus-5", "agent_timeout": 150.0}
+
+
+# --------------------------------------------------------------------------- #
+# a tool call the daemon could not parse
+# --------------------------------------------------------------------------- #
+# Seen live with gpt-oss:20b: the model emits a few garbled tokens inside a
+# tool call, Ollama answers 500 and echoes the whole raw output back. It is a
+# sampled accident, so the turn is asked for once more; and whatever the daemon
+# says is cut before it reaches a banner.
+UNPARSEABLE = {"error": "error parsing tool call: raw='{\"i?\",\"i?..??'" + "?" * 3000
+               + " err=invalid character ',' after object key"}
+
+
+def _stream(*chunks):
+    return Response(lines=list(chunks))
+
+
+def _turn(text="ok"):
+    return _stream({"message": {"role": "assistant", "content": text}, "done": False},
+                   {"message": {"role": "assistant", "content": ""}, "done": True,
+                    "done_reason": "stop", "prompt_eval_count": 10, "eval_count": 2})
+
+
+def test_a_long_daemon_error_is_cut_before_it_reaches_a_banner(local):
+    session(post={"/api/chat": Response(500, payload=UNPARSEABLE), "/api/show": SHOWN})
+    with pytest.raises(QueryUnavailable) as caught:
+        ollama.generate("q", "schema")
+    text = str(caught.value)
+    assert text.startswith("Ollama returned 500: error parsing tool call")
+    assert len(text) <= ollama.ERROR_TEXT_LIMIT + len("Ollama returned 500: ")
+    assert text.endswith("...")
+
+
+def test_a_tool_call_the_daemon_cannot_parse_is_retried_once(local):
+    answers = iter([Response(500, payload=UNPARSEABLE), _turn("second try")])
+    fake = session(post={"/api/chat": lambda url, body: next(answers), "/api/show": SHOWN})
+    events = list(ollama.model([], [], [{"role": "user", "content": "hi"}], 100))
+    assert ("text", "second try") in events
+    assert events[-1][0] == "stop" and events[-1][1] == "end_turn"
+    assert len([p for p in fake.posts if "/api/chat" in p["url"]]) == 2
+
+
+def test_a_second_unparseable_call_is_reported_not_retried_again(local):
+    fake = session(post={"/api/chat": Response(500, payload=UNPARSEABLE), "/api/show": SHOWN})
+    with pytest.raises(QueryUnavailable, match="error parsing tool call"):
+        list(ollama.model([], [], [{"role": "user", "content": "hi"}], 100))
+    assert len([p for p in fake.posts if "/api/chat" in p["url"]]) == 2
+
+
+def test_other_server_errors_are_not_retried(local):
+    fake = session(post={"/api/chat": Response(500, payload={"error": "out of memory"}),
+                         "/api/show": SHOWN})
+    with pytest.raises(QueryUnavailable, match="out of memory"):
+        list(ollama.model([], [], [{"role": "user", "content": "hi"}], 100))
+    assert len([p for p in fake.posts if "/api/chat" in p["url"]]) == 1

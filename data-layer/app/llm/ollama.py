@@ -114,15 +114,34 @@ def _mapped_errors() -> Iterator[None]:
         raise QueryUnavailable(f"the Ollama call failed: {e}") from e
 
 
+# Ollama echoes the model's whole raw output back in `error` when it cannot
+# parse a tool call - kilobytes of a broken call, no use to anyone reading a
+# banner - so an explanation is cut to this many characters.
+ERROR_TEXT_LIMIT = 200
+
+# The daemon's wording when the model wrote a tool call it could not parse.
+_PARSE_FAILURE = "error parsing tool call"
+
+
 def _error_text(response) -> str:
-    """Ollama's own explanation of a failed request, if it gave one."""
+    """Ollama's own explanation of a failed request, if it gave one, bounded."""
     try:
         payload = response.json()
     except ValueError:
-        return (response.text or "").strip()[:200]
-    if isinstance(payload, dict):
-        return str(payload.get("error") or "").strip()
-    return str(payload)[:200]
+        text = response.text or ""
+    else:
+        text = str(payload.get("error") or "") if isinstance(payload, dict) else str(payload)
+    text = " ".join(text.split())
+    return text if len(text) <= ERROR_TEXT_LIMIT else text[:ERROR_TEXT_LIMIT - 3] + "..."
+
+
+def _unparseable_call(response) -> bool:
+    """Did the model write a tool call the daemon could not parse?
+
+    That is a sampled accident (a garbled token or two), not a property of the
+    request: the same turn usually succeeds when asked again.
+    """
+    return response.status_code >= 500 and _PARSE_FAILURE in _error_text(response).lower()
 
 
 def _check(response, model_name: str) -> None:
@@ -425,10 +444,18 @@ def model(system_blocks: Sequence[dict], tools: Sequence[dict],
     if tools:
         body["tools"] = to_tools(tools)
     with _mapped_errors():
-        response = _http().post(_url("/api/chat"), json=body, stream=True,
-                                timeout=(CONNECT_TIMEOUT, llm_config.timeout_seconds))
-        _check(response, model_name)
-        yield from _events(response.iter_lines())
+        for attempt in (1, 2):
+            response = _http().post(_url("/api/chat"), json=body, stream=True,
+                                    timeout=(CONNECT_TIMEOUT, llm_config.timeout_seconds))
+            if attempt == 1 and _unparseable_call(response):
+                # Nothing has been yielded yet, so asking once more costs one
+                # turn and saves the run; a second failure is reported as is.
+                log.warning("Ollama could not parse the model's tool call; retrying the turn once")
+                response.close()
+                continue
+            _check(response, model_name)
+            yield from _events(response.iter_lines())
+            return
 
 
 # --------------------------------------------------------------------------- #
