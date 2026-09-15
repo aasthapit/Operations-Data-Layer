@@ -507,6 +507,14 @@ def test_run_sql_serialises_timestamps(store):
     assert isinstance(result.rows[0][1], str)       # ISO 8601, ready for JSON
 
 
+def test_run_sql_turns_a_value_json_cannot_hold_into_null(store):
+    """A ratio with a zero denominator is an ordinary DOUBLE to DuckDB and not
+    JSON at all; without this the whole response is a 500 naming no column."""
+    result = run_sql("SELECT CAST(0 AS DOUBLE) / 0 AS nan, 1.0 / CAST(0 AS DOUBLE) AS inf,"
+                     " 1.5 AS ordinary", store=store)
+    assert result.rows == [[None, None, 1.5]]
+
+
 def test_run_sql_reports_the_column_types(store):
     """A caller has to pick a chart from the answer, and JSON has no types: a
     timestamp arrives as a string like any other."""

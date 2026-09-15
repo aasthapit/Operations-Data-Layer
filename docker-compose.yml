@@ -72,6 +72,18 @@ services:
       REFRESH_ON_STARTUP: "true"
       COLLECT_WORKERS: "4"
       SUPPORTED_FLOOR: "4.15.0"
+      # Which model answers /api/query/ask and /api/agent/run: anthropic (the
+      # default, with a key from the host's environment or .env) or ollama, a
+      # model on the host. Inside the container the daemon is not on localhost,
+      # so the Ollama URL goes through host.docker.internal - which Docker
+      # Desktop resolves for free and Linux needs an extra_hosts entry for.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ODL_LLM_PROVIDER: ${ODL_LLM_PROVIDER:-anthropic}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      ODL_OLLAMA_MODEL: ${ODL_OLLAMA_MODEL:-gpt-oss:20b}
+      ODL_OLLAMA_NUM_CTX: ${ODL_OLLAMA_NUM_CTX:-32768}
+      ODL_OLLAMA_TIMEOUT_SECONDS: ${ODL_OLLAMA_TIMEOUT_SECONDS:-300}
+      ODL_OLLAMA_THINK: ${ODL_OLLAMA_THINK:-auto}
     volumes:
       - ./fleet:/fleet:ro                       # kubeconfigs referenced by hubs.yaml
       - ./data-layer/config:/app/config:ro      # generated hub list + the OCP API manifest

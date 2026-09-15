@@ -98,6 +98,7 @@ then `make test` and `make lint` for the data layer.
 
 Natural-language questions (`POST /api/query/ask`) need `ANTHROPIC_API_KEY` set in the `api` service's environment.
 Everything else - the whole REST API, the dashboard, the MCP server, and `POST /api/query/sql` for running your own SQL - works without it; `/ask` just answers 503 until a key is set.
+A model on your own machine works too, and then no question and no schema leaves it: set `ODL_LLM_PROVIDER=ollama` (with [Ollama](https://ollama.com) running and a tool-capable model pulled, `ollama pull gpt-oss:20b`), plus `OLLAMA_BASE_URL`, `ODL_OLLAMA_MODEL`, `ODL_OLLAMA_NUM_CTX`, `ODL_OLLAMA_TIMEOUT_SECONDS` and `ODL_OLLAMA_THINK` if the defaults do not fit - the same endpoints, the same guard, the same answers, a good deal slower ([docs/nl-query.md](docs/nl-query.md#local-models-with-ollama) has the numbers and the traps).
 To run a second stack alongside this one without port clashes (a worktree, a review build), set `ODL_API_PORT`, `ODL_DASHBOARD_PORT`, `ODL_PATCHING_PORT`, `ODL_MCP_PORT` and `ODL_N8N_PORT` before `make up`, e.g. `ODL_API_PORT=18001 ODL_DASHBOARD_PORT=8081 make up`.
 
 ### Ad-hoc development (honcho)

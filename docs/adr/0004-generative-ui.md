@@ -56,6 +56,7 @@ Build option B, as an experiment on its own branch, with these rules.
 ## Implementation
 
 - Data layer: `data-layer/app/agent/` (config, events, state, tools, messages, prompt, model, run) and `data-layer/app/api/agent.py` (`GET /api/agent`, `POST /api/agent/run`); `scripts/eval_generate.py` for the numbers; 86 tests under `tests/test_agent_*.py` and `tests/test_llm_credentials.py`.
+- The model behind both the agent and the query plane is chosen by `ODL_LLM_PROVIDER` in `data-layer/app/llm/` (`config`, `provider`, `anthropic`, `ollama`), so the loop, the tools, the events and the endpoints are provider-agnostic; `tests/test_llm_ollama.py` proves the translation without a daemon.
 - Dashboard: `dashboard/src/agent/` (client, hook, fixture) and `dashboard/src/views/Generate.jsx` at `/generate`, with entry points from the Dashboards list and the Query page.
 - The container's nginx streams `/api/agent/` unbuffered; settings are documented in `.env.example` and `docs/nl-query.md`.
 - The rendered page of this record is `docs/adr/html/adr-0004.html`.
@@ -66,3 +67,27 @@ Build option B, as an experiment on its own branch, with these rules.
 2. A follow-up edits the existing dashboard rather than rebuilding it (panel ids survive).
 3. Median wall clock and cost per generation, per model (`claude-opus-5` against `claude-sonnet-5`), recorded in this document.
 4. The generated dashboards save and re-run unchanged from the Dashboards tab.
+
+### Measured: local models (Ollama)
+
+The Anthropic rows are still pending (this machine has no key), but the second provider can be measured today, and it answers the question the experiment was really about: how much of this depends on a frontier model?
+`scripts/eval_generate.py` ran the same six questions (the first five golden ones plus "apps, namespaces and clusters under hub hub-east") against the 5-cluster kind fleet on an M1 Max with 64 GB, once per model, with `ODL_LLM_PROVIDER=ollama` and the run limits unchanged (12 turns, 12 panels, 600 s).
+
+| Model (Ollama, M1 Max 64 GB) | Turns | Tool calls | Panels | Panels in error | Wall clock per question | Tokens in / out |
+|---|---|---|---|---|---|---|
+| `gpt-oss:20b` | 27 (median 3) | 21 | 10 | 0 | 11-109 s (median 25 s) | 297k / 9.4k |
+| `qwen3:4b` | 14 (median 2) | 12 | 7 | 0 | 71-196 s (median 137 s) | 162k / 33.6k |
+| `llama3.2:3b` | 26 (one run hit the 12-turn cap) | 22+ | 2 | 0 | 7-81 s (median 10 s) | 151k / 1.9k |
+
+Read the panel column, not the error column.
+No model produced a panel that failed to re-run, because nothing reaches the state without passing the guard and a dry run: the safety property holds on a 3B model as well as on a hosted one.
+What the local models lose is composition.
+`gpt-oss:20b` builds real dashboards but small ones (one to two panels where the prompt asks for three to six, five on the hub question), narrates the answer as a markdown table instead of leaving it to the panels, and invented a tool name once (`add_dashboard`) before correcting itself from the tool error.
+`qwen3:4b` writes correct SQL and is three to eight times slower, and spends its output budget on thinking: on the first question it hit the 4096-token output cap inside its own reasoning and finished the turn with no tool call and nothing to show.
+`llama3.2:3b` is not usable for this: it answers in prose and calls `preview_sql` instead of `add_panel`, gets argument names wrong (`panel_id` for `id`), and left four of six dashboards empty and one against the turn limit.
+Nothing was raised to make these numbers better; a `qwen3:4b` worth rerunning would need `ODL_AGENT_MAX_TOKENS` above 4096 so its thinking does not consume the turn.
+
+On the single-question path the picture is better.
+`scripts/eval_ask.py` on the first five golden questions scores 0/5 for every model, but that number is unusable here: each `expect` block describes the two-cluster unit fixture (`ocp-west-1`, `nginx:1.19`, `api-tls`) and the kind fleet has neither those clusters nor that image, so no model can satisfy them on this data.
+The usable column is coverage, which compares the generated rows with the reference SQL's rows on the same snapshot: `gpt-oss:20b` (6-19 s) and `qwen3:4b` (24-80 s) each came back `exact` on three of five and `differs` on two only by leaving a column out of the SELECT, while `llama3.2:3b` (2-14 s) failed the blast-radius question outright, writing SQL that would not bind on either attempt.
+The eval script needs a fleet-independent `expect`, or a data layer serving the fixture, before its pass/fail means anything against a live fleet.

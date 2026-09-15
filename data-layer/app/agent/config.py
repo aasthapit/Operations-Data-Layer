@@ -9,6 +9,7 @@ ordinary query and is bounded by `ODL_QUERY_TIMEOUT_SECONDS` like every other.
 """
 import os
 
+from ..llm.config import llm_config
 from ..query.config import query_config
 from ..query.dashboards import MAX_PANELS
 
@@ -44,8 +45,11 @@ class AgentConfig:
 
     # Wall clock for the whole run, model time included. The browser is
     # holding a stream open; a run that outstays this ends as a RUN_ERROR the
-    # page can render rather than as a connection that goes quiet.
-    timeout_seconds: float = float(os.environ.get("ODL_AGENT_TIMEOUT_SECONDS", "150"))
+    # page can render rather than as a connection that goes quiet. The default
+    # follows the provider: a local model spends tens of seconds on a turn, so
+    # the budget that is generous for a hosted one kills it halfway.
+    timeout_seconds: float = float(os.environ.get("ODL_AGENT_TIMEOUT_SECONDS")
+                                   or llm_config.default_agent_timeout())
 
     def as_limits(self) -> dict:
         """The subset `GET /api/agent` publishes, so a client can pre-empt them."""

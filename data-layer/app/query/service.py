@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import decimal
 import logging
+import math
 import threading
 import time
 import uuid
@@ -124,6 +125,11 @@ class AskFailed(Exception):
 # --------------------------------------------------------------------------- #
 def _jsonable(value):
     """DuckDB values -> something FastAPI can serialise."""
+    if isinstance(value, float) and not math.isfinite(value):
+        # nan and +-inf are ordinary DOUBLEs to DuckDB (a ratio with a zero
+        # denominator produces one) and not JSON at all: without this the whole
+        # response is a 500 that names neither the query nor the column.
+        return None
     if value is None or isinstance(value, str | int | float | bool):
         return value
     if isinstance(value, datetime | date):

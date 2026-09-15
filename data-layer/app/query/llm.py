@@ -15,6 +15,11 @@ deliberate:
 The generator is injectable (`set_generator`) so the API, the guard and the
 snapshot can all be tested without a network call, and the client is built on
 first use so the service imports cleanly on a box with no credentials.
+
+Which model writes the SQL is `app.llm.provider`'s business, not this module's:
+everything above - the instructions, the schema, the retry with the error fed
+back, the `SqlPlan` that comes out - is the same whether the answer came from
+Anthropic or from an Ollama on the operator's own laptop.
 """
 from __future__ import annotations
 
@@ -25,6 +30,7 @@ from contextlib import contextmanager
 
 from pydantic import BaseModel, Field
 
+from ..llm import provider
 from .config import query_config
 from .errors import QueryUnavailable
 
@@ -205,7 +211,7 @@ def set_generator(fn: Generator | None) -> None:
 def generate_sql(question: str, schema_text: str,
                  error_feedback: str | None = None) -> SqlPlan:
     """Ask for SQL. Raises QueryUnavailable when the model cannot be reached."""
-    generator = _generator or _anthropic_generate
+    generator = _generator or provider.generate
     return generator(question, schema_text, error_feedback)
 
 
@@ -213,8 +219,4 @@ def available() -> bool:
     """Whether a question can currently be translated at all (best effort)."""
     if _generator is not None:
         return True
-    try:
-        _get_client()
-        return True
-    except QueryUnavailable:
-        return False
+    return provider.availability(query_config.model)[0]

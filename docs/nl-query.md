@@ -472,11 +472,54 @@ Exit status is 1 if anything failed, so it can gate a change.
 
 Tests never call the model: `app.query.llm.set_generator()` swaps the generator for a stub, and `tests/test_query_api.py` uses it to prove the loop, the retry and the error mapping.
 
+## Local models with Ollama
+
+Both places the data layer calls a model - `POST /api/query/ask` and `POST /api/agent/run` - can call one running on the same machine instead of a hosted one.
+Set `ODL_LLM_PROVIDER=ollama` and nothing else changes: the same prompts, the same semantic layer, the same guard, the same six tools, the same AG-UI events, the same dashboards.
+What changes is that no question, no schema and no cluster name leaves the building, which for an estate whose namespace names are its product roadmap is the whole argument.
+
+```sh
+ollama pull gpt-oss:20b                       # tools + thinking, ~13 GB
+cd data-layer
+ODL_LLM_PROVIDER=ollama .venv/bin/uvicorn app.main:app --port 18000
+```
+
+| Variable | Default | What it does |
+|---|---|---|
+| `ODL_LLM_PROVIDER` | `anthropic` | `ollama` sends both paths to the local daemon |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Where the daemon listens. From inside the containers: `http://host.docker.internal:11434` |
+| `ODL_OLLAMA_MODEL` | `gpt-oss:20b` | The local model, and the default of `ODL_QUERY_MODEL` / `ODL_AGENT_MODEL` (either still wins when set) |
+| `ODL_OLLAMA_NUM_CTX` | `32768` | Context window asked for per request |
+| `ODL_OLLAMA_TIMEOUT_SECONDS` | `300` | HTTP read budget per call; the first call also loads the weights |
+| `ODL_OLLAMA_THINK` | `auto` | `auto` sends `think` only to models that report the capability (the effort word for gpt-oss, `true` for the rest); `off` never sends it |
+
+`ODL_AGENT_TIMEOUT_SECONDS` also defaults to 600 instead of 150 on this provider, because a local turn takes tens of seconds and a six-panel run is ten of them.
+`GET /api/agent` answers from the daemon's model list, so an unreachable daemon or an unpulled model is a sentence the Generate view can show (`model gpt-oss:20b is not pulled (ollama pull gpt-oss:20b)`) rather than a run that dies at the first turn.
+
+**The model needs tools and a real context window.**
+`POST /api/agent/run` is a tool-using loop, so the model must be one Ollama lists with the `tools` capability (`ollama show <model>`); without it the run makes no tool calls and builds nothing.
+And the system prompt is the composition instructions plus the whole semantic layer - about 11k tokens on this fleet, more on a larger one - so a 4k-context model cannot see the schema it is being asked to write SQL against.
+
+**The truncation trap.**
+Ollama's own default context window is a couple of thousand tokens, and a prompt that does not fit is truncated **silently**: no error, no warning, just a model that has not seen the second half of the schema and writes confident SQL over columns that do not exist.
+That is why `options.num_ctx` is sent on every request and why `ODL_OLLAMA_NUM_CTX` is the one setting not to lower.
+If you raise it, watch memory: the KV cache grows with the window.
+
+**What to expect on speed.**
+On an M1 Max with 64 GB, `gpt-oss:20b` answers a single question in 6 to 19 seconds and builds a dashboard in 11 to 109 seconds (median 25).
+There is no prompt cache here, so every turn re-reads the whole system prompt: a six-question run spent 297k input tokens against 9.4k output ones, and cost per turn stays flat where the hosted path's falls after the first.
+`qwen3:4b` writes comparable SQL three to eight times slower, because it spends its output budget thinking - watch `ODL_AGENT_MAX_TOKENS`, which it can exhaust inside a single turn's reasoning and finish with nothing to show.
+`llama3.2:3b` is fast and not usable for the agent: it answers in prose and calls `preview_sql` where it should call `add_panel`.
+The numbers per model are in [ADR-0004](adr/0004-generative-ui.md#measured-local-models-ollama).
+What no local model broke is the safety property: nothing reaches the state without passing the guard and a dry run, so the worst a small model produced was an empty dashboard, never a broken panel.
+Treat the local path as the private option, not the fast one.
+
 ## Settings
 
 | Variable | Default | What it does |
 |---|---|---|
-| `ODL_QUERY_MODEL` | `claude-opus-5` | The model that writes the SQL |
+| `ODL_LLM_PROVIDER` | `anthropic` | Which provider answers: `anthropic`, or `ollama` for a model on this machine |
+| `ODL_QUERY_MODEL` | `claude-opus-5` | The model that writes the SQL (`ODL_OLLAMA_MODEL` when the provider is `ollama`) |
 | `ODL_QUERY_EFFORT` | `medium` | Thinking effort for the generation |
 | `ODL_QUERY_MAX_TOKENS` | `4096` | Output cap for one generation |
 | `ODL_QUERY_MAX_ROWS` | `500` | Hard row cap; the guard writes it into the query |

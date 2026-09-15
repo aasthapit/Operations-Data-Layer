@@ -7,6 +7,8 @@ guard and the executor, which must not depend on the collector's settings.
 """
 import os
 
+from ..llm.config import llm_config
+
 
 class QueryConfig:
     # Hard ceiling on rows returned by any query. The guard rewrites the SQL
@@ -17,8 +19,10 @@ class QueryConfig:
     # Wall-clock budget for one query. DuckDB is interrupted when it expires.
     timeout_seconds: float = float(os.environ.get("ODL_QUERY_TIMEOUT_SECONDS", "10"))
 
-    # The model that writes the SQL, and how hard it is asked to think.
-    model: str = os.environ.get("ODL_QUERY_MODEL", "claude-opus-5")
+    # The model that writes the SQL, and how hard it is asked to think. The
+    # default follows the provider (`ODL_LLM_PROVIDER`), so a deployment that
+    # switches to a local model does not have to name it twice.
+    model: str = os.environ.get("ODL_QUERY_MODEL") or llm_config.default_model()
     effort: str = os.environ.get("ODL_QUERY_EFFORT", "medium")
     max_tokens: int = int(os.environ.get("ODL_QUERY_MAX_TOKENS", "4096"))
 

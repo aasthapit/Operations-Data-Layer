@@ -15,11 +15,15 @@ network call: `set_model(fn)` swaps in a scripted adapter exactly as
 `llm.set_generator` does for the query plane, and every ordering property of
 the event stream can then be asserted deterministically.
 
-The Anthropic adapter maps the raw stream events one to one - there is no
+The Anthropic adapter below maps the raw stream events one to one - there is no
 buffering of a whole message, because the point of the feature is that the page
 fills in while the model is still writing. The client and the exception mapping
 are the query plane's (`app.query.llm`), so credentials are resolved once per
 process and a missing key reads the same here as it does on `/api/query/ask`.
+
+Which adapter actually runs is `app.llm.provider`'s decision: a local model
+(`ODL_LLM_PROVIDER=ollama`) produces the same five events from a different wire
+format, and nothing in the loop, the tools or the endpoint changes.
 """
 from __future__ import annotations
 
@@ -27,8 +31,8 @@ import json
 import logging
 from collections.abc import Callable, Iterator, Sequence
 
+from ..llm import provider
 from ..query import llm
-from ..query.errors import QueryUnavailable
 from .config import agent_config
 
 log = logging.getLogger("odl.agent.model")
@@ -61,17 +65,13 @@ def availability() -> tuple[bool, str | None]:
     """Can a run start at all, and if not, why not (the text the API serves)."""
     if _adapter is not None:
         return True, None
-    try:
-        llm._get_client()
-    except QueryUnavailable as e:
-        return False, str(e)
-    return True, None
+    return provider.availability(agent_config.model)
 
 
 def run_model(system_blocks: Sequence[dict], tools: Sequence[dict],
               messages: Sequence[dict], max_tokens: int) -> Iterator[ModelEvent]:
     """One turn. Yields internal events; raises QueryUnavailable if it cannot run."""
-    adapter = _adapter or anthropic_model
+    adapter = _adapter or provider.model
     return adapter(system_blocks, tools, messages, max_tokens)
 
 
