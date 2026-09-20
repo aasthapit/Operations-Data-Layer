@@ -1,3 +1,8 @@
+# dist/ is deliberately NOT ignored: DIST=prebuilt copies a bundle compiled on
+# the host into the image, which is the only way to build where the container
+# build cannot reach an npm registry. The default DIST=build compiles in the
+# image and overwrites whatever came in.
 node_modules/
-dist/
 .vite/
+npm-debug.log*
+.DS_Store

@@ -347,8 +347,35 @@ flowchart TB
 The patching service keeps its own Postgres database (the `db` service in `docker-compose.yml`) for its job / approval / audit system of record.
 That is a separate service with its own persistence guarantees; moving it off Postgres is out of scope here (see ADR-0001, Consequences).
 
-On OpenShift, the same images run as `Deployment`s with the API and dashboard exposed through `Route`s; see [`deploy/openshift/`](../deploy/openshift/).
-The only real-world change versus local is supplying per-hub or per-cluster credentials instead of kind kubeconfigs.
+Everywhere that is not a laptop, the same two images run as one pod of three containers:
+
+```mermaid
+flowchart TB
+  browser(["browser"])
+
+  subgraph pod["pod odl - one network namespace"]
+    dash["dashboard<br/>nginx :8080"]
+    api["api<br/>ODL_ROLE=api :8000"]
+    collector["collector<br/>ODL_ROLE=worker<br/>no port"]
+  end
+
+  redis[("Redis")]
+  fleet["ACM hubs +<br/>managed clusters"]
+
+  browser -->|"Route / hostPort"| dash
+  dash -->|"127.0.0.1:8000"| api
+  api --> redis
+  collector --> redis
+  collector --> fleet
+```
+
+The backend image takes its role from `ODL_ROLE`, so the collector and the read-only API are separate processes that fail and scale independently, while remaining one application and one image.
+Only the dashboard's port leaves the pod; the API is reachable on localhost by nginx and by nobody else, which is why there is no second Service and no CORS.
+A refresh requested from a process that does not collect is queued through Redis and picked up by a collector, and answers 409 only when none is alive.
+
+[`deploy/pod/`](../deploy/pod/) is that pod for `podman kube play` and plain Kubernetes; [`deploy/openshift/`](../deploy/openshift/) is the kustomize base, with an overlay that moves collection into a `StatefulSet` of sharded collectors.
+The only real-world change versus local is supplying fleet credentials instead of kind kubeconfigs.
+[docs/containers.md](containers.md) covers the images, the build arguments, every environment variable, the security posture and sizing.
 
 ## Architecture decisions
 

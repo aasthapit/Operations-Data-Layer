@@ -103,10 +103,34 @@ Two rules keep the log honest: a cluster seen for the first time records nothing
 | `odl:{fleet}:idx:ref:<kind>:<name>` | SET | `<cluster>\|<namespace>\|<wkind>\|<wname>\|<via>` workloads referencing a Secret / ConfigMap / PVC / ServiceAccount of that name. |
 | `odl:{fleet}:runs` | LIST | Newest-first JSON collection runs, trimmed to 200. |
 | `odl:{fleet}:run:last` | STRING | JSON of the last run summary (`at`, `ok`, `trigger`). |
+| `odl:{fleet}:progress:<instance>` | STRING | One collector's sweep in progress (`running`, `trigger`, `started_at`, `total`, `done`, `ok`, `failed`, `hubs`, `shard`). Expires three sweep intervals after its last update, so a collector that stops disappears from the aggregate rather than freezing it. |
+| `odl:{fleet}:collector:<instance>` | STRING | One collector's presence: `{instance, role, hubs, shard, started_at, at, version}`. Republished every `ODL_WORKER_TICK_SECONDS` with a TTL of three ticks plus a margin. |
+| `odl:{fleet}:refresh` | STREAM | The refresh queue. Fields `full` (`0`/`1`), `cluster` (a name, or empty for the whole fleet), `origin` (the instance that asked) and `at`. `XADD MAXLEN ~ 200`. |
 | `odl:{fleet}:dashboards` | HASH | dashboard id -> JSON query-dashboard definition (variables and panels; see [docs/nl-query.md](nl-query.md)). The one key here that is not collected fleet state: it holds what people wrote, so nothing in the sweep touches it, it is never expired and it is not ledgered. Built-in dashboards ship as YAML in `data-layer/config/dashboards/` and are not in Redis. |
 
 Fleet-indexed resource kinds: `resourcequotas`, `machineconfigpools`, `clusterserviceversions`, `subscriptions`, `persistentvolumeclaims`, `persistentvolumes`, `storageclasses`, `routes`, `events`, `clusterrolebindings`.
 Every other kind (`configmaps`, `secrets`, `services`, `ingresses`, `networkpolicies`, `cronjobs`, `horizontalpodautoscalers`) is large, rarely queried fleet-wide, and is only read from the per-cluster `resources` section; a fleet-wide inventory query over such a kind iterates clusters and stops at the requested limit.
+
+### Collector presence and the refresh queue
+
+These two keys exist because the API and the collector can be separate pods (`ODL_ROLE=api` beside `ODL_ROLE=worker`).
+`POST /api/refresh` then lands on a process that holds no cluster credentials and runs no scheduler, and the only honest answers there are "handed to a live collector" or "nobody is collecting".
+
+**Presence is a key with a TTL, not a set.**
+Every process that collects republishes `collector:<instance>` on each tick.
+Liveness is therefore expiry: a collector that is killed stops existing without anything having to clean up after it, and no reaper can mistakenly unpublish a collector that is merely slow.
+`GET /api/status` lists whoever is left, which is what makes a refused refresh explainable.
+
+**The queue is a capped stream read by every collector independently.**
+Three rules make it safe to leave requests lying in a stream that nobody acknowledges:
+
+- A consumer starts at the newest entry at the moment it starts, so a restart never replays a request from a past it was not responsible for.
+- A consumer skips entries whose `origin` is itself, so a collecting API that already swept locally and told the others does not sweep twice.
+- One tick's fleet-wide entries are coalesced into a single sweep (`full` if any of them was), because three people pressing Refresh want one sweep.
+
+A single-cluster entry is acted on only by the collector that owns the cluster's hub (`COLLECT_HUBS`) and whose shard the name hashes into (`COLLECT_SHARD`) - the collector's existing ownership rule, so exactly one process picks it up.
+A cluster no collector has written yet is ignored.
+The stream is a ring buffer that bounds memory, not a backlog: a request is only interesting for the few seconds until the next tick.
 
 ## Write protocol (one cluster)
 

@@ -1,10 +1,17 @@
-# Redis - the Operations Data Layer's store.
+# Redis, if nobody operates one for you.
 #
-# One replica with a PVC: the data is a cache any collection sweep can rebuild,
-# but rebuilding it costs a full fleet sweep, so it is worth persisting across a
-# pod restart. `noeviction` is deliberate: silently dropping a cluster would
-# make blast-radius answers wrong. Per-cluster keys carry their own TTL
-# (REDIS_TTL_SECONDS on the API deployment) so stale clusters age out instead.
+# Deliberately NOT in kustomization.yaml: a single-replica Redis on a PVC is
+# a development convenience, not a thing to run a fleet's state on. Prefer a
+# managed instance and point REDIS_URL at it. If you do want this one:
+#
+#   oc apply -f deploy/openshift/redis.yaml
+#   oc create secret generic odl-secrets ... --from-literal=REDIS_URL=redis://odl-redis:6379/0
+#
+# One replica with a PVC: the data is a cache any collection sweep can
+# rebuild, but rebuilding it costs a full fleet sweep, so it is worth
+# persisting across a pod restart. `noeviction` is deliberate - silently
+# dropping a cluster would make blast-radius answers wrong. Per-cluster keys
+# carry their own TTL (REDIS_TTL_SECONDS) so stale clusters age out instead.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,6 +22,9 @@ data:
     save 60 1
     appendonly no
     maxmemory-policy noeviction
+    # Every path redis may write to, under the PVC: the root filesystem is
+    # read-only.
+    dir /data
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -42,6 +52,10 @@ spec:
     metadata:
       labels: { app: odl, component: redis }
     spec:
+      # No runAsUser and no fsGroup: restricted-v2 assigns both from the
+      # namespace's ranges, and the PVC is chowned to the assigned fsGroup so
+      # the arbitrary UID can write to it. Pinning either one here would be
+      # rejected by the SCC for being outside the range.
       containers:
         - name: redis
           image: redis:7-alpine
@@ -66,6 +80,14 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 512Mi }
             limits: { cpu: "1", memory: 2Gi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: odl-redis }

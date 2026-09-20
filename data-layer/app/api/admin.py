@@ -27,6 +27,7 @@ and `cpu_percent` count parsing and can exceed the fetch window when several
 kinds are decoded at once - which is itself the signal that the collector is
 CPU-bound.
 """
+import logging
 import math
 import threading
 
@@ -40,8 +41,11 @@ from .deps import get_store_dep
 
 router = APIRouter(prefix="/api", tags=["admin"])
 
-COLLECTOR_DISABLED = ("the collector is disabled on this instance (COLLECTOR_ENABLED=false); "
-                      "refresh through the collecting instance")
+log = logging.getLogger("odl.api.admin")
+
+NO_COLLECTORS = ("this instance does not collect (COLLECTOR_ENABLED=false) and no collector "
+                 "is alive to take the request: start a collector (ODL_ROLE=worker) or run "
+                 "this process with COLLECTOR_ENABLED=true")
 
 # The stages of collecting one cluster, in the order they happen.
 STAGES = ("fetch_ms", "parse_ms", "assemble_ms", "health_ms", "persist_ms")
@@ -59,22 +63,49 @@ CPU_STAGES = ("parse_ms", "assemble_ms", "health_ms", "persist_ms")
 VOLUMES = ("bytes", "objects", "requests", "kinds_fetched", "kinds_cached")
 
 
-def require_collector() -> None:
-    """Refresh endpoints only make sense where a collector runs."""
-    if not settings.collector_enabled:
-        raise HTTPException(409, COLLECTOR_DISABLED)
+def queue_refresh(store: Store, full: bool = False, cluster: str | None = None) -> dict:
+    """Hand a refresh to whoever is collecting, from a process that is not.
+
+    The API and the collector can be separate pods, so this endpoint routinely
+    runs where a sweep is impossible. Queueing is only an answer while somebody
+    is listening, which is what the presence keys say; with nobody there the
+    honest answer is 409 rather than an accepted request nothing acts on.
+    """
+    live = store.collectors()
+    if not live:
+        raise HTTPException(409, NO_COLLECTORS)
+    store.request_refresh(full=full, cluster=cluster, origin=runner.instance_name())
+    answer = {"accepted": True, "mode": "queued", "full": full, "collectors": len(live)}
+    return {**answer, "cluster": cluster} if cluster else answer
+
+
+def announce_refresh(store: Store, full: bool = False, cluster: str | None = None) -> None:
+    """Pass a refresh this process is already running on to the other
+    collectors. Best effort: the local sweep is the answer to the caller, and
+    a store that cannot be written to is the tick's problem, not this request's."""
+    try:
+        store.request_refresh(full=full, cluster=cluster, origin=runner.instance_name())
+    except Exception as e:  # noqa: BLE001
+        log.debug("queueing the refresh for the other collectors failed: %s", e)
 
 
 @router.post("/refresh")
-def refresh(background: bool = True, full: bool = False):
+def refresh(background: bool = True, full: bool = False,
+            store: Store = Depends(get_store_dep)):
     """Trigger an on-demand collection sweep.
 
     By default the sweep collects what is due: kinds with an `interval` in the
     manifest are fetched only when their tier says so, and the rest of the
     document is kept from the last collection. `full=true` forces every enabled
     kind on every cluster, which is what to ask for after changing the manifest.
+
+    A process that collects sweeps its own share of the fleet and queues the
+    same request for the other collectors, which each skip the entry they
+    published themselves. A process that does not collect can only queue it.
     """
-    require_collector()
+    if not settings.collector_enabled:
+        return queue_refresh(store, full=full)
+    announce_refresh(store, full=full)
     if background:
         threading.Thread(target=runner.run_collection, args=("manual", full),
                          daemon=True).start()
@@ -90,7 +121,20 @@ def status(store: Store = Depends(get_store_dep)):
         "at": _iso(last["at"]), "ok": last["ok"], "trigger": last["trigger"],
         # What that sweep cost, per stage, summed over its clusters.
         "timings": _last_finished_run(store).get("timings")},
-        "sweep": {**prog, "started_at": _iso(prog.get("started_at"))}}
+        "sweep": {**prog, "started_at": _iso(prog.get("started_at"))},
+        # Who is collecting right now. Empty on a read-only API whose
+        # collectors are all down, which is what makes a refusal to refresh
+        # explainable rather than mysterious.
+        "collectors": _collectors(store)}
+
+
+def _collectors(store: Store) -> list[dict]:
+    rows = store.collectors()
+    return [{"instance": r.get("instance"), "role": r.get("role"),
+             "hubs": r.get("hubs") or [], "shard": r.get("shard"),
+             "version": r.get("version"), "started_at": _iso(r.get("started_at")),
+             "at": _iso(r.get("at"))}
+            for r in sorted(rows, key=lambda r: str(r.get("instance")))]
 
 
 @router.get("/runs")

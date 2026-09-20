@@ -1,0 +1,27 @@
+# The UI and, under /api, the data layer's API - one hostname, one origin.
+#
+# Edge termination: the router holds the certificate and talks plain HTTP to
+# nginx inside the cluster. Insecure requests are redirected rather than
+# served, so a bookmarked http:// link cannot quietly become an unencrypted
+# session. Set spec.host to pin a hostname; left out, the router generates
+# odl-<namespace>.apps.<cluster domain>.
+#
+# The agent's event stream lives under this Route too, so the router's own
+# read timeout has to allow a run to finish - hence the annotation.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: odl
+  labels:
+    app: odl
+  annotations:
+    haproxy.router.openshift.io/timeout: 900s
+spec:
+  to:
+    kind: Service
+    name: odl
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

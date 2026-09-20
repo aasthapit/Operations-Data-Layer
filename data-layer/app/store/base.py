@@ -159,6 +159,43 @@ class Store(ABC):
     def progress_all(self) -> list[dict]:
         """Every collector instance's last published progress, each with `instance`."""
 
+    # --------------------------------------------------- collectors + refresh
+    # Who is collecting, and how a process that does not collect asks those who
+    # do. Both exist because the API and the collector can be separate pods:
+    # `POST /api/refresh` then arrives somewhere that cannot sweep, and the
+    # only honest answers are "queued to a live collector" or "nobody is
+    # collecting". See `app/collector/coordination.py`.
+    @abstractmethod
+    def set_collector(self, instance: str, info: dict, ttl_seconds: int) -> None:
+        """Publish that this process collects: {instance, role, hubs, shard,
+        started_at, at, version}. Expires after `ttl_seconds`, so a collector
+        that dies stops being counted without anybody cleaning up after it."""
+
+    @abstractmethod
+    def clear_collector(self, instance: str) -> None:
+        """Withdraw this process's presence (a clean shutdown)."""
+
+    @abstractmethod
+    def collectors(self) -> list[dict]:
+        """Every live collector's published presence, sorted by instance."""
+
+    @abstractmethod
+    def request_refresh(self, full: bool = False, cluster: str | None = None,
+                        origin: str = "") -> str:
+        """Ask the collectors for a sweep (`cluster` None) or for one cluster.
+        `origin` is the instance that asked, so a collector skips its own
+        request. Returns the queue entry id."""
+
+    @abstractmethod
+    def refresh_cursor(self) -> str:
+        """The queue id to start consuming after: the newest entry right now.
+        A consumer that starts (or restarts) must not replay history."""
+
+    @abstractmethod
+    def refresh_requests(self, after_id: str, count: int = 100) -> list[Row]:
+        """Queue entries newer than `after_id`, oldest first. Rows carry
+        `id`, `full`, `cluster` (None fleet-wide), `origin` and `at`."""
+
     # ------------------------------------------------------------------- runs
     @abstractmethod
     def last_run(self) -> dict | None:

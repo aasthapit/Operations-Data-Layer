@@ -31,8 +31,23 @@ class Settings:
     )
     # Whether this instance collects at all. A read-only API (a dev server on
     # the host, or API pods separated from collector pods) sets this to false:
-    # no startup sweep, no scheduler, and the refresh endpoints answer 409.
+    # no startup sweep, no scheduler, and a refresh is handed to the collectors
+    # through the refresh queue (docs/redis-keyspace.md).
     collector_enabled: bool = os.environ.get("COLLECTOR_ENABLED", "true") == "true"
+    # What this process is in a split deployment: `api` (read-only, never
+    # collects), `worker` (headless collector, no HTTP) or `all` (both in one
+    # process, which is what docker-compose and a dev host run). The image's
+    # entrypoint sets it; nothing here branches on it, it is reported so an
+    # operator reading /api/status can tell which pod answered.
+    role: str = os.environ.get("ODL_ROLE", "all")
+    # The headless collector's heartbeat: how often it touches the file below,
+    # publishes its presence and drains the refresh queue. The file's age is
+    # the liveness probe (`python -m app.worker --check`), so it has to be
+    # short enough for a probe interval and long enough to survive a busy loop.
+    worker_tick_seconds: int = int(os.environ.get("ODL_WORKER_TICK_SECONDS", "5"))
+    # Under a read-only root filesystem /tmp is the one writable path, which is
+    # also where HOME points in the image.
+    worker_heartbeat: str = os.environ.get("ODL_WORKER_HEARTBEAT", "/tmp/odl-worker.heartbeat")
     # Run a collection sweep once at startup.
     refresh_on_startup: bool = os.environ.get("REFRESH_ON_STARTUP", "true") == "true"
     # Clusters are collected in parallel; this bounds the fan-out (and the

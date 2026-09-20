@@ -1,0 +1,354 @@
+# GENERATED FILE - do not edit.
+#
+# Produced by deploy/pod/render.sh from deploy/pod/odl-pod.yaml: the same pod
+# plus a redis container, for a laptop with no Redis to point at. Change
+# odl-pod.yaml and re-run `make pod-render`.
+#
+# Operations Data Layer - one pod, three containers, an external Redis.
+#
+#   podman kube play deploy/pod/odl-pod.yaml      # then http://localhost:8080
+#   podman kube play --down deploy/pod/odl-pod.yaml
+#   kubectl apply -f deploy/pod/odl-pod.yaml      # plain Kubernetes works too
+#
+# The three containers share one network namespace, so every arrow between
+# them is a localhost call and nothing but the dashboard's port is reachable
+# from outside (docs/containers.md has the diagram):
+#
+#   dashboard  nginx, the compiled UI, reverse proxy    :8080 (published)
+#   api        ODL_ROLE=api, read-only over Redis       :8000 (localhost only)
+#   collector  ODL_ROLE=worker, headless, never serves  no port at all
+#
+# odl-pod-with-redis.yaml is this file plus a redis container, for a laptop
+# with no Redis to point at. It is GENERATED from this one by render.sh, so
+# every change to either belongs here.
+#
+# Before starting: put a real fleet config in the ConfigMap below and real
+# credentials in the Secret. Everything else has a working default.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: odl-config
+  labels:
+    app: odl
+data:
+  # The fleet: a static list of ACM hubs. The collector discovers every
+  # ManagedCluster on each hub and reads the clusters themselves. The full
+  # format, including per-hub auth overrides and kubeconfig-based hubs, is in
+  # data-layer/config/acm.example.yaml and docs/onboarding.md.
+  #
+  # ${VAR} anywhere in this file is resolved from the container's environment,
+  # which is how the credentials stay in the Secret and out of the ConfigMap.
+  acm.yaml: |
+    defaults:
+      auth:
+        type: password            # password | token
+        username: ${OCP_USERNAME}
+        password: ${OCP_PASSWORD}
+      insecure_skip_tls_verify: false
+      # A private CA: mount it into the pod and point at the file. On
+      # OpenShift the cluster's trusted bundle is injected for you
+      # (deploy/openshift/ca-bundle.yaml).
+      # ca_cert: /etc/odl/ca/tls-ca-bundle.pem
+      #
+      # One credential for the whole estate: log in to every managed cluster
+      # with the auth above instead of reading kubeconfigs off the hubs.
+      # secret = the hub's per-cluster kubeconfig Secret, shared = the
+      # cluster's own API URL with the auth above, auto = secret then shared.
+      managed_access: shared
+      # Where a managed cluster's API server is when ACM did not record it on
+      # the ManagedCluster. {name} is the ManagedCluster name.
+      # managed_api_url: https://api.{name}.ocp.example.net:6443
+
+    hubs:
+      - name: acm-prod-east
+        region: us-east-1
+        datacenter: iad1
+        api_url: https://api.acm-prod-east.example.com:6443
+
+      - name: acm-prod-west
+        region: us-west-2
+        datacenter: sjc1
+        api_url: https://api.acm-prod-west.example.com:6443
+        managed_access: auto      # per-hub override: hub secrets first here
+
+  # Application ownership, when it comes from a registry export rather than
+  # from namespace labels. Set `applications.source: mapping` in the manifest
+  # to use it; leave the file as an empty list to fall back to labels.
+  # A big estate's export will not fit in a ConfigMap - docs/containers.md
+  # covers the 1 MiB cap and the gzip / PVC ways around it.
+  app-map.json: |
+    [
+      {"cluster": "lew06", "env": "nonprod", "app_id": "1aat", "environment": "development", "lob": "wimt", "namespace": "1aat-dev"},
+      {"cluster": "lew06", "env": "nonprod", "app_id": "1aat", "environment": "test", "lob": "wimt", "namespace": "1aat-pte"},
+      {"cluster": "man01", "env": "nonprod", "app_id": "10am", "environment": "development", "lob": "cto", "namespace": "10am-dev-10am"}
+    ]
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: odl-secrets
+  labels:
+    app: odl
+type: Opaque
+stringData:
+  # The shared read-only service account the collector logs in to every hub
+  # and cluster with (deploy/rbac/odl-collector-readonly.yaml grants it).
+  OCP_USERNAME: svc-ops-data
+  OCP_PASSWORD: change-me
+  # Where the fleet state lives. Any redis-py URL: redis://host:6379/0,
+  # redis://user:password@host:6379/0, rediss://... for TLS. The instance must
+  # run maxmemory-policy noeviction (ADR-0001).
+  REDIS_URL: redis://127.0.0.1:6379/0
+  # Only POST /api/query/ask and POST /api/agent/run need this. Everything
+  # else, including POST /api/query/sql, works with it empty.
+  ANTHROPIC_API_KEY: ""
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: odl
+  labels:
+    app: odl
+spec:
+  # A sweep in flight should be allowed to land rather than be cut off.
+  terminationGracePeriodSeconds: 30
+  containers:
+    # ---- dashboard: nginx, the UI, and the reverse proxy ------------------
+    - name: dashboard
+      # Retag for a registry when this leaves the laptop, e.g.
+      #   podman tag localhost/odl-dashboard:latest quay.io/acme/odl-dashboard:1.0
+      # and set the image here to the pushed name.
+      image: localhost/odl-dashboard:latest
+      imagePullPolicy: IfNotPresent
+      ports:
+        # The only port that leaves the pod. The API and the collector are
+        # reachable on localhost by their neighbours and by nobody else.
+        - name: http
+          containerPort: 8080
+          hostPort: 8080
+      env:
+        - name: PORT
+          value: "8080"
+        - name: API_UPSTREAM
+          value: 127.0.0.1:8000
+        # No patching service in this pod. The default is an IP literal on
+        # purpose: an unresolvable hostname is a fatal nginx start error,
+        # whereas this simply answers 502 if anything asks.
+        - name: PATCHING_UPSTREAM
+          value: 127.0.0.1:8010
+        - name: API_READ_TIMEOUT
+          value: 120s
+        # An agent run against a local model takes up to ten minutes.
+        - name: AGENT_READ_TIMEOUT
+          value: 900s
+      readinessProbe:
+        # nginx answers this itself. A probe that went through to the API
+        # would restart a perfectly healthy web tier while the API waits
+        # for Redis.
+        httpGet: { path: /nginx-health, port: 8080 }
+        periodSeconds: 10
+      livenessProbe:
+        httpGet: { path: /nginx-health, port: 8080 }
+        periodSeconds: 20
+      resources:
+        requests: { cpu: 50m, memory: 64Mi }
+        limits: { cpu: 200m, memory: 128Mi }
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: tmp-dashboard
+          mountPath: /tmp
+
+    # ---- api: reads Redis, serves the UI, MCP and the agent ---------------
+    - name: api
+      image: localhost/odl-backend:latest
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: ODL_ROLE
+          value: api            # read-only: this process never collects
+        - name: PORT
+          value: "8000"
+        - name: HOME
+          value: /tmp           # arbitrary UID: no home directory of its own
+        - name: ODL_CONFIG
+          value: /etc/odl/acm.yaml
+        - name: ODL_APP_MAP
+          value: /etc/odl/app-map.json
+        # What is collected from every cluster. The fleet profile ships in the
+        # image and reads platform state every sweep and inventory every 15
+        # minutes; mount a ConfigMap over it to change that without a rebuild.
+        - name: ODL_MANIFEST
+          value: /app/config/ocp-api-manifest.fleet.yaml
+      envFrom:
+        - secretRef:
+            name: odl-secrets
+      startupProbe:
+        # Waiting for Redis can take a minute on a cold start, and a liveness
+        # probe that fired during it would restart the container forever.
+        httpGet: { path: /healthz, port: 8000 }
+        periodSeconds: 5
+        failureThreshold: 24
+      readinessProbe:
+        httpGet: { path: /healthz, port: 8000 }
+        periodSeconds: 10
+      livenessProbe:
+        httpGet: { path: /healthz, port: 8000 }
+        periodSeconds: 20
+      resources:
+        # The API is memory-shaped, not CPU-shaped: the DuckDB snapshot that
+        # answers /api/query/* is built in THIS process, which is why it gets
+        # the larger memory limit and the collector gets the CPU.
+        requests: { cpu: 250m, memory: 512Mi }
+        limits: { cpu: "2", memory: 2Gi }
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: tmp-api
+          mountPath: /tmp
+        - name: config
+          mountPath: /etc/odl
+          readOnly: true
+
+    # ---- collector: headless, never serves anything -----------------------
+    - name: collector
+      image: localhost/odl-backend:latest
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: ODL_ROLE
+          value: worker         # startup sweep, scheduler, refresh queue
+        - name: HOME
+          value: /tmp
+        - name: ODL_CONFIG
+          value: /etc/odl/acm.yaml
+        - name: ODL_APP_MAP
+          value: /etc/odl/app-map.json
+        - name: ODL_MANIFEST
+          value: /app/config/ocp-api-manifest.fleet.yaml
+      envFrom:
+        - secretRef:
+            name: odl-secrets
+      startupProbe:
+        # No port to probe: the worker reports its own readiness.
+        exec:
+          command: ["python", "-m", "app.worker", "--check"]
+        periodSeconds: 10
+        failureThreshold: 12
+      livenessProbe:
+        exec:
+          command: ["python", "-m", "app.worker", "--check"]
+        periodSeconds: 30
+      resources:
+        # The collector is the CPU consumer of the pod: a sweep decodes and
+        # parses every cluster's Kubernetes JSON, several clusters at a time
+        # (COLLECT_WORKERS). Give it room before giving the API any.
+        requests: { cpu: 500m, memory: 1Gi }
+        limits: { cpu: "4", memory: 4Gi }
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: tmp-collector
+          mountPath: /tmp
+        - name: config
+          mountPath: /etc/odl
+          readOnly: true
+
+    # ---- redis: the fleet state store, in the pod -------------------------
+    # Only in this variant. A real deployment points REDIS_URL at an instance
+    # that somebody operates; this is for a laptop that has none.
+    - name: redis
+      image: docker.io/library/redis:7-alpine
+      imagePullPolicy: IfNotPresent
+      args:
+        # noeviction is deliberate: a cache that silently dropped a cluster
+        # would answer blast-radius questions wrongly. Per-cluster keys carry
+        # their own TTL (REDIS_TTL_SECONDS) and age out explicitly instead.
+        - "--maxmemory-policy"
+        - "noeviction"
+        # An RDB snapshot every 60s if anything changed. Enough durability for
+        # a cache any sweep can rebuild, so the AOF stays off.
+        - "--save"
+        - "60"
+        - "1"
+        - "--appendonly"
+        - "no"
+      ports:
+        - name: redis
+          containerPort: 6379
+      readinessProbe:
+        exec:
+          command: ["redis-cli", "ping"]
+        periodSeconds: 5
+      livenessProbe:
+        tcpSocket: { port: 6379 }
+        periodSeconds: 20
+      resources:
+        requests: { cpu: 100m, memory: 512Mi }
+        limits: { cpu: "1", memory: 2Gi }
+      securityContext:
+        # The official redis image declares no USER, so runAsNonRoot on its
+        # own would refuse to start it. 999 is the `redis` account inside.
+        runAsUser: 999
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: redis-data
+          mountPath: /data
+
+  volumes:
+    # One scratch mount per container: the root filesystems are read-only and
+    # sharing /tmp between three processes only invites collisions.
+    - name: tmp-dashboard
+      emptyDir: {}
+    - name: tmp-api
+      emptyDir: {}
+    - name: tmp-collector
+      emptyDir: {}
+    - name: config
+      configMap:
+        name: odl-config
+    # The claim is declared at the end of this file. podman backs it with a
+    # named volume `odl-redis-data`; Kubernetes binds it from the default
+    # storage class.
+    - name: redis-data
+      persistentVolumeClaim:
+        claimName: odl-redis-data
+---
+# Where the redis container keeps its snapshot. Without this object plain
+# Kubernetes never schedules the pod ("persistentvolumeclaim not found");
+# `podman kube play` reads it too and creates the named volume from it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: odl-redis-data
+  labels:
+    app.kubernetes.io/name: odl
+    app.kubernetes.io/component: redis
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 8Gi

@@ -1,0 +1,16 @@
+# The only way into the pod. The API on :8000 and the collector are pod-local
+# by design: everything a client needs is proxied by the dashboard's nginx
+# under /api, same origin, so there is no second Service and no CORS.
+apiVersion: v1
+kind: Service
+metadata:
+  name: odl
+  labels:
+    app: odl
+spec:
+  selector:
+    app: odl
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

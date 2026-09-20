@@ -42,10 +42,19 @@ function get(path) {
   };
 }
 
+// A POST with no body. The status rides along on the error because a refusal
+// here is something the user is meant to read: a 409 from /api/refresh means
+// no collector is running, which is a different thing to say than "failed".
 async function post(path) {
   const res = await fetch(`${BASE}${path}`, { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* not JSON: keep the text */ }
+  if (res.ok) return data;
+  const detail = data && typeof data === "object" ? data.detail : null;
+  const error = new Error(typeof detail === "string" ? detail : text || `${res.status} ${res.statusText}`);
+  error.status = res.status;
+  throw error;
 }
 
 // A request with a JSON body (POST / PUT), or a bare DELETE. The query plane

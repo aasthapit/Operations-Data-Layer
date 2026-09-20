@@ -62,6 +62,7 @@ export default function App() {
   const { navigate, back, segments } = route;
   const [root, second, third] = segments;
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState("");
   // An unknown path falls back to the overview, so the tab strip does too.
   const known = TABS.some(([key]) => key === (root || ""));
   const activeTab = known ? root || "" : "";
@@ -89,12 +90,23 @@ export default function App() {
 
   // Ask for a sweep, then drop the cache so every mounted view re-reads in
   // place - no remount, so tables keep their sort and the page does not blink.
+  //
+  // Where the API and the collectors are separate pods the answer is "queued":
+  // this process cannot sweep, so it handed the request to a collector, which
+  // picks it up within a tick. That is worth saying, because the numbers then
+  // move a moment after the button stops spinning - and it is worth saying
+  // plainly when nobody is collecting at all, which is the 409.
   const refresh = async () => {
     setRefreshing(true);
+    setRefreshNote("");
     try {
-      await api.refresh();
-      setTimeout(() => { invalidate(); setRefreshing(false); }, 4000);
-    } catch { setRefreshing(false); }
+      const answer = await api.refresh();
+      if (answer?.mode === "queued") setRefreshNote("Refresh requested");
+      setTimeout(() => { invalidate(); setRefreshing(false); setRefreshNote(""); }, 4000);
+    } catch (e) {
+      setRefreshNote(e?.status === 409 ? "No collector is running" : "Refresh failed");
+      setRefreshing(false);
+    }
   };
 
   return (
@@ -113,6 +125,7 @@ export default function App() {
           ))}
         </div>
         <div className="spacer" />
+        {refreshNote && <span className="refresh-note">{refreshNote}</span>}
         <button className="btn" onClick={refresh} disabled={refreshing}>
           {refreshing ? "Refreshing…" : "↻ Refresh data"}
         </button>

@@ -1,5 +1,6 @@
 """The application mapping: records in, ownership out."""
 import dataclasses
+import gzip
 import json
 
 import pytest
@@ -49,6 +50,47 @@ def test_load_json_and_yaml(tmp_path):
     bad.write_text("42")
     with pytest.raises(ValueError):
         load_appmap(str(bad))
+
+
+def test_load_gzipped_json_and_yaml(tmp_path):
+    """A ConfigMap caps at 1 MiB and a real registry is several times that, so
+    the export travels gzipped in `binaryData`. The suffix under `.gz` still
+    decides the format."""
+    j = tmp_path / "m.json.gz"
+    j.write_bytes(gzip.compress(json.dumps({"items": RECORDS[:3]}).encode()))
+    y = tmp_path / "m.yaml.gz"
+    y.write_bytes(gzip.compress(b"- {cluster: a, namespace: b, app_id: c, lob: d}\n"))
+
+    loaded = load_appmap(str(j))
+    assert loaded.apps == 2 and loaded.lookup("man01", "10am").app == "10am"
+    assert load_appmap(str(y)).lookup("a", "b").team == "d"
+
+
+def test_a_gzipped_registry_is_much_smaller(tmp_path):
+    """The reason the format exists at all, asserted rather than claimed."""
+    records = [{"cluster": f"c{n % 40}", "namespace": f"app-{n}", "app_id": f"a{n}",
+                "lob": "wimt", "environment": "production", "env": "prod"}
+               for n in range(4000)]
+    plain = json.dumps(records).encode()
+    packed = tmp_path / "m.json.gz"
+    packed.write_bytes(gzip.compress(plain))
+    assert len(plain) > 10 * packed.stat().st_size
+    assert load_appmap(str(packed)).records == 4000
+
+
+def test_get_appmap_re_reads_a_gzipped_registry_when_it_changes(manifest, tmp_path):
+    import os
+
+    path = tmp_path / "app-map.json.gz"
+    path.write_bytes(gzip.compress(json.dumps(RECORDS[:1]).encode()))
+    m = dataclasses.replace(manifest, applications={
+        "source": "mapping", "mapping": {"path": str(path)}})
+    appmap.reset_cache()
+    assert get_appmap(m).lookup("lew06", "1aat-dev").app == "1aat"
+    path.write_bytes(gzip.compress(json.dumps(RECORDS[:2]).encode()))
+    os.utime(path, (os.stat(path).st_atime, os.stat(path).st_mtime + 5))
+    assert get_appmap(m).lookup("lew06", "1aat-pte") is not None
+    appmap.reset_cache()
 
 
 def test_get_appmap_follows_the_manifest_and_the_file_mtime(manifest, tmp_path, monkeypatch):

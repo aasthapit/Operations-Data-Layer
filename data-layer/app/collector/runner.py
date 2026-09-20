@@ -126,12 +126,18 @@ def in_shard(name: str, shard: tuple[int, int] | None) -> bool:
 
 
 def instance_name() -> str:
-    """Who this collector is, for the fleet-wide progress view: the hubs it
-    owns (or "all"), its shard, and host:pid so two identical configs on the
-    same box stay distinct."""
+    """Who this process is, for the fleet-wide progress view and the refresh
+    queue: the hubs it owns (or "all"), its shard, then host/role:pid.
+
+    The role is not decoration. The containers of a pod share one hostname and
+    each runs its process as PID 1, so host:pid alone names the read-only API
+    and the collector beside it identically - and a collector skips refresh
+    requests that carry its own name, so it would discard every request that
+    API queued for it.
+    """
     hubs = ",".join(owned_hubs()) or "all"
     shard = f"@{settings.collect_shard}" if settings.collect_shard else ""
-    return f"{hubs}{shard}#{socket.gethostname()}:{os.getpid()}"
+    return f"{hubs}{shard}#{socket.gethostname()}/{settings.role}:{os.getpid()}"
 
 
 def _publish_progress(store: Store) -> None:

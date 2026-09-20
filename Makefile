@@ -29,8 +29,31 @@ ODL_API_PORT ?= 18000
 ODL_REDIS_PORT ?= 16379
 DEV_API_PORT ?= 18002
 
+# ---- container images and the pod ------------------------------------------
+# Built from data-layer/ and dashboard/ (docs/containers.md). IMAGE_PREFIX is
+# the registry or namespace the tags carry; localhost is what podman looks for
+# when `podman kube play` sees imagePullPolicy: IfNotPresent.
+IMAGE_PREFIX ?= localhost
+IMAGE_TAG ?= latest
+BACKEND_IMAGE = $(IMAGE_PREFIX)/odl-backend:$(IMAGE_TAG)
+DASHBOARD_IMAGE = $(IMAGE_PREFIX)/odl-dashboard:$(IMAGE_TAG)
+
+# Build arguments are passed through ONLY when set, so an unset variable means
+# the Dockerfile's own default rather than an empty --build-arg that overrides
+# it with nothing. Set them in .env or on the command line:
+#   make images PYTHON_IMAGE=registry.access.redhat.com/ubi9/python-312 \
+#               NGINX_IMAGE=registry.access.redhat.com/ubi9/nginx-124 \
+#               PIP_INDEX_URL=https://nexus.example.com/repository/pypi/simple \
+#               NPM_REGISTRY=https://nexus.example.com/repository/npm/
+BUILD_ARGS = $(foreach v,PYTHON_IMAGE NODE_IMAGE NGINX_IMAGE DIST PIP_INDEX_URL \
+                         PIP_EXTRA_INDEX_URL PIP_TRUSTED_HOST NPM_REGISTRY, \
+               $(if $($(v)),--build-arg $(v)=$($(v))))
+
+POD_FILE ?= deploy/pod/odl-pod.yaml
+
 .PHONY: help fleet-venv fleet-up fleet-down fleet-seed fleet-status acm-up acm-down acm-status acm-smoke \
         up down logs rebuild ps reset dl-venv test lint rbac \
+        images image-backend image-dashboard images-push pod-up pod-down pod-logs pod-render \
         dev-venv dev dev-core dev-api dev-ui dev-mcp dev-down collect redis-cli sql ask \
         local local-remote local-api local-ui local-mcp local-redis local-hubs redis-up redis-down redis-ping check-config deps
 
@@ -53,6 +76,14 @@ help:
 	@echo "  make down          stop the stack"
 	@echo "  make logs          tail api logs"
 	@echo "  make reset         down + fleet-down (full teardown)"
+	@echo ""
+	@echo "  make images        build odl-backend + odl-dashboard (IMAGE_PREFIX, IMAGE_TAG;"
+	@echo "                     DIST=prebuilt compiles the UI on the host first)"
+	@echo "  make image-backend / make image-dashboard   just one of them"
+	@echo "  make images-push   push both to IMAGE_PREFIX"
+	@echo "  make pod-up        run the three-container pod with podman (POD_FILE=... to pick a manifest)"
+	@echo "  make pod-logs      follow the pod's logs      make pod-down   stop and remove it"
+	@echo "  make pod-render    regenerate deploy/pod/odl-pod-with-redis.yaml from odl-pod.yaml"
 	@echo ""
 	@echo "  make dl-venv       create the data-layer venv (tests, lint, manifest tooling)"
 	@echo "  make test          run the data-layer unit tests"
@@ -144,6 +175,57 @@ lint:
 rbac:
 	cd data-layer && ODL_MANIFEST=config/ocp-api-manifest.yaml .venv/bin/python -m app.manifest rbac \
 		> ../deploy/rbac/odl-collector-readonly.yaml && echo "wrote deploy/rbac/odl-collector-readonly.yaml"
+
+# ---- container images -------------------------------------------------------
+# Two images, one per directory. docs/containers.md covers the build arguments
+# for a corporate registry (UBI bases, pip and npm mirrors).
+images: image-backend image-dashboard
+
+image-backend:
+	@test -n "$(ENGINE)" || (echo "docker or podman is required"; exit 1)
+	$(ENGINE) build -t $(BACKEND_IMAGE) $(BUILD_ARGS) data-layer
+	@echo "built $(BACKEND_IMAGE)"
+
+# DIST=prebuilt compiles the bundle on the host and copies it in, for a build
+# environment that cannot reach an npm registry. The default compiles in the
+# image and needs nothing installed here.
+image-dashboard:
+	@test -n "$(ENGINE)" || (echo "docker or podman is required"; exit 1)
+ifeq ($(DIST),prebuilt)
+	@command -v npm >/dev/null || (echo "node + npm (22+) are required for DIST=prebuilt"; exit 1)
+	cd dashboard && npm install --no-audit --no-fund && npm run build
+endif
+	$(ENGINE) build -t $(DASHBOARD_IMAGE) $(BUILD_ARGS) dashboard
+	@echo "built $(DASHBOARD_IMAGE)"
+
+images-push:
+	@test "$(IMAGE_PREFIX)" != "localhost" || \
+		(echo "set IMAGE_PREFIX to a registry, e.g. make images-push IMAGE_PREFIX=quay.io/acme"; exit 1)
+	$(ENGINE) push $(BACKEND_IMAGE)
+	$(ENGINE) push $(DASHBOARD_IMAGE)
+
+# ---- the pod ----------------------------------------------------------------
+# podman only: `kube play` has no docker equivalent. POD_FILE picks the
+# manifest - odl-pod-with-redis.yaml brings its own Redis.
+PODMAN_REQUIRED = @command -v podman >/dev/null || \
+	(echo "podman is required for the pod (this machine's engine is '$(ENGINE)'); with docker use 'make up', or apply $(POD_FILE) to a Kubernetes cluster"; exit 1)
+
+pod-up:
+	$(PODMAN_REQUIRED)
+	podman kube play $(POD_FILE)
+	@echo "dashboard at http://localhost:8080   (make pod-logs, make pod-down)"
+
+pod-down:
+	$(PODMAN_REQUIRED)
+	podman kube play --down $(POD_FILE)
+
+pod-logs:
+	$(PODMAN_REQUIRED)
+	podman pod logs -f odl
+
+# odl-pod-with-redis.yaml is generated from odl-pod.yaml; edit that one.
+pod-render:
+	@deploy/pod/render.sh
 
 # ---- ad-hoc development (honcho) -------------------------------------------
 # The venvs are created on demand: running any dev/local target on a fresh

@@ -1,0 +1,39 @@
+# Everything the Operations Data Layer needs on OpenShift, shared by both
+# ways of running it: the default single pod (`oc apply -k deploy/openshift`)
+# and the sharded-collectors overlay.
+#
+# Two resources next to this directory are deliberately NOT here:
+#   ../secret.example.yaml  credentials never belong in git
+#   ../redis.yaml           opt in only if nobody operates a Redis for you
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - route.yaml
+  - ca-bundle.yaml
+  - networkpolicy.yaml
+
+# The fleet config and the application map, as a ConfigMap with a content
+# hash in its name: editing either file rolls the pod, so no process ever
+# serves answers from a config it did not read.
+configMapGenerator:
+  - name: odl-config
+    files:
+      - config/acm.yaml
+      - config/app-map.json
+    options:
+      labels:
+        app: odl
+
+# Where the images actually live. The deployment refers to them by bare name
+# so that retagging for your registry is this block and nothing else.
+images:
+  - name: odl-backend
+    newName: image-registry.openshift-image-registry.svc:5000/ops-data-layer/odl-backend
+    newTag: latest
+  - name: odl-dashboard
+    newName: image-registry.openshift-image-registry.svc:5000/ops-data-layer/odl-dashboard
+    newTag: latest

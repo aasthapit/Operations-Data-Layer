@@ -56,6 +56,11 @@ RUNS_KEPT = 200
 # on whole stream nodes and the real length drifts a little above this).
 CHANGES_KEPT = 5000
 
+# How many refresh requests the queue keeps. A request is only interesting for
+# the few seconds until a collector ticks, so this is a ring buffer that exists
+# to bound memory, not a backlog anybody replays.
+REFRESH_QUEUE_KEPT = 200
+
 # Kinds whose rows may carry certificate expiry.
 _CERT_KEYS = ("secrets", "configmaps")
 
@@ -220,6 +225,16 @@ def _change_row(cluster_name: str, fields: dict) -> Row:
     if not isinstance(row.get("at"), datetime):
         row["at"] = _EPOCH_START
     return row
+
+
+def _refresh_row(entry_id, fields: dict) -> Row:
+    """One refresh-queue entry as a record. Unlike a change record the fields
+    are plain strings, so the flags are decoded here rather than by `json`."""
+    data = {_text(field): _text(value) for field, value in fields.items()}
+    return Row({"id": _text(entry_id), "full": data.get("full") == "1",
+                "cluster": data.get("cluster") or None,
+                "origin": data.get("origin") or "",
+                "at": _as_datetime(data.get("at"))})
 
 
 def _application_namespaces(rows: Iterable[dict]) -> dict[str, str | None]:
@@ -446,6 +461,19 @@ class Keys:
     def progress(self, instance: str) -> str:
         return f"{self._fleet}:progress:{instance}"
 
+    def collector(self, instance: str) -> str:
+        """One collecting process's presence. A plain key with a TTL rather
+        than a member of a set: expiry is then the only liveness rule and
+        nothing has to garbage-collect a collector that was killed."""
+        return f"{self._fleet}:collector:{instance}"
+
+    @property
+    def refresh(self) -> str:
+        """The refresh queue: what a process that does not collect asks the
+        ones that do. A capped stream, so it is ordered, readable by several
+        consumers independently, and bounded without a reader."""
+        return f"{self._fleet}:refresh"
+
     def generation(self) -> str:
         return f"{self._fleet}:generation"
 
@@ -460,6 +488,9 @@ class Keys:
 
     def progress_pattern(self) -> str:
         return f"{self._fleet}:progress:*"
+
+    def collector_pattern(self) -> str:
+        return f"{self._fleet}:collector:*"
 
 
 def _is_memory(by: str | None) -> bool:
@@ -946,6 +977,42 @@ class RedisStore(Store):
             if raw:
                 out.append(_row(_unpack(raw)))
         return out
+
+    # --------------------------------------------------- collectors + refresh
+    def set_collector(self, instance: str, info: dict, ttl_seconds: int) -> None:
+        self.r.set(self.keys.collector(instance), _dumps({**info, "instance": instance}),
+                   ex=max(1, int(ttl_seconds)))
+
+    def clear_collector(self, instance: str) -> None:
+        self.r.delete(self.keys.collector(instance))
+
+    def collectors(self) -> list[dict]:
+        keys = sorted(self.r.scan_iter(match=self.keys.collector_pattern(), count=200))
+        if not keys:
+            return []
+        return [_row(_unpack(raw)) for raw in self.r.mget(keys) if raw]
+
+    def request_refresh(self, full: bool = False, cluster: str | None = None,
+                        origin: str = "") -> str:
+        # Stream fields are strings, so the flags are spelled out rather than
+        # JSON-encoded: an entry stays readable with `XRANGE` from redis-cli.
+        entry = {"full": "1" if full else "0", "cluster": cluster or "",
+                 "origin": origin or "", "at": datetime.now(UTC).isoformat()}
+        entry_id = self.r.xadd(self.keys.refresh, entry,
+                               maxlen=REFRESH_QUEUE_KEPT, approximate=True)
+        return _text(entry_id) or ""
+
+    def refresh_cursor(self) -> str:
+        entries = self.r.xrevrange(self.keys.refresh, count=1)
+        return (_text(entries[0][0]) or "0-0") if entries else "0-0"
+
+    def refresh_requests(self, after_id: str, count: int = 100) -> list[Row]:
+        # XREAD is exactly "strictly newer than this id", which is the cursor
+        # semantics a consumer wants, and it never blocks here: the worker's
+        # own tick is what paces the polling.
+        streams = self.r.xread({self.keys.refresh: after_id}, count=max(1, count))
+        return [_refresh_row(entry_id, fields)
+                for _key, entries in (streams or []) for entry_id, fields in entries]
 
     def last_run(self) -> dict | None:
         raw = self.r.get(self.keys.run_last)

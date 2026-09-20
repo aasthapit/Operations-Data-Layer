@@ -1,0 +1,24 @@
+# Trusted CAs for the connections the data layer makes OUT of this cluster:
+# the ACM hubs and every managed cluster's API server, which in most estates
+# present certificates from a private CA.
+#
+# The ConfigMap is created empty on purpose. The label tells the cluster
+# network operator to fill in the key `ca-bundle.crt` with the cluster's
+# trusted bundle (the system CAs plus whatever is configured in the
+# proxy/cluster additionalTrustBundle), and to keep it up to date. The
+# deployment mounts it at /etc/odl/ca as tls-ca-bundle.pem and points
+# REQUESTS_CA_BUNDLE and SSL_CERT_FILE at it.
+#
+# Nothing here is a secret: a CA bundle is public material.
+#
+# The pod does not start until the operator has injected the key, which
+# normally takes seconds. On a cluster where that injection does not happen,
+# drop the ca-bundle volume and volumeMounts from deployment.yaml and put
+# your own CA in the fleet config's `ca_cert` instead.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: odl-trusted-ca
+  labels:
+    app: odl
+    config.openshift.io/inject-trusted-cabundle: "true"

@@ -1,0 +1,123 @@
+# The dashboard's server block. entrypoint.sh renders this file into
+# /tmp/nginx/conf.d/default.conf, substituting EXACTLY the five ${...} names
+# below - nginx's own $host, $uri, $remote_addr and friends are left alone.
+#
+#   ${PORT}                where nginx listens
+#   ${API_UPSTREAM}        host:port of the data-layer API
+#   ${PATCHING_UPSTREAM}   host:port of the patching service
+#   ${API_READ_TIMEOUT}    read budget for an ordinary API call
+#   ${AGENT_READ_TIMEOUT}  read budget for an agent run
+#
+# entrypoint.sh holds the default of each one.
+
+server {
+    listen      ${PORT};
+    server_name _;
+    root        /usr/share/nginx/html;
+    index       index.html;
+
+    # Redirects go out as paths, not absolute URLs. nginx would otherwise
+    # rebuild them from the Host and its OWN listen port, which is wrong
+    # everywhere this runs: behind an OpenShift Route it would downgrade an
+    # https request to http, and behind a published hostPort it would name the
+    # container's 8080 rather than the port the browser used.
+    absolute_redirect off;
+
+    # Sent on everything that does not set headers of its own. nginx's
+    # add_header does not merge across levels: a location with its own
+    # add_header replaces this set, so the two locations below repeat it.
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header X-Frame-Options SAMEORIGIN always;
+
+    # nginx's own liveness answer. It must NOT depend on the API: a pod whose
+    # API is still waiting for Redis has a perfectly healthy web tier, and
+    # restarting nginx would not help it. /healthz below is the API's.
+    location = /nginx-health {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Patching system of record (a separate service, often not deployed at
+    # all). Declared before /api/ for readability; nginx picks the longest
+    # matching prefix either way. The default upstream is an IP literal so
+    # nginx still starts when there is no patching service to resolve.
+    location /api/patching/ {
+        proxy_pass http://${PATCHING_UPSTREAM}/api/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout ${API_READ_TIMEOUT};
+    }
+
+    # GET /api/agent - the capability check the Generate tab makes before it
+    # offers to build anything - is an ordinary request, not a stream. It needs
+    # its own EXACT location: a prefix location ending in a slash that is
+    # served by proxy_pass makes nginx answer the slashless URI with a 301 to
+    # the slashed one, which would send the capability check into the stream
+    # handler below (and, since the API redirects back, into a loop).
+    location = /api/agent {
+        proxy_pass http://${API_UPSTREAM};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout ${API_READ_TIMEOUT};
+    }
+
+    # The agent's event stream. Declared before /api/ because everything nginx
+    # does for a normal response - buffer it, cache it, give up after two
+    # minutes - is wrong for a server-sent event stream: the events would
+    # arrive in one lump at the end of a run, which is the one thing
+    # generative UI must not do. A run against a local model can take ten
+    # minutes, hence its own timeout. GET /api/agent (the capability check) is
+    # an ordinary request and is served by the block below.
+    location /api/agent/ {
+        proxy_pass http://${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout ${AGENT_READ_TIMEOUT};
+        chunked_transfer_encoding off;
+    }
+
+    # API + health proxied to the data layer (same origin -> no CORS).
+    location /api/ {
+        proxy_pass http://${API_UPSTREAM};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout ${API_READ_TIMEOUT};
+    }
+    location /healthz {
+        proxy_pass http://${API_UPSTREAM};
+        proxy_set_header Host $host;
+        proxy_read_timeout ${API_READ_TIMEOUT};
+    }
+
+    # Vite fingerprints everything under /assets/, so a given URL's bytes
+    # never change and the browser never needs to ask again.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        add_header X-Frame-Options SAMEORIGIN always;
+    }
+
+    # The one file that is not fingerprinted: it names the current bundle, so
+    # a cached copy would pin the browser to the previous deployment.
+    location = /index.html {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        add_header X-Frame-Options SAMEORIGIN always;
+    }
+
+    # SPA fallback: the router owns every path that is not an API call, so a
+    # deep link (/clusters/ocp-east-2/workloads, /patching/<job id>) and a
+    # reload both land on the app. The last parameter is a URI, so nginx
+    # redirects internally and index.html is served by the block above.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

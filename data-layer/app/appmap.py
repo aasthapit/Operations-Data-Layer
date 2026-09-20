@@ -11,8 +11,13 @@ the file is "not under a business application" (app_name NULL, assigned
 false).
 
 The file is JSON or YAML: a list of records, or an object whose `items` is
-that list. Field names are configurable in the manifest, so the records can be
-whatever the registry exports, for example
+that list. A `.gz` suffix means the same file gzipped, which is how a real
+registry travels: a ConfigMap caps at 1 MiB, an estate's registry is several
+times that, and JSON records of this shape compress 10 to 20x - so the gzipped
+export fits in a ConfigMap's `binaryData` where the plain one does not.
+
+Field names are configurable in the manifest, so the records can be whatever
+the registry exports, for example
 
     {"cluster": "lew06", "namespace": "1aat-dev", "app_id": "1aat",
      "lob": "wimt", "environment": "development", "env": "nonprod"}
@@ -22,6 +27,7 @@ refreshed without restarting the collector.
 """
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import os
@@ -106,9 +112,19 @@ class AppMap:
                 "namespaces": len(self._by_namespace), "clusters": self.clusters, "apps": self.apps}
 
 
+def _read_records(path: str):
+    """The file's contents, gunzipped when it is gzipped. The format is decided
+    by the suffix under `.gz`, so `registry.yaml.gz` is YAML and
+    `registry.json.gz` is JSON."""
+    gzipped = path.endswith(".gz")
+    inner = path[: -len(".gz")] if gzipped else path
+    opener = gzip.open if gzipped else open
+    with opener(path, "rt") as fh:
+        return yaml.safe_load(fh) if inner.endswith((".yaml", ".yml")) else json.load(fh)
+
+
 def load_appmap(path: str, fields: dict | None = None) -> AppMap:
-    with open(path) as fh:
-        raw = yaml.safe_load(fh) if path.endswith((".yaml", ".yml")) else json.load(fh)
+    raw = _read_records(path)
     if isinstance(raw, dict):
         raw = raw.get("items") or raw.get("records") or raw.get("applications") or []
     if not isinstance(raw, list):

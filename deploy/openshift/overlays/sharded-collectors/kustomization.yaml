@@ -1,0 +1,50 @@
+# Collection moved out of the serving pod and spread over four workers.
+#
+#   oc apply -k deploy/openshift/overlays/sharded-collectors
+#
+# Use this when one collector can no longer finish a sweep inside
+# REFRESH_INTERVAL_SECONDS - which, for an estate of seven hubs with ~114
+# clusters each, is from the start (ADR-0003). Two things change:
+#
+#   * the `collector` container leaves the odl pod, so the serving pod is
+#     just nginx and a read-only API and can be rolled whenever;
+#   * an odl-collector StatefulSet takes over, each replica claiming a slice
+#     of the fleet from its own ordinal.
+#
+# Everything else - the ConfigMap, the Secret, the Service, the Route, the
+# NetworkPolicy - is inherited from the base unchanged.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - statefulset.yaml
+
+patches:
+  # Remove the in-pod collector. A strategic-merge `$patch: delete` names the
+  # container; a JSON patch could only name its index in the list, which is
+  # the kind of thing that silently deletes the API the day somebody reorders
+  # deployment.yaml.
+  - target:
+      kind: Deployment
+      name: odl
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: odl
+      spec:
+        template:
+          spec:
+            containers:
+              - name: collector
+                $patch: delete
+
+# Repeated from base/kustomization.yaml on purpose: an image transformer only
+# reaches the resources accumulated at ITS level and below, and by the time
+# the base has run, its own images already carry the registry prefix - so
+# this block matches nothing but the StatefulSet added here.
+images:
+  - name: odl-backend
+    newName: image-registry.openshift-image-registry.svc:5000/ops-data-layer/odl-backend
+    newTag: latest

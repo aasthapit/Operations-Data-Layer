@@ -1,0 +1,47 @@
+# Who may reach the pod: the ingress router, on 8080, and nobody else.
+#
+# The API on :8000 and the collector have no port exposed outside the pod at
+# all, so this policy is about the one port that is: a namespace neighbour
+# should not be able to call the data layer's API directly and skip the Route.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: odl
+  labels:
+    app: odl
+spec:
+  podSelector:
+    matchLabels:
+      app: odl
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        # OVN-Kubernetes labels the router's namespace this way on 4.12+.
+        - namespaceSelector:
+            matchLabels:
+              policy-group.network.openshift.io/ingress: ""
+        # The older label, for clusters that still carry it.
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+      ports:
+        - protocol: TCP
+          port: 8080
+  # Egress is left open. Narrowing it means enumerating, as CIDRs, every
+  # address the collector must reach, and in most estates that list is both
+  # long and moving:
+  #
+  #   - every ACM hub's API server            tcp/6443
+  #   - every managed cluster's API server    tcp/6443
+  #   - Redis                                 tcp/6379 (or 6380 for TLS)
+  #   - the model endpoint, when /api/query/ask and /api/agent/run are used
+  #     (api.anthropic.com over tcp/443, or a local Ollama host)
+  #   - cluster DNS                           udp/53, tcp/53
+  #
+  # If your platform requires a closed egress posture, replace this rule with
+  # `to:` blocks for those CIDRs - and keep the DNS rule, or every hostname
+  # in the fleet config stops resolving.
+  egress:
+    - {}

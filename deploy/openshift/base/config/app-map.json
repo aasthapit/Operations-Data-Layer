@@ -1,0 +1,5 @@
+[
+  {"cluster": "lew06", "env": "nonprod", "app_id": "1aat", "environment": "development", "lob": "wimt", "namespace": "1aat-dev"},
+  {"cluster": "lew06", "env": "nonprod", "app_id": "1aat", "environment": "test", "lob": "wimt", "namespace": "1aat-pte"},
+  {"cluster": "man01", "env": "nonprod", "app_id": "10am", "environment": "development", "lob": "cto", "namespace": "10am-dev-10am"}
+]

@@ -64,6 +64,10 @@ services:
   api:
     build: ./data-layer
     environment:
+      # API and collector in one process - the simple two-container shape.
+      # The pod manifests split them into ODL_ROLE=api and ODL_ROLE=worker
+      # so collection can be scaled on its own (deploy/pod, docs/containers.md).
+      ODL_ROLE: all
       REDIS_URL: redis://redis:6379/0
       HUBS_CONFIG: /app/config/hubs.yaml
       # What is collected from every cluster (see docs/ocp-api-manifest.md).
@@ -112,9 +116,15 @@ services:
 
   dashboard:
     build: ./dashboard
+    environment:
+      # nginx renders its server block from these at start (dashboard/nginx).
+      # Here the two upstreams are separate services; in the pod they are both
+      # localhost, which is why they are runtime settings and not baked in.
+      API_UPSTREAM: api:8000
+      PATCHING_UPSTREAM: patching:8000
     networks: [odl]
     ports:
-      - "${ODL_DASHBOARD_PORT:-8080}:80"
+      - "${ODL_DASHBOARD_PORT:-8080}:8080"   # the image is unprivileged: 8080, not 80
     depends_on:
       - api
       - patching

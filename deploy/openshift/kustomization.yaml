@@ -1,0 +1,15 @@
+# The default deployment: one pod with the dashboard, the API and the
+# collector in it.
+#
+#   oc new-project ops-data-layer
+#   oc create secret generic odl-secrets ...        # see README.md
+#   oc apply -k deploy/openshift
+#
+# It is only a pointer at base/, because kustomize refuses to load a base
+# that contains the overlay directory - so `base/` holds the manifests, this
+# file is the plain install, and overlays/ sits beside it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - base

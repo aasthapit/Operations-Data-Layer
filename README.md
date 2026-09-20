@@ -173,6 +173,7 @@ fleet at a time on smaller Docker allocations.
 
 - **[docs/onboarding.md](docs/onboarding.md)** - point a list of live OCP cluster endpoints at the data layer using a single shared service account (username/password). Config format, RBAC, TLS, verification.
 - **[docs/architecture.md](docs/architecture.md)** - components, collection flow, auth flow, storage model, natural-language queries, blast radius, and deployment, with diagrams.
+- **[docs/containers.md](docs/containers.md)** - the two images and the backend's roles, the pod, building behind a corporate registry, running with podman and on OpenShift, every environment variable, the security posture, sizing and troubleshooting.
 - **[docs/findings.md](docs/findings.md)** - notable findings: what only the OCP API can tell us versus Prometheus and logs, the scale numbers, store behaviour, and the read-only value the API can still add (ingress and egress posture, resilience, security) versus what needs an actions plane (dumps, exec).
 - **[docs/redis-keyspace.md](docs/redis-keyspace.md)** - the Redis keyspace contract: every key, its type, and who writes and reads it.
 - **[docs/nl-query.md](docs/nl-query.md)** - natural-language queries and dashboards: the DuckDB snapshot, the guard, the semantic layer, the batch endpoint, the dashboard definition format, the settings, and how to add a golden question or a dashboard.
@@ -314,12 +315,30 @@ Every sweep also appends a health snapshot per cluster, powering the timeline.
 
 Interactive docs at `/docs`.
 
+## Containers
+
+Two images - `odl-backend` (the Python application) and `odl-dashboard` (nginx
+plus the compiled UI) - and one pod of three containers: the dashboard, an API
+that only reads, and a headless collector. The backend image picks its role
+from `ODL_ROLE`, so collection can be scaled without touching the serving side.
+
+```sh
+make images          # build both (IMAGE_PREFIX, IMAGE_TAG, corporate bases)
+make pod-up          # podman kube play deploy/pod/odl-pod.yaml -> :8080
+oc apply -k deploy/openshift
+```
+
+**[docs/containers.md](docs/containers.md)** is the full story: the images, the
+pod diagram, building behind a corporate registry, every environment variable,
+the security posture, sizing for seven hubs, and troubleshooting.
+
 ## Deploying to OpenShift
 
-`deploy/openshift/` contains the production-shaped manifests (Deployments,
-Services, and `Route`s that expose the API and dashboard). See
-`deploy/openshift/README.md`. The only real-world change is supplying per-hub
-credentials instead of kind kubeconfigs.
+`deploy/openshift/` is a kustomize base: one `Deployment` with the three
+containers, a `Service`, an edge-terminated `Route`, an injected CA bundle, a
+`NetworkPolicy`, and an overlay that moves collection into a `StatefulSet` of
+sharded collectors. See `deploy/openshift/README.md`. The only real-world
+change versus local is supplying fleet credentials instead of kind kubeconfigs.
 
 ## Layout
 
@@ -331,9 +350,10 @@ dashboard/        React + Vite dashboard (served by nginx)
 mcp-server/       MCP server wrapping the API
 patching-service/ patching system of record (jobs · approvals · audit) + seed_demo.py
 patching/         N8N patching orchestration starter workflow (writes to patching-service)
-deploy/openshift/ manifests for a real OpenShift deployment
+deploy/pod/       the three-container pod for podman kube play / plain Kubernetes
+deploy/openshift/ kustomize base for OpenShift (+ sharded-collectors overlay)
 deploy/rbac/      read-only ClusterRole for the collector (generated from the manifest)
-docs/             onboarding · architecture · ocp-api-manifest · insight-catalog · patching-workflow
+docs/             onboarding · architecture · containers · ocp-api-manifest · insight-catalog · patching-workflow
 docker-compose.yml / Makefile
 ```
 

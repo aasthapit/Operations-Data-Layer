@@ -1,0 +1,51 @@
+# Operations Data Layer - the fleet, as an EXAMPLE. Replace with your hubs.
+#
+# kustomize turns this file into the `acm.yaml` key of the odl-config
+# ConfigMap, which the pod mounts read-only at /etc/odl. Because the ConfigMap
+# is generated with a content hash, editing this file rolls the pod - the
+# config and the process that read it never disagree.
+#
+# List the hubs once; the collector discovers every ManagedCluster on each of
+# them (name, placement labels and claims, version, availability) and reads
+# the clusters themselves. The full format, including kubeconfig-based hubs,
+# is in data-layer/config/acm.example.yaml and docs/onboarding.md.
+#
+# ${VAR} anywhere in this file is resolved from the container's environment,
+# which is how credentials stay in the Secret and out of the ConfigMap.
+
+defaults:
+  auth:
+    type: password              # password | token
+    username: ${OCP_USERNAME}
+    password: ${OCP_PASSWORD}
+  insecure_skip_tls_verify: false
+  # The cluster's trusted CA bundle, injected into odl-trusted-ca by the
+  # cluster network operator and mounted at /etc/odl/ca (ca-bundle.yaml).
+  # REQUESTS_CA_BUNDLE on the containers already points at it, so this line
+  # is only needed if the fleet uses a DIFFERENT CA from the cluster's own.
+  # ca_cert: /etc/odl/ca/tls-ca-bundle.pem
+  #
+  # One credential for the whole estate: log in to every managed cluster with
+  # the auth above rather than reading kubeconfigs off the hubs.
+  #   secret  the hub's per-cluster kubeconfig Secret
+  #   shared  the cluster's own API URL, with the auth above
+  #   auto    secret when present, otherwise shared
+  managed_access: shared
+  # Where a managed cluster's API server is when ACM did not record it on the
+  # ManagedCluster. {name} is the ManagedCluster name.
+  # managed_api_url: https://api.{name}.ocp.example.net:6443
+
+hubs:
+  - name: acm-prod-east
+    region: us-east-1
+    datacenter: iad1
+    api_url: https://api.acm-prod-east.example.com:6443
+
+  - name: acm-prod-west
+    region: us-west-2
+    datacenter: sjc1
+    api_url: https://api.acm-prod-west.example.com:6443
+    auth:
+      type: token               # per-hub override of the shared auth
+      token: ${ACM_WEST_TOKEN}  # add the key to the Secret if you use this
+    managed_access: auto        # per-hub override: hub secrets first here

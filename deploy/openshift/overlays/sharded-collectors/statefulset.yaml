@@ -1,0 +1,124 @@
+# Headless Service: a StatefulSet requires one by name, and this is it. The
+# collectors do not call each other - they coordinate entirely through Redis -
+# so it declares no ports and exists only to give each pod a stable identity.
+apiVersion: v1
+kind: Service
+metadata:
+  name: odl-collector
+  labels:
+    app: odl
+    component: collector
+spec:
+  clusterIP: None
+  selector:
+    app: odl
+    component: collector
+---
+# The collectors. A StatefulSet, not a Deployment, because each replica needs
+# a STABLE ordinal: odl-collector-2 takes the same slice of the fleet every
+# time it starts, which is what makes the work partition rather than overlap.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: odl-collector
+  labels:
+    app: odl
+    component: collector
+spec:
+  serviceName: odl-collector
+  # IMPORTANT: replicas and ODL_SHARD_FROM_HOSTNAME below must be the same
+  # number. The value is the shard COUNT each worker divides the fleet by;
+  # its own index comes from the ordinal in its hostname. Scaling to 6
+  # without changing the env means six workers each collecting a quarter of
+  # the fleet, and two quarters collected by nobody.
+  replicas: 4
+  # Parallel: these are independent workers, so there is no reason to start
+  # them one at a time, and a slow first sweep should not hold the rest back.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: odl
+      component: collector
+  template:
+    metadata:
+      labels:
+        app: odl
+        component: collector
+    spec:
+      serviceAccountName: odl
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: collector
+          image: odl-backend                 # kustomization.yaml retags this
+          env:
+            - name: ODL_ROLE
+              value: worker
+            # See the replicas comment above: these two numbers move together.
+            - name: ODL_SHARD_FROM_HOSTNAME
+              value: "4"
+            - name: HOME
+              value: /tmp
+            - name: ODL_CONFIG
+              value: /etc/odl/acm.yaml
+            - name: ODL_APP_MAP
+              value: /etc/odl/app-map.json
+            - name: ODL_MANIFEST
+              value: /app/config/ocp-api-manifest.fleet.yaml
+            - name: REQUESTS_CA_BUNDLE
+              value: /etc/odl/ca/tls-ca-bundle.pem
+            - name: SSL_CERT_FILE
+              value: /etc/odl/ca/tls-ca-bundle.pem
+            # Sharding by hostname splits the clusters this deployment owns.
+            # To partition by HUB instead - one StatefulSet per ACM hub, each
+            # holding only that hub's credentials - copy this file per hub,
+            # set COLLECT_HUBS and drop ODL_SHARD_FROM_HOSTNAME.
+            # - name: COLLECT_HUBS
+            #   value: acm-prod-east
+          envFrom:
+            - secretRef:
+                name: odl-secrets
+          startupProbe:
+            exec:
+              command: ["python", "-m", "app.worker", "--check"]
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "app.worker", "--check"]
+            periodSeconds: 30
+          resources:
+            # Each worker now carries a quarter of the fleet, so the per-pod
+            # numbers are the same as the single in-pod collector's: it is
+            # the sweep that got faster, not the per-cluster cost that got
+            # smaller.
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: "4", memory: 4Gi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: config
+              mountPath: /etc/odl
+              readOnly: true
+            - name: ca-bundle
+              mountPath: /etc/odl/ca
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: odl-config
+        - name: ca-bundle
+          configMap:
+            name: odl-trusted-ca
+            items:
+              - key: ca-bundle.crt
+                path: tls-ca-bundle.pem

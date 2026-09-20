@@ -1,0 +1,226 @@
+# The Operations Data Layer: one pod, three containers sharing localhost.
+#
+#   dashboard  nginx, the compiled UI, reverse proxy    :8080 (the Service)
+#   api        ODL_ROLE=api, read-only over Redis       :8000 (pod-local)
+#   collector  ODL_ROLE=worker, headless, never serves  no port at all
+#
+# Nothing sets runAsUser: the restricted-v2 SCC assigns a UID from the
+# namespace's range and both images are built to run as an arbitrary UID in
+# GID 0 with a read-only root filesystem.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: odl
+  labels:
+    app: odl
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: this pod carries the only collector, and two
+  # of them overlapping would sweep the same fleet twice. The sharded-
+  # collectors overlay moves collection out of this pod, which is what to use
+  # when the few seconds of downtime here start to matter.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: odl
+  template:
+    metadata:
+      labels:
+        app: odl
+    spec:
+      serviceAccountName: odl
+      terminationGracePeriodSeconds: 30
+      containers:
+        # ---- dashboard ---------------------------------------------------
+        - name: dashboard
+          image: odl-dashboard               # kustomization.yaml retags this
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: API_UPSTREAM
+              value: 127.0.0.1:8000
+            # No patching service here. An IP literal on purpose: an
+            # unresolvable hostname is a fatal nginx start error, whereas
+            # this simply answers 502 if anything asks.
+            - name: PATCHING_UPSTREAM
+              value: 127.0.0.1:8010
+            - name: API_READ_TIMEOUT
+              value: 120s
+            # An agent run against a local model takes up to ten minutes.
+            - name: AGENT_READ_TIMEOUT
+              value: 900s
+          readinessProbe:
+            # nginx answers this itself. A probe that went through to the API
+            # would take the web tier out of the Route while the API is
+            # merely waiting for Redis.
+            httpGet: { path: /nginx-health, port: 8080 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /nginx-health, port: 8080 }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: tmp-dashboard
+              mountPath: /tmp
+
+        # ---- api ---------------------------------------------------------
+        - name: api
+          image: odl-backend
+          ports:
+            - name: api
+              containerPort: 8000
+          env:
+            - name: ODL_ROLE
+              value: api                     # never collects
+            - name: PORT
+              value: "8000"
+            - name: HOME
+              value: /tmp                    # arbitrary UID: no home of its own
+            - name: ODL_CONFIG
+              value: /etc/odl/acm.yaml
+            - name: ODL_APP_MAP
+              value: /etc/odl/app-map.json
+            # The fleet profile ships in the image: platform state every
+            # sweep, inventory every 15 minutes. Mount a ConfigMap over this
+            # path to change what is collected without rebuilding.
+            - name: ODL_MANIFEST
+              value: /app/config/ocp-api-manifest.fleet.yaml
+            # The cluster's trusted CA bundle (ca-bundle.yaml). requests and
+            # the standard library read different variables, so both are set.
+            - name: REQUESTS_CA_BUNDLE
+              value: /etc/odl/ca/tls-ca-bundle.pem
+            - name: SSL_CERT_FILE
+              value: /etc/odl/ca/tls-ca-bundle.pem
+          envFrom:
+            - secretRef:
+                name: odl-secrets
+          startupProbe:
+            # Waiting for Redis can take a minute on a cold start; a liveness
+            # probe firing during it would restart the container forever.
+            httpGet: { path: /healthz, port: 8000 }
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            periodSeconds: 20
+          resources:
+            # Memory-shaped, not CPU-shaped: the DuckDB snapshot that answers
+            # /api/query/* is built in THIS process. The collector gets the
+            # CPU, the API gets the memory.
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "2", memory: 2Gi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: tmp-api
+              mountPath: /tmp
+            - name: config
+              mountPath: /etc/odl
+              readOnly: true
+            - name: ca-bundle
+              mountPath: /etc/odl/ca
+              readOnly: true
+
+        # ---- collector ---------------------------------------------------
+        - name: collector
+          image: odl-backend
+          env:
+            - name: ODL_ROLE
+              value: worker                  # sweep, schedule, refresh queue
+            - name: HOME
+              value: /tmp
+            - name: ODL_CONFIG
+              value: /etc/odl/acm.yaml
+            - name: ODL_APP_MAP
+              value: /etc/odl/app-map.json
+            - name: ODL_MANIFEST
+              value: /app/config/ocp-api-manifest.fleet.yaml
+            - name: REQUESTS_CA_BUNDLE
+              value: /etc/odl/ca/tls-ca-bundle.pem
+            - name: SSL_CERT_FILE
+              value: /etc/odl/ca/tls-ca-bundle.pem
+            # One hub per collector is how a seven-hub estate is run; see the
+            # sharded-collectors overlay. Unset here means "all of them".
+            # - name: COLLECT_HUBS
+            #   value: acm-prod-east
+          envFrom:
+            - secretRef:
+                name: odl-secrets
+          startupProbe:
+            # No port to probe: the worker reports its own readiness.
+            exec:
+              command: ["python", "-m", "app.worker", "--check"]
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "app.worker", "--check"]
+            periodSeconds: 30
+          resources:
+            # The CPU consumer of the pod: a sweep decodes and parses every
+            # cluster's Kubernetes JSON, several clusters at a time
+            # (COLLECT_WORKERS). Give it room before giving the API any.
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: "4", memory: 4Gi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: tmp-collector
+              mountPath: /tmp
+            - name: config
+              mountPath: /etc/odl
+              readOnly: true
+            - name: ca-bundle
+              mountPath: /etc/odl/ca
+              readOnly: true
+
+      volumes:
+        # One scratch mount per container: the root filesystems are read-only
+        # and sharing /tmp between three processes only invites collisions.
+        - name: tmp-dashboard
+          emptyDir: {}
+        - name: tmp-api
+          emptyDir: {}
+        - name: tmp-collector
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: odl-config
+        - name: ca-bundle
+          configMap:
+            name: odl-trusted-ca
+            # The cluster network operator writes the bundle under the key
+            # ca-bundle.crt; the containers expect the conventional
+            # tls-ca-bundle.pem filename, so it is renamed on the way in.
+            items:
+              - key: ca-bundle.crt
+                path: tls-ca-bundle.pem

@@ -88,6 +88,9 @@ a:hover { text-decoration: underline; }
 
 .topbar .spacer { flex: 1; }
 .topbar .meta { color: var(--text-faint); font-size: 12.5px; text-align: right; }
+/* What happened to the last refresh, next to the button that asked for it:
+   "queued to a collector", or why it could not be. */
+.refresh-note { color: var(--text-faint); font-size: 12.5px; white-space: nowrap; }
 
 .btn {
   background: var(--bg-elev-2); color: var(--text); border: 1px solid var(--border);

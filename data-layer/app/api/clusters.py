@@ -9,6 +9,7 @@ in process.
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from ..collector import runner
 from ..serialize import (
@@ -24,8 +25,9 @@ from ..serialize import (
     snapshot_dict,
     workload_dict,
 )
+from ..settings import settings
 from ..store import Row, Store
-from .admin import require_collector
+from .admin import queue_refresh
 from .applications import application_rows
 from .deps import (
     KIND_DOC,
@@ -86,10 +88,18 @@ def get_cluster(name: str, store: Store = Depends(get_store_dep)):
 
 
 @router.post("/{name}/refresh")
-def refresh(name: str, full: bool = False):
+def refresh(name: str, full: bool = False, store: Store = Depends(get_store_dep)):
     """Collect this one cluster now, without waiting for the next sweep.
-    `full` fetches every enabled kind; otherwise only the kinds that are due."""
-    require_collector()
+    `full` fetches every enabled kind; otherwise only the kinds that are due.
+
+    Where a collector runs this is synchronous and answers with what the
+    collection cost. Where one does not (an API pod beside collector pods) the
+    request is queued to the collector that owns the cluster and answered 202,
+    because nothing here can say when that collector will get to it.
+    """
+    if not settings.collector_enabled:
+        _cluster(store, name)          # 404 rather than a request nobody can serve
+        return JSONResponse(status_code=202, content=queue_refresh(store, full=full, cluster=name))
     result = runner.refresh_cluster(name, full)
     if result.get("error") == "unknown cluster":
         raise HTTPException(404, f"cluster {name} not found")

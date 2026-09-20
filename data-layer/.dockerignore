@@ -1,4 +1,29 @@
+# Keep the build context to what the image actually ships: the app, the
+# manifest and example configs, and the scripts. Everything excluded here is
+# either rebuilt in the image, irrelevant to it, or a local secret.
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
+venv/
 .pytest_cache/
+.ruff_cache/
+*.log
+
+# Tests never run in the image (they run in CI against the source tree), and
+# they drag fakeredis and the fixtures in with them.
+tests/
+pytest.ini
+ruff.toml
+requirements-dev.txt
+
+# Local fleet credentials and the real application registry. These are
+# gitignored for the same reason they must never reach a layer.
+config/acm.yaml
+config/clusters.yaml
+config/app-map.json
+config/kubeconfigs/
+.env
+
+# The recipe is not an input to itself.
+Dockerfile
+.dockerignore
