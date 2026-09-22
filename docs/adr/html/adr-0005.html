@@ -1,0 +1,401 @@
+<title>Dashboard to TypeScript and MUI</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap');
+
+:root{
+  color-scheme: light;
+  --ground:#EEF2F1;
+  --surface:#FFFFFF;
+  --ink:#14201D;
+  --muted:#5B6B67;
+  --line:#C9D3D0;
+  --accent:#0F766E;
+  --accent-ink:#0B5A54;
+  --warn:#B45309;
+  --crit:#B91C1C;
+  --good:#15803D;
+  --shadow:rgba(20,32,29,.12);
+  --sans:"IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --display:"Newsreader", ui-serif, Georgia, "Times New Roman", Times, serif;
+  scroll-behavior: smooth;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#0D1413;
+    --surface:#142020;
+    --ink:#E4ECEA;
+    --muted:#94A6A1;
+    --line:#253431;
+    --accent:#3FB8A8;
+    --accent-ink:#7FD9CC;
+    --warn:#F59E0B;
+    --crit:#F87171;
+    --good:#4ADE80;
+    --shadow:rgba(0,0,0,.45);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#0D1413;
+  --surface:#142020;
+  --ink:#E4ECEA;
+  --muted:#94A6A1;
+  --line:#253431;
+  --accent:#3FB8A8;
+  --accent-ink:#7FD9CC;
+  --warn:#F59E0B;
+  --crit:#F87171;
+  --good:#4ADE80;
+  --shadow:rgba(0,0,0,.45);
+}
+
+body{
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.6;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+*, *::before, *::after{ box-sizing: border-box; }
+
+.page{ max-width: 1180px; margin: 0 auto; padding: clamp(22px, 4vw, 48px) clamp(16px, 4vw, 40px) 64px; }
+
+.eyebrow{
+  font-family: var(--sans);
+  font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 6px;
+}
+h1{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 500;
+  font-size: clamp(32px, 5.4vw, 50px); line-height: 1.06; letter-spacing: -.015em;
+  text-wrap: balance; margin: 0 0 14px;
+}
+h2{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 600;
+  font-size: clamp(22px, 3vw, 30px); line-height: 1.18; letter-spacing: -.01em;
+  text-wrap: balance; margin: 0 0 14px;
+}
+h3{ font-family: var(--sans); font-weight: 600; font-size: 16px; margin: 30px 0 10px; }
+p{ margin: 0 0 14px; }
+strong{ font-weight: 600; }
+a{ color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+a:hover{ color: var(--accent); }
+code, .mono{ font-family: var(--mono); font-size: .88em; color: var(--accent-ink); word-break: break-word; }
+
+.masthead{ border-bottom: 2px solid var(--ink); padding-bottom: 22px; margin-bottom: clamp(24px, 4vw, 40px); }
+.standfirst{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 500;
+  font-size: clamp(17px, 2.2vw, 21px); line-height: 1.42; color: var(--muted);
+  max-width: 62ch; margin: 0;
+}
+
+.layout{ display: grid; gap: clamp(26px, 4vw, 54px); grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 940px){
+  .layout{ grid-template-columns: 260px minmax(0, 1fr); }
+  .rail{ position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow-y: auto; }
+}
+.rail{ align-self: start; }
+.glance{ background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--accent); padding: 18px 18px 16px; }
+.pill{
+  display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--good); border: 1px solid currentColor; border-radius: 999px; padding: 3px 10px; margin-bottom: 14px;
+}
+.meta{ margin: 0; font-size: 13.5px; }
+.meta dt{ font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 12px; }
+.meta dd{ margin: 2px 0 0; color: var(--ink); line-height: 1.45; }
+.meta dd .mono{ font-size: 12.5px; }
+.toc{ margin-top: 22px; border-top: 1px solid var(--line); padding-top: 14px; }
+.toc ol{ list-style: none; margin: 0; padding: 0; }
+.toc li{ margin: 0; border-bottom: 1px solid var(--line); }
+.toc li:last-child{ border-bottom: 0; }
+.toc a{ display: block; padding: 7px 0; font-size: 13.5px; line-height: 1.35; color: var(--ink); text-decoration: none; }
+.toc a:hover{ color: var(--accent); }
+
+.record > section{ margin-bottom: clamp(36px, 5vw, 56px); scroll-margin-top: 24px; }
+.record > section > p,
+.record > section > ul > li,
+.record > section > ol > li{ max-width: 68ch; }
+.record ul, .record ol{ margin: 0 0 14px; padding-left: 1.15em; }
+.record li{ margin-bottom: 8px; }
+.record ol{ padding-left: 1.3em; }
+.record ol li::marker{ font-family: var(--mono); font-size: .86em; color: var(--muted); }
+
+.finding{ border-left: 3px solid var(--accent); background: var(--surface); padding: 18px 22px; margin: 26px 0 0; }
+.finding p{
+  font-family: var(--display); font-optical-sizing: auto; font-weight: 500;
+  font-size: clamp(19px, 2.6vw, 24px); line-height: 1.32; margin: 0; max-width: 44ch;
+}
+
+.scroll{ overflow-x: auto; margin: 0 0 6px; -webkit-overflow-scrolling: touch; }
+table{ width: 100%; border-collapse: collapse; font-size: 14.5px; line-height: 1.48; font-variant-numeric: tabular-nums; }
+.scroll table{ min-width: 560px; }
+.scroll.wide table{ min-width: 720px; }
+caption{
+  caption-side: top; text-align: left; font-size: 11.5px; font-weight: 600; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); padding-bottom: 8px;
+}
+th{
+  text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); padding: 0 14px 8px 0; border-bottom: 2px solid var(--line); vertical-align: bottom;
+}
+td{ padding: 9px 14px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th:last-child, td:last-child{ padding-right: 0; }
+th.num, td.num{ text-align: right; font-family: var(--mono); white-space: nowrap; }
+td.key{ font-family: var(--mono); font-size: 12.5px; color: var(--accent-ink); white-space: nowrap; }
+td.tag{ font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+td.pending{ font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+.tnote{ font-size: 13px; color: var(--muted); margin: 10px 0 0; max-width: 68ch; }
+
+figure{ margin: 26px 0 0; background: var(--surface); border: 1px solid var(--line); padding: 18px clamp(14px, 2.4vw, 22px) 16px; position: relative; }
+figcaption{ margin-bottom: 14px; }
+figcaption .ftitle{ font-family: var(--sans); font-weight: 600; font-size: 16px; line-height: 1.3; margin: 0; }
+figcaption .fsub{ font-size: 13px; color: var(--muted); margin: 4px 0 0; max-width: 62ch; }
+.chart svg{ display: block; width: 100%; height: auto; }
+.chart .scroll svg{ min-width: 520px; }
+.bar{ fill: var(--accent); }
+.mark.is-hot{ stroke: var(--ink); stroke-width: 1.5; }
+.hit{ fill: transparent; stroke: transparent; stroke-width: 2; }
+.hit:focus-visible{ stroke: var(--ink); outline: none; }
+.axis{ stroke: var(--line); stroke-width: 1; }
+.grid{ stroke: var(--line); stroke-width: 1; }
+.refline{ stroke: var(--muted); stroke-width: 1; stroke-dasharray: 5 4; }
+.t-cat{ font-family: var(--sans); font-size: 12.5px; fill: var(--muted); }
+.t-val{ font-family: var(--mono); font-size: 12px; font-weight: 500; fill: var(--ink); font-variant-numeric: tabular-nums; }
+.t-tick{ font-family: var(--mono); font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.t-unit{ font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; fill: var(--muted); }
+.t-axis{ font-family: var(--sans); font-size: 12px; fill: var(--muted); }
+.t-ref{ font-family: var(--sans); font-size: 11.5px; fill: var(--muted); }
+.tip{
+  position: absolute; z-index: 6; pointer-events: none;
+  background: var(--surface); border: 1px solid var(--line);
+  padding: 7px 11px; max-width: 260px; box-shadow: 0 2px 12px var(--shadow);
+}
+.tip .tv{ display: block; font-family: var(--mono); font-weight: 500; font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.tip .tl{ display: block; font-size: 12px; line-height: 1.35; color: var(--muted); margin-top: 2px; }
+
+/* ---------- mermaid, themed from the tokens ---------- */
+pre.mermaid{ margin: 0; background: transparent; font-family: var(--sans); text-align: left; min-width: 580px; }
+pre.mermaid svg{ max-width: 100%; height: auto; }
+.mermaid .node rect,
+.mermaid .node polygon,
+.mermaid .node circle,
+.mermaid .node ellipse,
+.mermaid .node path,
+.mermaid .cluster rect{
+  fill: var(--surface) !important;
+  stroke: var(--line) !important;
+  stroke-width: 1.25px !important;
+}
+.mermaid .nodeLabel,
+.mermaid .nodeLabel p,
+.mermaid .label,
+.mermaid .label text,
+.mermaid text.nodeLabel,
+.mermaid span.nodeLabel{
+  color: var(--ink) !important;
+  fill: var(--ink) !important;
+  font-family: var(--sans) !important;
+  font-size: 13px !important;
+  line-height: 1.35 !important;
+}
+.mermaid .edgeLabel,
+.mermaid .edgeLabel p,
+.mermaid .edgeLabel rect,
+.mermaid .edgeLabel foreignObject div,
+.mermaid .edgeLabel span{
+  color: var(--muted) !important;
+  fill: var(--muted) !important;
+  background: var(--surface) !important;
+  background-color: var(--surface) !important;
+  font-family: var(--sans) !important;
+  font-size: 12px !important;
+}
+.mermaid .edgePath .path,
+.mermaid .flowchart-link,
+.mermaid path.path{ stroke: var(--accent) !important; stroke-width: 1.5px !important; }
+.mermaid .arrowheadPath,
+.mermaid marker path,
+.mermaid defs marker path{ fill: var(--accent) !important; stroke: var(--accent) !important; }
+
+.source{ margin-top: clamp(30px, 5vw, 48px); border-top: 1px solid var(--line); padding-top: 14px; font-size: 13px; color: var(--muted); }
+.source .mono{ color: var(--muted); }
+
+:where(a, button, [tabindex]):focus-visible{ outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce){
+  :root{ scroll-behavior: auto; }
+  *, *::before, *::after{ animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow">ADR-0005 · Operations Data Layer · Plan</p>
+    <h1>Dashboard to TypeScript and MUI</h1>
+    <p class="standfirst">The dashboard is 11,000 lines of plain JavaScript with two dependencies and a hand-rolled design system. It moves to TypeScript first, so the API boundary is checked, and to Material UI second, so the component swap is typed and reviewable. Six phases, each landing only when the type check, the 896 tests and the build all pass.</p>
+  </header>
+
+  <div class="layout">
+    <aside class="rail">
+      <div class="glance">
+        <span class="pill" style="color: var(--warn)">In progress</span>
+        <dl class="meta">
+          <dt>Branch</dt>
+          <dd><span class="mono">feat/dashboard-typescript-mui</span>, cut from <span class="mono">feat/redis-store-nl-query</span> at <span class="mono">889fecc</span></dd>
+          <dt>Worktree</dt>
+          <dd><span class="mono">~/Git/odl-ui</span></dd>
+          <dt>Starting point</dt>
+          <dd>React 18, Vite 6, JavaScript; 14 views, 120 components, 896 tests at 89% statements</dd>
+          <dt>End state</dt>
+          <dd>TypeScript strict, Material UI 9, MUI X DataGrid and Charts (community tiers)</dd>
+          <dt>Gate per phase</dt>
+          <dd><span class="mono">npm run typecheck && npm test && npm run build</span>, coverage floor 70%</dd>
+        </dl>
+        <nav class="toc" aria-label="Sections">
+          <ol>
+            <li><a href="#context">Where it stands</a></li>
+            <li><a href="#decision">Decision</a></li>
+            <li><a href="#phases">The phases</a></li>
+            <li><a href="#types">Where the types come from</a></li>
+            <li><a href="#mui">What Material UI replaces</a></li>
+            <li><a href="#risks">Risks and how each is held</a></li>
+            <li><a href="#measured">Measured</a></li>
+          </ol>
+        </nav>
+      </div>
+    </aside>
+
+    <main class="record">
+
+      <section id="context">
+        <h2>Where it stands</h2>
+        <p>The dashboard runs on React 18 and Vite 6 with exactly two runtime dependencies. Everything else was written here: a History API router, an SWR-style fetch cache, a <code>DataTable</code> used 57 times across 11 files, a 1,183-line SVG <code>Chart</code> that infers axes and series from a result's columns, and a 790-line stylesheet with 31 tokens and 183 classes. There are no types. The API contract exists as the fetch helpers and as the test fixtures that imitate the endpoints.</p>
+        <p>Two integration bugs this month were shape mismatches at that boundary: a blank dashboard title the API rejected, and a pod identity the collector discarded. A type checker at the boundary would have caught both.</p>
+        <div class="finding">
+          <p>TypeScript first, Material UI second: typed props make the component swap mechanical, and swapping first would mean typing everything twice.</p>
+        </div>
+      </section>
+
+      <section id="decision">
+        <h2>Decision</h2>
+        <ol>
+          <li><strong>Incremental, on one branch, with the tests as the net.</strong> <code>allowJs</code> lets <code>.js</code> and <code>.tsx</code> coexist, so no phase leaves the branch unable to build, test and pass the 70% floor.</li>
+          <li><strong>One source for the API contract.</strong> Request paths, parameters and bodies are generated from the data layer's OpenAPI document. Responses are typed by hand because no route declares a response model; the fixtures are typed with those interfaces so drift fails the type check.</li>
+          <li><strong>Strict is the end state.</strong> Phase 1 converts loosely; Phase 2 turns strict on and clears what it finds. The type check joins CI as soon as Phase 1 lands.</li>
+          <li><strong>MUI replaces the design system, not the architecture.</strong> Router, cache, API layer, query builder, dashboards runtime and the agent stream client stay. The theme is built from the existing tokens, which yields the light theme the app never had.</li>
+          <li><strong>Free tiers of MUI X.</strong> DataGrid does sorting, single filters, quick search and paging; today's per-column filter row survives by filtering rows before the grid. Charts covers line and bar with tooltips and legends. Pinning, grouping and multi-filter panels are paid features and are not in scope.</li>
+          <li><strong>React 19 only on purpose.</strong> Material UI 9's peer dependencies are checked before anything is installed; a React upgrade is a recorded decision inside Phase 3, not a side effect.</li>
+        </ol>
+      </section>
+
+      <section id="phases">
+        <h2>The phases</h2>
+        <div class="scroll wide">
+          <table>
+            <caption>Six phases, each a commit that passes the whole gate</caption>
+            <thead><tr><th>Phase</th><th>Scope</th><th>Who</th><th>After</th></tr></thead>
+            <tbody>
+              <tr><td class="key">1</td><td>TypeScript tooling; OpenAPI export and generated request types; hand-written response types validated by the fixtures; pure modules converted (router, cache, hooks, api, query builder, dashboards model and runtime, agent client and hook); <span class="mono">npm run typecheck</span> in CI</td><td>one Opus worker</td><td class="tag">-</td></tr>
+              <tr><td class="key">2</td><td>Components and views to <span class="mono">.tsx</span>, in two parallel halves (shared components; shell and views), then <span class="mono">strict: true</span> cleared by the reviewer</td><td>two Opus workers</td><td class="tag">1</td></tr>
+              <tr><td class="key">3</td><td>Material UI: theme from the tokens, app bar and tabs, forms, dialogs, drawers, snackbars, skeletons; <span class="mono">styles.css</span> retired; React 19 if MUI 9 requires it</td><td>one Opus worker</td><td class="tag">2</td></tr>
+              <tr><td class="key">4</td><td><span class="mono">DataTable</span> and <span class="mono">ResultTable</span> on MUI X DataGrid behind the existing props; persisted state keeps its keys; virtualised</td><td>one Opus worker, parallel with 3</td><td class="tag">2</td></tr>
+              <tr><td class="key">5</td><td><span class="mono">Chart</span> on MUI X Charts; the inference and spec resolution stay</td><td>one Sonnet worker, parallel with 3</td><td class="tag">2</td></tr>
+              <tr><td class="key">6</td><td>Integration, documentation, the measured section of this record, the rendered page</td><td>the reviewer</td><td class="tag">3, 4, 5</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <figure>
+          <figcaption>
+            <p class="ftitle">Dependency order</p>
+            <p class="fsub">Phases 3, 4 and 5 run at once because they own disjoint files and share only the theme, which Phase 3 lands first.</p>
+          </figcaption>
+          <div class="scroll">
+<pre class="mermaid">
+flowchart LR
+  P1[1 · tooling, API types,<br/>pure modules] --> P2a[2a · shared components]
+  P1 --> P2b[2b · shell and views]
+  P2a --> S[strict on]
+  P2b --> S
+  S --> P3[3 · MUI theme,<br/>shell, forms]
+  S --> P4[4 · DataGrid]
+  S --> P5[5 · X Charts]
+  P3 --> P6[6 · integrate,<br/>measure, document]
+  P4 --> P6
+  P5 --> P6
+</pre>
+          </div>
+        </figure>
+      </section>
+
+      <section id="types">
+        <h2>Where the types come from</h2>
+        <div class="scroll">
+          <table>
+            <caption>Three sources, one checked contract</caption>
+            <thead><tr><th>Layer</th><th>Source</th><th>How drift is caught</th></tr></thead>
+            <tbody>
+              <tr><td class="key">paths, params, bodies</td><td><span class="mono">data-layer/openapi.json</span>, exported from the FastAPI app by <span class="mono">scripts/export_openapi.py</span>; <span class="mono">openapi-typescript</span> generates <span class="mono">src/api/schema.ts</span></td><td>a data-layer test compares the committed document with <span class="mono">app.openapi()</span>; a vitest regenerates <span class="mono">schema.ts</span> and diffs it</td></tr>
+              <tr><td class="key">responses</td><td>hand-written interfaces in <span class="mono">src/api/types.ts</span>, derived from the handlers, the fixtures and <span class="mono">docs/nl-query.md</span></td><td>every fixture is declared with its interface, so a fixture that no longer matches fails <span class="mono">tsc</span></td></tr>
+              <tr><td class="key">components</td><td><span class="mono">&lt;Name&gt;Props</span> interfaces on every component, exported where used</td><td>the type check, and the views compiling against them</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tnote">The follow-up that removes the hand-written layer: declare <span class="mono">response_model</span> on the 58 routes, after which responses are generated like everything else.</p>
+      </section>
+
+      <section id="mui">
+        <h2>What Material UI replaces</h2>
+        <div class="scroll wide">
+          <table>
+            <caption>Today's hand-rolled pieces and their replacements</caption>
+            <thead><tr><th>Today</th><th>Becomes</th><th>Kept</th></tr></thead>
+            <tbody>
+              <tr><td class="key">styles.css (790 lines, 31 tokens)</td><td><span class="mono">createTheme</span> with the same tokens, dark and light, <span class="mono">CssBaseline</span></td><td>the token names, as the theme's comment map</td></tr>
+              <tr><td class="key">tab strip, buttons, inputs, dialogs, drawers</td><td>AppBar, Tabs, Button, TextField, Select, Autocomplete, Dialog, Drawer, Snackbar, Chip, Alert, Skeleton, Tooltip, Menu</td><td>every aria-label and visible text the tests query</td></tr>
+              <tr><td class="key">DataTable (408 lines, 57 uses)</td><td>a wrapper over MUI X DataGrid: sorting, paging, quick search and virtualisation from the grid; the per-column filter row kept by filtering rows first</td><td>the props, the localStorage keys, the empty message</td></tr>
+              <tr><td class="key">Chart (1,183 lines of SVG)</td><td>LineChart and BarChart from MUI X Charts, with tooltips and legends</td><td><span class="mono">inferFields</span>, <span class="mono">resolveSpec</span>, <span class="mono">normalizeChart</span>, the palette rules</td></tr>
+              <tr><td class="key">router, cache, api, builder, runtime, agent client</td><td>unchanged, now typed</td><td>all of it</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="risks">
+        <h2>Risks and how each is held</h2>
+        <ul>
+          <li><strong>A phase that half-lands.</strong> Every phase is one commit that passes type check, tests at the floor and build; the reviewer runs the gate before committing, and a phase that cannot pass is not committed.</li>
+          <li><strong>Two workers editing one file.</strong> Phase 2 splits by file ownership and forbids renaming exports; Phases 3, 4 and 5 own disjoint files and share only <span class="mono">theme.ts</span>, which lands first.</li>
+          <li><strong>Tests that assert on class names.</strong> Sixty-nine of them; they are rewritten to roles and text as the components change, never deleted.</li>
+          <li><strong>MUI 9 and React 18.</strong> Peer dependencies decide; a React 19 upgrade, if needed, is made and tested inside Phase 3 and recorded.</li>
+          <li><strong>Bundle growth.</strong> Several hundred kilobytes gzipped; measured before and after each phase and recorded below; acceptable for an internal tool served same-origin.</li>
+          <li><strong>Paid MUI X features.</strong> None used; the wrapper keeps today's multi-column filtering outside the grid. Pro is a later choice, not a dependency of this plan.</li>
+        </ul>
+      </section>
+
+      <section id="measured">
+        <h2>Measured</h2>
+        <p>Filled in as each phase lands.</p>
+        <div class="scroll">
+          <table>
+            <caption>Per phase</caption>
+            <thead><tr><th>Phase</th><th class="num">Files converted</th><th class="num">tsc errors cleared</th><th class="num">Tests</th><th class="num">Coverage</th><th class="num">Bundle (gzip)</th><th class="num">Suite time</th></tr></thead>
+            <tbody>
+              <tr><td>start</td><td class="num">0</td><td class="num">-</td><td class="num">896</td><td class="num">89.1% / 90.9%</td><td class="num">110 KB</td><td class="num">10 s</td></tr>
+              <tr><td>1</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td></tr>
+              <tr><td>2</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td></tr>
+              <tr><td>3, 4, 5</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <p class="source">Source: <span class="mono">docs/adr/0005-dashboard-typescript-and-mui.md</span> on <span class="mono">feat/dashboard-typescript-mui</span>.</p>
+    </main>
+  </div>
+</div>
