@@ -910,7 +910,9 @@ export interface AskResponse {
   sql: string;
   explanation: string | null;
   assumptions: string[];
-  confidence: string | null;
+  /** 0 to 1, as `AskResult.confidence` (a float) sends it - the Query page
+   * draws it as a percentage. */
+  confidence: number;
   /** How many tries the model needed. */
   attempts: number;
   failed_attempts: Array<{ sql: string; error: string }>;

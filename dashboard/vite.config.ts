@@ -46,9 +46,9 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**"],
-      // main.jsx is the mount point (no logic), and the fixture modules are
+      // main.tsx is the mount point (no logic), and the fixture modules are
       // themselves test data - counting them would flatter the number.
-      exclude: ["src/main.jsx", "src/test/**", "src/**/fixture.{js,ts}"],
+      exclude: ["src/main.tsx", "src/test/**", "src/**/fixture.{js,ts}"],
       reporter: ["text", "html", "lcov"],
       // Statements and lines are the gate; functions and branches are reported
       // so a drop is visible without failing the build on a defensive branch.

@@ -105,7 +105,11 @@ export interface BuilderState {
   sorts: Sort[];
   group: Group;
   distinct: boolean;
-  limit: number;
+  /** The row cap. Everything that puts state together (`stateForTable`,
+   * `normalizeState`) makes it a number; while the user is editing the box it
+   * holds whatever they have typed, which `clampLimit` settles on blur - so the
+   * field is honest about both. */
+  limit: number | string;
   mode: "builder" | "sql";
   sql: string;
   /** The chart's own vocabulary lives with the chart (`Chart.jsx`). */
