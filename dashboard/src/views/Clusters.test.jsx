@@ -97,7 +97,7 @@ describe("the filters", () => {
     await user.selectOptions(await screen.findByLabelText("Hub"), "hub-west");
     expect(currentUrl()).toBe("/clusters?hub=hub-west");
     await waitFor(() => expect(screen.queryByText("ocp-prod-iad-01")).toBeNull());
-    expect(api.clusters).toHaveBeenCalledWith(expect.objectContaining({ hub: "hub-west" }));
+    await waitFor(() => expect(api.clusters).toHaveBeenCalledWith(expect.objectContaining({ hub: "hub-west" })));
   });
 
   it("opens already narrowed when the link carried a filter", async () => {

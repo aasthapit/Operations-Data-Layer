@@ -136,7 +136,7 @@ describe("fleet health", () => {
   it("falls back to hubs for a grouping this build does not have", async () => {
     open("/?group=phase-of-the-moon");
     await screen.findByText("hub-east", { selector: ".gc-name" });
-    expect(api.summary).toHaveBeenCalledWith("hub");
+    await waitFor(() => expect(api.summary).toHaveBeenCalledWith("hub"));
   });
 
   it("narrows the cluster list from a group card", async () => {

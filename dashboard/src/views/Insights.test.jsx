@@ -235,7 +235,7 @@ describe("events", () => {
   it("asks for a wide window, because this is the fleet view", async () => {
     open("events");
     await screen.findByText("Warning events (2)");
-    expect(api.events).toHaveBeenCalledWith({ cluster: "", class: "", limit: 300 });
+    await waitFor(() => expect(api.events).toHaveBeenCalledWith({ cluster: "", class: "", limit: 300 }));
   });
 });
 
@@ -295,7 +295,7 @@ describe("config references", () => {
   it("falls back to secrets for a kind this build does not offer", async () => {
     open("references", "/insights/references?kind=Pod");
     await screen.findByText("checkout-db");
-    expect(api.references).toHaveBeenCalledWith({ kind: "Secret", name: "" });
+    await waitFor(() => expect(api.references).toHaveBeenCalledWith({ kind: "Secret", name: "" }));
   });
 });
 

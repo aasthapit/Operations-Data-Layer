@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Metrics from "./Metrics";
@@ -140,7 +140,7 @@ describe("capacity headroom", () => {
   it("opens on the grouping the link carried, falling back for one it does not know", async () => {
     open("/utilization?group=galaxy");
     await screen.findByRole("cell", { name: "ocp-prod-iad-02" });
-    expect(api.capacity).toHaveBeenCalledWith("cluster");
+    await waitFor(() => expect(api.capacity).toHaveBeenCalledWith("cluster"));
   });
 
   it("shows the capacity failure in place of the table", async () => {

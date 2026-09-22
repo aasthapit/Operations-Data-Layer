@@ -528,7 +528,11 @@ describe("a shared link", () => {
     open(`/query?q=${encodeURIComponent(encoded)}`);
     await waitFor(() => expect(screen.getByLabelText("SQL"))
       .toHaveValue("SELECT name FROM clusters LIMIT 5"));
-    expect(api.runSql).toHaveBeenCalledWith("SELECT name FROM clusters LIMIT 5", undefined);
+    // The field fills before the run fires (the run waits for the schema), so
+    // the call is awaited rather than asserted on the spot: on a slow runner
+    // the spot assertion raced it once.
+    await waitFor(() =>
+      expect(api.runSql).toHaveBeenCalledWith("SELECT name FROM clusters LIMIT 5", undefined));
   });
 
   it("falls back to the default query for a link it cannot read", async () => {
