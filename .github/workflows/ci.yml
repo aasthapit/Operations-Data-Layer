@@ -128,47 +128,41 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build both images with the public bases
         run: |
-          docker build -t odl-backend:ci data-layer
-          docker build -t odl-dashboard:ci dashboard
+          docker build -t localhost/odl-backend:ci data-layer
+          docker build -t localhost/odl-dashboard:ci dashboard
       - name: Smoke the images as an arbitrary UID on a read-only root
         run: |
           set -eu
-          docker run --rm --user 1000710000:0 --read-only --tmpfs /tmp odl-backend:ci check-config 2>&1 | tail -3 || true
-          docker run -d --name dash --user 1000710000:0 --read-only --tmpfs /tmp -p 8080:8080 odl-dashboard:ci
+          docker run --rm --user 1000710000:0 --read-only --tmpfs /tmp --entrypoint python \
+            localhost/odl-backend:ci -c "import app.main, app.worker; print('backend imports ok')"
+          docker run -d --name dash --user 1000710000:0 --read-only --tmpfs /tmp -p 8080:8080 localhost/odl-dashboard:ci
           for i in $(seq 1 20); do curl -fs localhost:8080/nginx-health && break; sleep 1; done
           docker logs dash | tail -3
           docker rm -f dash
-      - name: Trivy on odl-backend
-        uses: aquasecurity/trivy-action@0.28.0
+      - name: Install trivy
+        uses: aquasecurity/setup-trivy@v0.3.1
         with:
-          image-ref: odl-backend:ci
-          format: sarif
-          output: trivy-backend.sarif
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
+          version: v0.74.0
+      # The same script and policy as `make scan-images` and the Security
+      # workflow, so an image that passes on a laptop passes here.
+      - name: Scan both images
+        run: scripts/scan.sh images
         env:
-          TRIVY_IGNOREFILE: .trivyignore.yaml
-      - name: Trivy on odl-dashboard
-        uses: aquasecurity/trivy-action@0.28.0
+          IMAGE_PREFIX: localhost
+          IMAGE_TAG: ci
+          SCAN_OUT: reports
+          SCAN_FAIL_ON: high
+      - uses: actions/upload-artifact@v4
         if: always()
         with:
-          image-ref: odl-dashboard:ci
-          format: sarif
-          output: trivy-dashboard.sarif
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-        env:
-          TRIVY_IGNOREFILE: .trivyignore.yaml
-      - name: Upload image scan results to code scanning
+          name: image-scan-reports
+          path: reports/
+          if-no-files-found: warn
+      - name: Publish backend image results
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: trivy-backend.sarif
-          category: trivy-image-backend
-      - uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: trivy-dashboard.sarif
-          category: trivy-image-dashboard
+        if: always() && hashFiles('reports/trivy-image-backend.sarif') != ''
+        with: { sarif_file: reports/trivy-image-backend.sarif, category: trivy-image-backend }
+      - name: Publish dashboard image results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('reports/trivy-image-dashboard.sarif') != ''
+        with: { sarif_file: reports/trivy-image-dashboard.sarif, category: trivy-image-dashboard }
