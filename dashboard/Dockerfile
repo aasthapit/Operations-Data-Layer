@@ -60,6 +60,16 @@ ENV PORT=8080 \
 # root at build time. The image still runs unprivileged (USER at the end).
 USER 0
 
+# Pull the base image's own security updates. The tag of a base image is a
+# snapshot; the fixed OpenSSL or libc it needs may have shipped a week after
+# it. Each package manager the supported bases use is tried in turn, so the
+# same Dockerfile builds on Alpine, Debian and UBI.
+RUN if command -v apk >/dev/null 2>&1; then apk upgrade --no-cache; \
+    elif command -v microdnf >/dev/null 2>&1; then microdnf upgrade -y && microdnf clean all; \
+    elif command -v dnf >/dev/null 2>&1; then dnf upgrade -y && dnf clean all; \
+    elif command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 COPY nginx/nginx.conf nginx/default.conf.template nginx/entrypoint.sh /etc/nginx/odl/
 
 RUN rm -rf /usr/share/nginx/html && mkdir -p /usr/share/nginx/html

@@ -1,5 +1,6 @@
 """Patching service - the durable system of record for patching jobs."""
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -19,6 +20,13 @@ async def lifespan(app: FastAPI):
     yield
 
 
+
+def cors_origins(raw: str | None = None) -> list[str]:
+    """ODL_CORS_ORIGINS as a list: comma-separated origins, or "*" (the default)."""
+    value = os.environ.get("ODL_CORS_ORIGINS", "*") if raw is None else raw
+    origins = [o.strip() for o in value.split(",") if o.strip()]
+    return origins or ["*"]
+
 app = FastAPI(
     title="Patching Service",
     description="System of record for fleet patching: jobs, approvals, "
@@ -26,7 +34,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
-app.add_middleware(CORSMiddleware, allow_origins=["*"],
+# Open by default for the development setup where the dashboard is served from
+# another origin; production narrows it with ODL_CORS_ORIGINS (comma-separated).
+app.add_middleware(CORSMiddleware, allow_origins=cors_origins(),
                    allow_methods=["*"], allow_headers=["*"])
 app.include_router(router)
 

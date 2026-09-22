@@ -48,7 +48,7 @@ flowchart TB
   hubs["ACM hubs<br/>:6443"]
   clusters["managed clusters<br/>:6443"]
 
-  browser -->|"https, Route or hostPort"| dash
+  browser -->|"https, Route or published port"| dash
   dash -->|"/api, /healthz<br/>127.0.0.1:8000"| api
   api --> redis
   collector --> redis
@@ -144,7 +144,7 @@ No Redis to point at?
 `POD_FILE=deploy/pod/odl-pod-with-redis.yaml make pod-up` runs one in the pod, on the volume claim declared at the end of that file (a named volume under podman, the default storage class on Kubernetes), with `REDIS_URL=redis://127.0.0.1:6379/0` already set.
 That file is generated from `odl-pod.yaml` by `deploy/pod/render.sh` (`make pod-render`) so the two cannot drift - edit `odl-pod.yaml`.
 
-Both manifests are also plain Kubernetes: `kubectl apply -f deploy/pod/odl-pod.yaml` works, with `hostPort` becoming whatever your cluster does with host ports.
+Both manifests are also plain Kubernetes: `kubectl apply -f deploy/pod/odl-pod.yaml` works; the pod publishes no host port, so reach the dashboard through a Service or `kubectl port-forward pod/odl 8080:8080`.
 
 With docker instead of podman there is no `kube play` equivalent; use `make up` (docker-compose), which runs the simpler shape - one `ODL_ROLE=all` backend and the dashboard.
 

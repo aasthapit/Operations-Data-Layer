@@ -1,0 +1,49 @@
+title = "Operations Data Layer"
+
+# gitleaks configuration.
+#
+# The default rule set is used in full - this file only ADDS allowlists, and
+# every one of them carries the reason the match is not a secret. The repository
+# is public, so the gate is "any finding fails": a credential that reaches a
+# commit here is already published, and adding an entry below is a deliberate,
+# reviewable act rather than a scanner setting nobody reads.
+#
+# The rule for adding an entry: name the exact path or the exact fingerprint,
+# say why the value is not a credential anybody can use, and prefer deleting the
+# value over allowlisting it. See docs/security-scanning.md.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """
+kind's generated kubeconfigs for the local development fleet (`make fleet-up`).
+Each one holds a client certificate for a throwaway container-local cluster
+whose API server is a Docker network hostname (https://<cluster>-control-plane:6443),
+reachable from nothing but that laptop, and every `make fleet-down` destroys the
+CA that signed it. The directory is gitignored today; these findings are the
+copies that reached the initial commit before it was, and they stay findings
+until that history is rewritten - see docs/security-scanning.md.
+"""
+paths = ['''^fleet/kubeconfigs/''']
+
+[[allowlists]]
+description = """
+Example configuration shipped so an operator can copy it. Every credential in
+these files is a placeholder or a ${VAR} reference resolved from the
+environment at run time; a real value belongs in a Secret and never here.
+"""
+paths = [
+    '''^deploy/openshift/secret\.example\.yaml$''',
+    '''^deploy/pod/odl-pod(-with-redis)?\.yaml$''',
+    '''(^|/)[^/]*\.example\.(yaml|yml|json)$''',
+]
+
+[[allowlists]]
+description = """
+The local compose stack's Postgres credentials (odl/odl). Not a secret: the
+container is only ever published on loopback for the patching service to talk
+to, and the same two literals appear on both sides of the same file.
+"""
+paths = ['''^docker-compose\.yml$''']
+regexes = ['''\bodl\b''']

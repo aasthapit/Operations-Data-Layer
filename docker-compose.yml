@@ -12,6 +12,13 @@
 #
 # Host ports are parametrised so a second stack (a worktree, a review build) can
 # run beside this one: ODL_API_PORT=18001 docker compose up -d redis api
+#
+# Every published port binds to loopback (ODL_BIND). None of these services
+# authenticates anything - the API answers the whole fleet's inventory to any
+# caller - so the default must not put them on the laptop's other interfaces
+# and, through them, on whatever network it is attached to. A stack that really
+# has to be reachable from another machine opts in, and takes the consequences:
+#   ODL_BIND=0.0.0.0 docker compose up -d
 
 networks:
   kind:
@@ -37,7 +44,7 @@ services:
       - redisdata:/data
     networks: [odl]
     ports:
-      - "127.0.0.1:${ODL_REDIS_PORT:-16379}:6379"   # for the ad-hoc host processes (Procfile)
+      - "${ODL_BIND:-127.0.0.1}:${ODL_REDIS_PORT:-16379}:6379"   # for the ad-hoc host processes (Procfile)
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -93,7 +100,7 @@ services:
       - ./data-layer/config:/app/config:ro      # generated hub list + the OCP API manifest
     networks: [odl, kind]
     ports:
-      - "${ODL_API_PORT:-18000}:8000"   # host 8000/8001 often taken; internally api:8000
+      - "${ODL_BIND:-127.0.0.1}:${ODL_API_PORT:-18000}:8000"   # host 8000/8001 often taken; internally api:8000
     depends_on:
       redis:
         condition: service_healthy
@@ -109,7 +116,7 @@ services:
       PG_DB: patching
     networks: [odl]
     ports:
-      - "${ODL_PATCHING_PORT:-18010}:8000"     # http://localhost:18010/docs
+      - "${ODL_BIND:-127.0.0.1}:${ODL_PATCHING_PORT:-18010}:8000"     # http://localhost:18010/docs
     depends_on:
       db:
         condition: service_healthy
@@ -124,7 +131,7 @@ services:
       PATCHING_UPSTREAM: patching:8000
     networks: [odl]
     ports:
-      - "${ODL_DASHBOARD_PORT:-8080}:8080"   # the image is unprivileged: 8080, not 80
+      - "${ODL_BIND:-127.0.0.1}:${ODL_DASHBOARD_PORT:-8080}:8080"   # the image is unprivileged: 8080, not 80
     depends_on:
       - api
       - patching
@@ -139,7 +146,7 @@ services:
       MCP_TRANSPORT: streamable-http
     networks: [odl]
     ports:
-      - "${ODL_MCP_PORT:-18080}:8000"   # MCP endpoint at http://localhost:18080/mcp
+      - "${ODL_BIND:-127.0.0.1}:${ODL_MCP_PORT:-18080}:8000"   # MCP endpoint at http://localhost:18080/mcp
     depends_on:
       - api
 
@@ -160,6 +167,6 @@ services:
       - ./patching:/workflows:ro
     networks: [odl]
     ports:
-      - "${ODL_N8N_PORT:-5678}:5678"
+      - "${ODL_BIND:-127.0.0.1}:${ODL_N8N_PORT:-5678}:5678"
     depends_on:
       - api

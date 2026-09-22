@@ -24,3 +24,10 @@ Procfile.hubs
 .DS_Store
 *.log
 .env
+
+# test and scan output
+coverage.xml
+.coverage
+htmlcov/
+dashboard/coverage/
+reports/

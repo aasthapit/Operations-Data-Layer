@@ -1,0 +1,102 @@
+# Static analysis, dependency audit, secret detection and IaC checks: the
+# open-source counterpart of a Checkmarx scan. See docs/security-scanning.md.
+#
+# The whole policy lives in scripts/scan.sh so the laptop and the runner agree
+# on what fails; this workflow only installs the tools, runs the script and
+# ships its reports to GitHub code scanning.
+name: Security
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays: new CVEs land without a commit
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+env:
+  # The same versions scripts/scan.sh was validated against; bump on purpose.
+  TRIVY_VERSION: "0.74.0"
+  GITLEAKS_VERSION: "8.30.1"
+  HADOLINT_VERSION: "2.15.1"
+  SEMGREP_VERSION: "1.176.0"
+  BANDIT_VERSION: "1.9.4"
+  PIP_AUDIT_VERSION: "2.10.1"
+
+jobs:
+  scan:
+    name: SAST, SCA, secrets, IaC
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # gitleaks scans the whole history
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install the Python-hosted scanners (pinned)
+        run: pip install --quiet "semgrep==${SEMGREP_VERSION}" "bandit==${BANDIT_VERSION}" "pip-audit==${PIP_AUDIT_VERSION}"
+      - name: Install trivy
+        uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          version: v${{ env.TRIVY_VERSION }}
+      - name: Install gitleaks and hadolint from their release assets (pinned)
+        run: |
+          set -eu
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          curl -sSfL -o /usr/local/bin/hadolint \
+            "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64"
+          chmod +x /usr/local/bin/hadolint
+          trivy --version && gitleaks version && hadolint --version && semgrep --version && bandit --version | head -1 && pip-audit --version
+      - name: npm dependencies for the audit
+        run: npm ci --ignore-scripts
+        working-directory: dashboard
+      - name: Scan
+        run: scripts/scan.sh all
+        env:
+          SCAN_OUT: reports
+          SCAN_FAIL_ON: high
+      - name: Keep every report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-reports
+          path: reports/
+          if-no-files-found: warn
+      # One upload per tool: GitHub keys code-scanning results by category, so
+      # a single upload of the directory would let each tool erase the last.
+      - name: Publish semgrep results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('reports/semgrep.sarif') != ''
+        with: { sarif_file: reports/semgrep.sarif, category: semgrep }
+      - name: Publish bandit results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('reports/bandit.sarif') != ''
+        with: { sarif_file: reports/bandit.sarif, category: bandit }
+      - name: Publish trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('reports/trivy-fs.sarif') != ''
+        with: { sarif_file: reports/trivy-fs.sarif, category: trivy-fs }
+      - name: Publish gitleaks results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('reports/gitleaks.sarif') != ''
+        with: { sarif_file: reports/gitleaks.sarif, category: gitleaks }
+      - name: Publish hadolint results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('reports/hadolint.sarif') != ''
+        with: { sarif_file: reports/hadolint.sarif, category: hadolint }

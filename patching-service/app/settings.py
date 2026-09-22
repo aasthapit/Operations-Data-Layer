@@ -1,4 +1,5 @@
 import os
+from urllib.parse import quote_plus
 
 
 class Settings:
@@ -10,7 +11,10 @@ class Settings:
 
     @property
     def database_url(self):
-        return (f"postgresql+psycopg2://{self.pg_user}:{self.pg_password}"
+        # The user and password are URL components: a password with "@", "/"
+        # or "%" in it must be percent-encoded or the DSN parses as a different
+        # host.
+        return (f"postgresql+psycopg2://{quote_plus(self.pg_user)}:{quote_plus(self.pg_password)}"
                 f"@{self.pg_host}:{self.pg_port}/{self.pg_db}")
 
 

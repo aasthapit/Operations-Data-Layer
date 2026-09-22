@@ -105,6 +105,12 @@ metadata:
   labels:
     app: odl
 spec:
+  securityContext:
+    # Pod-level, so the policy is stated once and a container added later
+    # inherits it; the containers below repeat the parts that are theirs.
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
   # A sweep in flight should be allowed to land rather than be cut off.
   terminationGracePeriodSeconds: 30
   containers:
@@ -120,7 +126,6 @@ spec:
         # reachable on localhost by their neighbours and by nobody else.
         - name: http
           containerPort: 8080
-          hostPort: 8080
       env:
         - name: PORT
           value: "8080"

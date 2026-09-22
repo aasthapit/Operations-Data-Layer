@@ -252,6 +252,9 @@ def _glob_contains(needle: str) -> str:
 
 
 def _sha1(text: str) -> str:
+    # A Redis index key, not a security control: usedforsecurity=False says so,
+    # but the rule matches the call shape rather than the keyword.
+    # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- index key
     return hashlib.sha1(text.encode(), usedforsecurity=False).hexdigest()
 
 

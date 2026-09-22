@@ -173,6 +173,8 @@ fleet at a time on smaller Docker allocations.
 
 - **[docs/onboarding.md](docs/onboarding.md)** - point a list of live OCP cluster endpoints at the data layer using a single shared service account (username/password). Config format, RBAC, TLS, verification.
 - **[docs/architecture.md](docs/architecture.md)** - components, collection flow, auth flow, storage model, natural-language queries, blast radius, and deployment, with diagrams.
+- **[docs/ci.md](docs/ci.md)** - the CI pipeline: workflows, the 70% coverage gates per component, what the suites fake, running it locally, reading a failed run.
+- **[docs/security-scanning.md](docs/security-scanning.md)** - security scanning: the Checkmarx-equivalent toolset (semgrep, bandit, pip-audit, npm audit, gitleaks, trivy, hadolint), the severity policy, suppressions, the current baseline.
 - **[docs/containers.md](docs/containers.md)** - the two images and the backend's roles, the pod, building behind a corporate registry, running with podman and on OpenShift, every environment variable, the security posture, sizing and troubleshooting.
 - **[docs/findings.md](docs/findings.md)** - notable findings: what only the OCP API can tell us versus Prometheus and logs, the scale numbers, store behaviour, and the read-only value the API can still add (ingress and egress posture, resilience, security) versus what needs an actions plane (dumps, exec).
 - **[docs/redis-keyspace.md](docs/redis-keyspace.md)** - the Redis keyspace contract: every key, its type, and who writes and reads it.
@@ -331,6 +333,23 @@ oc apply -k deploy/openshift
 **[docs/containers.md](docs/containers.md)** is the full story: the images, the
 pod diagram, building behind a corporate registry, every environment variable,
 the security posture, sizing for seven hubs, and troubleshooting.
+
+## Continuous integration
+
+Every push runs lint, the four test suites with a 70% coverage floor each, the
+dashboard build, both container images with an image scan, and the security
+scanners (SAST, dependency audit, secret detection, IaC) that stand in for a
+Checkmarx pass. `make ci` runs the identical commands on a laptop.
+
+```sh
+make ci              # lint, tests with coverage gates, security scan
+make test-all        # the suites only
+make scan            # the scanners only (make scan-tools once, first)
+```
+
+**[docs/ci.md](docs/ci.md)** describes the workflows and the gates;
+**[docs/security-scanning.md](docs/security-scanning.md)** describes the
+scanners, the policy and how to triage a finding.
 
 ## Deploying to OpenShift
 

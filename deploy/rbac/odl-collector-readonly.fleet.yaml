@@ -1,0 +1,136 @@
+# Read-only access the Operations Data Layer collector needs on EACH
+# OpenShift cluster it polls. GENERATED from the OCP API manifest -
+# regenerate after changing config/ocp-api-manifest.yaml:
+#
+#     cd data-layer && .venv/bin/python -m app.manifest rbac \
+#         > ../deploy/rbac/odl-collector-readonly.yaml
+#
+# The collector only ever reads. ConfigMap / Secret values, certificate
+# material and env values are scrubbed at parse time and never stored;
+# the read access below is what lets it report key names, references and
+# certificate expiry (see docs/ocp-api-manifest.md).
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: odl-collector-readonly
+  labels:
+    app: odl
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - events
+  - namespaces
+  - nodes
+  - persistentvolumeclaims
+  - persistentvolumes
+  - pods
+  - resourcequotas
+  - services
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  - deployments
+  - statefulsets
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - config.openshift.io
+  resources:
+  - clusteroperators
+  - clusterversions
+  - infrastructures
+  - ingresses
+  - networks
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - machineconfiguration.openshift.io
+  resources:
+  - machineconfigpools
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - metrics.k8s.io
+  resources:
+  - nodes
+  - pods
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  - networkpolicies
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - operators.coreos.com
+  resources:
+  - clusterserviceversions
+  - subscriptions
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - route.openshift.io
+  resources:
+  - routes
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - list
+---
+# Bind to the shared service-account *user* (the username/password identity
+# from your IdP). Swap kind/name if you use a Kubernetes ServiceAccount.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: odl-collector-readonly
+  labels:
+    app: odl
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: odl-collector-readonly
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: User
+  name: svc-ops-data

@@ -7,6 +7,8 @@ test is the Redis stream the collectors really read. Collection itself is the
 one seam replaced: `coordination._collect` records what it was asked to run
 instead of spawning a sweep.
 """
+import logging
+import threading
 import time
 
 import fakeredis
@@ -214,3 +216,125 @@ def test_a_tick_publishes_presence_and_drains_the_queue(store, collected):
     coordination.tick(store, consumer)
     assert len(store.collectors()) == 1
     assert collected == ["sweep"]
+
+
+# --------------------------------------------------------------------------- #
+# a Redis that is down, on every path that touches it
+# --------------------------------------------------------------------------- #
+def test_presence_that_cannot_be_published_never_fails_the_tick(store, monkeypatch, caplog):
+    """Presence is a courtesy. A collector that cannot publish it must still
+    collect, because the fleet cares about the sweep and not the bookkeeping."""
+    def boom(*_a, **_k):
+        raise ConnectionError("redis is gone")
+
+    monkeypatch.setattr(store, "set_collector", boom)
+    with caplog.at_level(logging.DEBUG, logger="odl.coordination"):
+        coordination.publish_presence(store)
+    assert "publishing presence failed" in caplog.text
+
+
+def test_presence_that_cannot_be_cleared_never_fails_shutdown(store, monkeypatch, caplog):
+    def boom(*_a, **_k):
+        raise ConnectionError("redis is gone")
+
+    monkeypatch.setattr(store, "clear_collector", boom)
+    with caplog.at_level(logging.DEBUG, logger="odl.coordination"):
+        coordination.clear_presence(store)
+    assert "clearing presence failed" in caplog.text
+
+
+def test_a_consumer_built_against_a_dead_redis_starts_from_the_beginning_of_time(
+        store, monkeypatch):
+    """"0-0" is the safe cursor: the next successful read then sees whatever is
+    in the stream rather than nothing at all."""
+    def boom():
+        raise ConnectionError("redis is gone")
+
+    monkeypatch.setattr(store, "refresh_cursor", boom)
+    assert coordination.RefreshConsumer(store, instance="worker-1").after_id == "0-0"
+
+
+def test_ownership_cannot_be_decided_while_redis_is_down_so_nothing_is_collected(
+        store, collected, monkeypatch):
+    consumer = coordination.RefreshConsumer(store, instance="worker-1")
+    store.request_refresh(cluster=EAST, origin="api-1")
+
+    def boom(_name):
+        raise ConnectionError("redis is gone")
+
+    monkeypatch.setattr(store, "get_cluster", boom)
+    assert consumer.consume(store) == 0 and collected == []
+
+
+# --------------------------------------------------------------------------- #
+# collecting off the caller's thread
+# --------------------------------------------------------------------------- #
+def test_a_refresh_runs_on_its_own_thread_so_a_long_sweep_cannot_block_the_heartbeat():
+    done = threading.Event()
+    ran_on = {}
+
+    def sweep():
+        ran_on["thread"] = threading.current_thread().name
+        done.set()
+
+    coordination._collect(sweep, "sweep")
+    assert done.wait(5), "the sweep thread never ran"
+    assert ran_on["thread"] == "odl-refresh-sweep"
+    assert ran_on["thread"] != threading.current_thread().name
+
+
+# --------------------------------------------------------------------------- #
+# the `all`-mode background thread
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def no_background_thread():
+    """No test may leave the coordination thread running behind it."""
+    yield
+    coordination.stop_background()
+
+
+def test_in_all_mode_one_thread_publishes_presence_and_drains_the_queue(
+        store, collected, monkeypatch, no_background_thread):
+    monkeypatch.setattr(settings, "worker_tick_seconds", 0.05)
+    thread = coordination.start_background(role="all")
+    assert coordination.start_background() is thread, "a second thread was started"
+
+    # Presence appears only after the consumer exists, so this also means the
+    # queue is being read from now on.
+    deadline = time.time() + 5
+    while time.time() < deadline and not store.collectors():
+        time.sleep(0.02)
+    assert [c["role"] for c in store.collectors()] == ["all"]
+
+    store.request_refresh(origin="api-1")
+    deadline = time.time() + 5
+    while time.time() < deadline and not collected:
+        time.sleep(0.02)
+    assert collected == ["sweep"]
+
+
+def test_stopping_ends_the_thread_and_withdraws_this_process_s_presence(
+        store, monkeypatch, no_background_thread):
+    monkeypatch.setattr(settings, "worker_tick_seconds", 0.05)
+    thread = coordination.start_background()
+    deadline = time.time() + 5
+    while time.time() < deadline and not store.collectors():
+        time.sleep(0.02)
+
+    coordination.stop_background()
+    thread.join(5)
+    assert not thread.is_alive()
+    assert coordination._background is None
+    assert store.collectors() == []
+    # And the module can start again, which is what the API's lifespan does.
+    assert coordination.start_background() is not thread
+
+
+def test_shutdown_survives_a_redis_that_is_already_gone(monkeypatch, caplog):
+    def boom():
+        raise ConnectionError("redis is gone")
+
+    monkeypatch.setattr("app.store.get_store", boom)
+    with caplog.at_level(logging.DEBUG, logger="odl.coordination"):
+        coordination.stop_background()
+    assert "clearing presence at shutdown failed" in caplog.text

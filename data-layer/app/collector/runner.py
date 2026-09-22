@@ -310,9 +310,15 @@ def cluster_ca_bundle(hub, meta: dict) -> str | None:
         except OSError as e:
             log.warning("hub %s: ca_cert %s unreadable (%s)", hub.name, hub.ca_cert, e)
     bundle = "\n".join(parts) + "\n"
-    path = os.path.join(_CA_DIR, hashlib.sha1(bundle.encode()).hexdigest() + ".pem")
+    # Content addressing, not authentication: the digest only names the file
+    # that holds this bundle, and the bundle itself is what TLS verifies against.
+    # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- file name
+    digest = hashlib.sha1(bundle.encode(), usedforsecurity=False).hexdigest()
+    path = os.path.join(_CA_DIR, digest + ".pem")
     if not os.path.exists(path):
-        os.makedirs(_CA_DIR, exist_ok=True)
+        # 0o700: the bundles are read back to verify TLS, so no other user on a
+        # shared host gets to plant a CA in here.
+        os.makedirs(_CA_DIR, mode=0o700, exist_ok=True)
         tmp = path + f".{os.getpid()}.tmp"
         with open(tmp, "w") as f:
             f.write(bundle)

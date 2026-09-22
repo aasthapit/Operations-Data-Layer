@@ -1,0 +1,34 @@
+# Paths semgrep does not scan.
+#
+# Everything here is a PATH exclusion, never a rule suppression. A rule that
+# fires on code we keep is silenced at the line itself with
+# `# nosemgrep: <rule id> -- <why>`, so the reason travels with the code and
+# dies with it. Nothing in this file disables a rule anywhere else.
+
+# Dependencies and build output. Not our source, and their vulnerabilities are
+# pip-audit's, npm audit's and trivy's job rather than semgrep's.
+node_modules/
+.venv/
+venv/
+dist/
+build/
+*.min.js
+*.map
+
+# Caches, reports and scanner output.
+.git/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+htmlcov/
+coverage/
+reports/
+
+# Generated ADR renderings: self-contained HTML with the Mermaid sources
+# inlined, which semgrep's HTML parser chokes on. The hand-written source is
+# docs/adr/*.md, which IS scanned.
+docs/adr/html/
+
+# kind's generated kubeconfigs for the local development fleet. Gitignored,
+# never shipped, and rewritten by every `make fleet-up`.
+fleet/kubeconfigs/

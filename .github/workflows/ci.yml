@@ -1,0 +1,174 @@
+# Tests, coverage gates and image builds for every component.
+#
+# Every job runs on a bare runner: no Redis, no clusters, no model keys. The
+# test suites stand in fakes for all of them (fakeredis, httpx.MockTransport,
+# the model seams), which is what makes the 70% coverage gate honest - it is
+# measured on code that actually ran, not on code that was skipped because
+# something was missing.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  data-layer:
+    name: data-layer (lint, tests, coverage >= 70%)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: data-layer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: data-layer/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check app tests scripts
+      - name: Tests with coverage gate
+        run: python -m pytest -q --cov=app --cov-report=term-missing:skip-covered --cov-report=xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-data-layer
+          path: data-layer/coverage.xml
+
+  mcp-server:
+    name: mcp-server (lint, tests, coverage >= 70%)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: mcp-server/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - name: Tests with coverage gate
+        run: python -m pytest -q --cov=server --cov-report=term-missing --cov-report=xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-mcp-server
+          path: mcp-server/coverage.xml
+
+  patching-service:
+    name: patching-service (lint, tests, coverage >= 70%)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: patching-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: patching-service/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - name: Tests with coverage gate
+        run: python -m pytest -q --cov=app --cov-report=term-missing --cov-report=xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-patching-service
+          path: patching-service/coverage.xml
+
+  dashboard:
+    name: dashboard (tests, coverage >= 70%, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+      - name: Tests with coverage gate
+        run: npm test
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-dashboard
+          path: dashboard/coverage/lcov.info
+          if-no-files-found: ignore
+
+  images:
+    name: container images (build, scan)
+    runs-on: ubuntu-latest
+    needs: [data-layer, dashboard]
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build both images with the public bases
+        run: |
+          docker build -t odl-backend:ci data-layer
+          docker build -t odl-dashboard:ci dashboard
+      - name: Smoke the images as an arbitrary UID on a read-only root
+        run: |
+          set -eu
+          docker run --rm --user 1000710000:0 --read-only --tmpfs /tmp odl-backend:ci check-config 2>&1 | tail -3 || true
+          docker run -d --name dash --user 1000710000:0 --read-only --tmpfs /tmp -p 8080:8080 odl-dashboard:ci
+          for i in $(seq 1 20); do curl -fs localhost:8080/nginx-health && break; sleep 1; done
+          docker logs dash | tail -3
+          docker rm -f dash
+      - name: Trivy on odl-backend
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: odl-backend:ci
+          format: sarif
+          output: trivy-backend.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+        env:
+          TRIVY_IGNOREFILE: .trivyignore.yaml
+      - name: Trivy on odl-dashboard
+        uses: aquasecurity/trivy-action@0.28.0
+        if: always()
+        with:
+          image-ref: odl-dashboard:ci
+          format: sarif
+          output: trivy-dashboard.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+        env:
+          TRIVY_IGNOREFILE: .trivyignore.yaml
+      - name: Upload image scan results to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-backend.sarif
+          category: trivy-image-backend
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-dashboard.sarif
+          category: trivy-image-dashboard

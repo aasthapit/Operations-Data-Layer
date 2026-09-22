@@ -138,6 +138,11 @@ spec:
       labels:
         k8s-app: metrics-server
     spec:
+      securityContext:
+        # Pod-level, so a container added later inherits the policy.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - args:
         - --cert-dir=/tmp

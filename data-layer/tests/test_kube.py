@@ -10,6 +10,7 @@ non-preloaded response. The last test pins that assumption against the real
 urllib3 response class, so a client or urllib3 upgrade that breaks it fails
 here rather than in a sweep.
 """
+import base64
 import io
 import json
 import threading
@@ -258,3 +259,135 @@ def test_apiexception_still_reads_status_from_a_raw_urllib3_response():
     e = ApiException(http_resp=raw)
     assert e.status == 403 and e.reason == "Forbidden"
     assert isinstance(kube._translate(e, "secrets"), kube.ResourceForbidden)
+
+
+# --------------------------------------------------------------------------- #
+# building a client for a cluster
+# --------------------------------------------------------------------------- #
+def test_a_bundle_from_a_kubeconfig_file_wraps_the_client_the_loader_built(monkeypatch):
+    seen = {}
+
+    def load(config_file):
+        seen["path"] = config_file
+        return "api-client"
+
+    monkeypatch.setattr(kube.config, "new_client_from_config", load)
+    bundle = kube.bundle_from_file("/fleet/hub-east.kubeconfig")
+    assert bundle.api_client == "api-client"
+    assert seen["path"] == "/fleet/hub-east.kubeconfig"
+    assert bundle.stats == {}
+
+
+def test_a_kubeconfig_that_only_exists_in_memory_is_written_out_for_the_loader(monkeypatch):
+    """ACM hands the managed cluster's kubeconfig over as a Secret value, and
+    the client can only load one from a path."""
+    written = {}
+
+    def load(config_file):
+        written["path"] = config_file
+        written["content"] = open(config_file).read()
+        return "api-client"
+
+    monkeypatch.setattr(kube.config, "new_client_from_config", load)
+    kubeconfig = "apiVersion: v1\nclusters: []\n"
+    assert kube.bundle_from_kubeconfig_str(kubeconfig).api_client == "api-client"
+    assert written["content"] == kubeconfig
+    assert written["path"].endswith(".kubeconfig")
+
+
+def test_an_endpoint_bundle_carries_the_bearer_token_and_verifies_tls():
+    bundle = kube.bundle_from_endpoint("https://api.ocp-east-1.example.com:6443",
+                                       "sha256~abc")
+    cfg = bundle.api_client.configuration
+    assert cfg.host == "https://api.ocp-east-1.example.com:6443"
+    assert cfg.api_key == {"authorization": "Bearer sha256~abc"}
+    assert cfg.verify_ssl is True and cfg.ssl_ca_cert is None
+
+
+def test_a_custom_ca_is_used_instead_of_the_system_trust_store():
+    cfg = kube.bundle_from_endpoint("https://api.example.com:6443", "t",
+                                    ca_cert="/etc/pki/ingress-ca.crt").api_client.configuration
+    assert cfg.ssl_ca_cert == "/etc/pki/ingress-ca.crt" and cfg.verify_ssl is True
+
+
+def test_turning_verification_off_also_silences_the_warning_it_would_print_per_request():
+    """Thousands of InsecureRequestWarning lines per sweep would bury the log
+    the operator actually has to read."""
+    silenced = []
+    original = urllib3.disable_warnings
+    urllib3.disable_warnings = lambda category=None: silenced.append(category)
+    try:
+        cfg = kube.bundle_from_endpoint("https://api.example.com:6443", "t",
+                                        verify=False).api_client.configuration
+    finally:
+        urllib3.disable_warnings = original
+    assert cfg.verify_ssl is False
+    assert silenced == [urllib3.exceptions.InsecureRequestWarning]
+
+
+def test_the_core_api_is_built_on_the_bundle_s_own_client():
+    bundle = _bundle()
+    assert bundle.core.api_client is bundle.api_client
+
+
+# --------------------------------------------------------------------------- #
+# ACM hub accessors
+# --------------------------------------------------------------------------- #
+def test_managed_clusters_are_listed_under_their_own_stat_key():
+    b = _bundle(_page([{"metadata": {"name": "ocp-east-1"}}]))
+    assert [c["metadata"]["name"] for c in kube.list_managedclusters(b)] == ["ocp-east-1"]
+    assert b.api_client.calls[0]["path"] == \
+        "/apis/cluster.open-cluster-management.io/v1/managedclusters"
+    assert list(b.stats) == ["managedclusters"]
+
+
+class _Core:
+    def __init__(self, data):
+        self.data = data
+        self.read = []
+
+    def read_namespaced_secret(self, name, namespace):
+        self.read.append((namespace, name))
+        return type("Secret", (), {"data": self.data})()
+
+
+def test_a_hub_secret_yields_the_managed_cluster_s_kubeconfig(monkeypatch):
+    core = _Core({"kubeconfig": base64.b64encode(b"apiVersion: v1\n").decode()})
+    monkeypatch.setattr(kube.ApiBundle, "core", property(lambda self: core))
+    b = _bundle()
+    assert kube.read_kubeconfig_secret(b, "ocp-east-1", "ocp-east-1-admin-kubeconfig") == \
+        "apiVersion: v1\n"
+    assert core.read == [("ocp-east-1", "ocp-east-1-admin-kubeconfig")]
+
+
+def test_a_secret_without_a_kubeconfig_key_names_the_secret(monkeypatch):
+    """ACM's secret layout differs by version; the message has to say which
+    secret was wrong, not just that something was."""
+    monkeypatch.setattr(kube.ApiBundle, "core", property(lambda self: _Core({"tls.crt": "x"})))
+    with pytest.raises(KeyError, match="ocp-east-1/admin has no 'kubeconfig' key"):
+        kube.read_kubeconfig_secret(_bundle(), "ocp-east-1", "admin")
+
+
+def test_a_secret_with_no_data_at_all_is_the_same_error(monkeypatch):
+    monkeypatch.setattr(kube.ApiBundle, "core", property(lambda self: _Core(None)))
+    with pytest.raises(KeyError, match="no 'kubeconfig' key"):
+        kube.read_kubeconfig_secret(_bundle(), "ns", "admin")
+
+
+def test_a_kubeconfig_is_parsed_as_yaml():
+    parsed = kube.parse_kubeconfig("apiVersion: v1\nclusters:\n- name: hub\n")
+    assert parsed["clusters"] == [{"name": "hub"}]
+
+
+# --------------------------------------------------------------------------- #
+# answers that are JSON but not an object
+# --------------------------------------------------------------------------- #
+def test_a_json_array_where_an_object_was_expected_names_the_path_and_the_type():
+    """A proxy or an auth portal answering with something else must not be fed
+    to a parser that assumes `.get`."""
+    b = _bundle(_Resp(b'["not", "an", "object"]'))
+    with pytest.raises(RuntimeError, match=r"/api/v1/nodes: expected a JSON object, got list"):
+        kube.get_json(b, "/api/v1/nodes")
+    # The bytes still count: a sweep's transfer stats must not lie because one
+    # cluster answered badly.
+    assert b.stats["/api/v1/nodes"]["bytes"] == len(b.api_client.responses[0].data)

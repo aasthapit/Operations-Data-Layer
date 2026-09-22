@@ -1,0 +1,11 @@
+# Coverage for the patching system of record. The gate is what CI enforces;
+# the report settings are here so a laptop run and the workflow print the same
+# thing.
+[run]
+source = app
+omit = */tests/*
+
+[report]
+fail_under = 70
+show_missing = true
+skip_covered = true

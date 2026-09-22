@@ -12,7 +12,10 @@ must return.
 """
 import base64
 import json
+import logging
 import os
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -21,6 +24,7 @@ import yaml
 from app.collector.collect import assemble
 from app.collector.healthchecks import run_health_checks
 from app.query import schema as query_schema
+from app.query import snapshot as snapshot_module
 from app.query.config import query_config
 from app.query.errors import QueryTimeout
 from app.query.guard import validate
@@ -341,16 +345,33 @@ def test_all_three_resolutions_load_and_are_told_apart(conn):
         conn, "SELECT snapshot_at FROM health_snapshots WHERE resolution = 'day'"))
 
 
+def _newest_rolled_up_day(conn, cluster, columns):
+    """The newest daily row that actually rolled several sweeps together.
+
+    Not simply the newest daily row: a day is rolled up from the hours inside
+    it, and the hour in progress stays provisional until it closes. So on a
+    run that starts within the first hour of a UTC day - which CI does about
+    once a night - today's daily row legitimately holds one sample and has
+    nothing to roll. Asserting the rules against that row made this file fail
+    by the clock; asserting them against the newest day the fixture really did
+    sweep more than once is the same test without the calendar in it.
+    """
+    found = rows(conn, f"""
+        SELECT {columns} FROM health_snapshots
+        WHERE resolution = 'day' AND cluster_name = '{cluster}' AND samples > 1
+        ORDER BY snapshot_at DESC LIMIT 1
+    """)
+    assert found, f"{cluster} has no daily row rolled up from more than one sweep"
+    return found[0]
+
+
 def test_a_rolled_up_row_keeps_the_worst_and_the_peak(conn):
     """The rollup rules, seen from SQL: counters are the worst of the bucket,
     utilization is the mean with the peak beside it, names are the union."""
-    day = rows(conn, """
-        SELECT samples, crashloops, pod_issues, warning_events, restarts_total,
-               cpu_usage, cpu_usage_max, health_score, nodes_total, checks_failed_names
-        FROM health_snapshots
-        WHERE resolution = 'day' AND cluster_name = 'ocp-east-1'
-        ORDER BY snapshot_at DESC LIMIT 1
-    """)[0]
+    day = _newest_rolled_up_day(conn, "ocp-east-1", """
+        samples, crashloops, pod_issues, warning_events, restarts_total,
+        cpu_usage, cpu_usage_max, health_score, nodes_total, checks_failed_names
+    """)
     assert day["samples"] > 1                       # really is a rollup
     assert day["crashloops"] >= 1 and day["pod_issues"] >= day["crashloops"]
     assert day["warning_events"] >= 1 and day["restarts_total"] >= 9
@@ -358,11 +379,7 @@ def test_a_rolled_up_row_keeps_the_worst_and_the_peak(conn):
     assert day["health_score"] is not None and day["nodes_total"] == 2
     assert json.loads(day["checks_failed_names"]) == []      # east never fails a check
 
-    west = rows(conn, """
-        SELECT checks_failed_names FROM health_snapshots
-        WHERE resolution = 'day' AND cluster_name = 'ocp-west-1'
-        ORDER BY snapshot_at DESC LIMIT 1
-    """)[0]
+    west = _newest_rolled_up_day(conn, "ocp-west-1", "checks_failed_names")
     assert "no-degraded-operators" in json.loads(west["checks_failed_names"])
 
 
@@ -608,3 +625,211 @@ def test_schema_examples_are_valid_sql(conn):
     for example in query_schema.EXAMPLES:
         sql = validate(example.sql, 50)
         rows(conn, sql)                        # raises if a column does not exist
+
+
+# --------------------------------------------------------------------------- #
+# coercion: a Redis row is JSON, so every type has to be rebuilt on the way in
+# --------------------------------------------------------------------------- #
+def test_text_columns_take_whatever_the_store_held():
+    assert snapshot_module._as_text(None) is None
+    assert snapshot_module._as_text("prod") == "prod"
+    assert snapshot_module._as_text(7) == "7"
+    # Lower case, because that is how the value reads everywhere else in SQL.
+    assert snapshot_module._as_text(True) == "true"
+    assert snapshot_module._as_text(False) == "false"
+    assert snapshot_module._as_text({"a": 1}) == '{"a": 1}'
+    assert snapshot_module._as_text([1, 2]) == "[1, 2]"
+
+
+def test_json_columns_travel_as_text_and_are_not_encoded_twice():
+    """DuckDB casts the text on insert, so a string that is already JSON must
+    be passed through or `json_extract` would see a quoted blob."""
+    assert snapshot_module._as_json(None) is None
+    assert snapshot_module._as_json('{"a": 1}') == '{"a": 1}'
+    assert snapshot_module._as_json("not json at all") == '"not json at all"'
+    assert snapshot_module._as_json({"a": 1}) == '{"a": 1}'
+
+
+def test_a_value_json_cannot_encode_becomes_its_own_repr():
+    """One unencodable field must not fail the whole snapshot build."""
+    assert snapshot_module._as_json({(1, 2): "tuple key"}).startswith('"{(1, 2)')
+
+
+def test_booleans_survive_every_shape_redis_can_return_them_in():
+    for truthy in (True, 1, 1.0, "true", "TRUE", " yes ", "1"):
+        assert snapshot_module._as_bool(truthy) is True, truthy
+    for falsy in (False, 0, 0.0, "false", "no", "0", ""):
+        assert snapshot_module._as_bool(falsy) is False, falsy
+    assert snapshot_module._as_bool(None) is None
+    assert snapshot_module._as_bool("maybe") is None
+
+
+def test_integers_arrive_as_strings_and_floats_and_are_still_integers():
+    assert snapshot_module._as_int("12") == 12
+    assert snapshot_module._as_int("12.7") == 12
+    assert snapshot_module._as_int(3.9) == 3
+    assert snapshot_module._as_int(True) == 1
+    assert snapshot_module._as_int(None) is None
+    assert snapshot_module._as_int("not a number") is None
+    assert snapshot_module._as_int(object()) is None
+
+
+def test_floats_that_are_not_numbers_become_null_rather_than_failing_the_build():
+    assert snapshot_module._as_float("1.5") == 1.5
+    assert snapshot_module._as_float(2) == 2.0
+    assert snapshot_module._as_float(None) is None
+    assert snapshot_module._as_float("n/a") is None
+    assert snapshot_module._as_float(object()) is None
+
+
+def test_timestamps_become_naive_utc_whatever_they_arrived_as():
+    """The column is TIMESTAMP, not TIMESTAMPTZ: everything the collector
+    writes is already UTC, and a zone-less column compares with now() without
+    the tz machinery."""
+    expected = datetime(2025, 3, 1, 12, 30)
+    assert snapshot_module._as_timestamp("2025-03-01T12:30:00Z") == expected
+    assert snapshot_module._as_timestamp("2025-03-01T12:30:00+00:00") == expected
+    assert snapshot_module._as_timestamp("2025-03-01T14:30:00+02:00") == expected
+    assert snapshot_module._as_timestamp(datetime(2025, 3, 1, 12, 30, tzinfo=UTC)) == expected
+    assert snapshot_module._as_timestamp(datetime(2025, 3, 1, 12, 30)) == expected
+    assert snapshot_module._as_timestamp(
+        datetime(2025, 3, 1, 12, 30, tzinfo=UTC).timestamp()) == expected
+
+
+def test_a_timestamp_that_cannot_be_read_is_null_and_not_an_exception():
+    assert snapshot_module._as_timestamp(None) is None
+    assert snapshot_module._as_timestamp("") is None
+    assert snapshot_module._as_timestamp("   ") is None
+    assert snapshot_module._as_timestamp("last tuesday") is None
+    assert snapshot_module._as_timestamp(["2025-03-01"]) is None
+
+
+def test_every_column_type_the_schema_declares_has_a_coercion():
+    declared = {column.type for table in query_schema.TABLES for column in table.columns}
+    assert declared <= set(snapshot_module._COERCE), \
+        "a schema column type nothing knows how to coerce would load as NULL"
+
+
+# --------------------------------------------------------------------------- #
+# shaping what the store hands back
+# --------------------------------------------------------------------------- #
+def test_a_section_the_collector_keyed_by_name_is_expanded_into_rows():
+    """`resource_status` is a mapping in the collector's shape; the table wants
+    rows, with the mapping's key as a column."""
+    assert snapshot_module._rows({"pods": {"state": "collected"},
+                                  "nodes": {"state": "forbidden"}}) == [
+        {"key": "pods", "state": "collected"},
+        {"key": "nodes", "state": "forbidden"}]
+
+
+def test_a_section_that_is_empty_or_not_rows_loads_nothing():
+    assert snapshot_module._rows(None) == []
+    assert snapshot_module._rows([]) == []
+    assert snapshot_module._rows({}) == []
+    assert snapshot_module._rows(["a string", 7, {"name": "x"}]) == [{"name": "x"}]
+    assert snapshot_module._rows({"pods": "collected"}) == []
+
+
+def test_flattening_fills_in_the_cluster_a_row_came_from():
+    flattened = snapshot_module._flatten({
+        "ocp-east-1": [{"name": "a"}],
+        "ocp-west-1": [{"name": "b", "cluster_name": "written-by-the-collector"}],
+    })
+    assert flattened == [{"name": "a", "cluster_name": "ocp-east-1"},
+                         {"name": "b", "cluster_name": "written-by-the-collector"}]
+    assert snapshot_module._flatten(None) == []
+
+
+def test_an_empty_fleet_has_no_change_log_to_read(store):
+    assert snapshot_module._changes(store, []) == []
+
+
+def test_live_values_render_to_nothing_when_there_are_none():
+    """An empty block would still cost prompt tokens and say nothing."""
+    assert render_live_values({}) == ""
+
+
+# --------------------------------------------------------------------------- #
+# stale-while-rebuild
+# --------------------------------------------------------------------------- #
+def test_a_stale_snapshot_keeps_answering_while_the_rebuild_runs(store):
+    first = manager.get(store)
+    generation = manager.info().generation
+    manager.invalidate()
+
+    assert manager.get(store) is first, "the query waited for the rebuild"
+    deadline = time.time() + 10
+    while time.time() < deadline and manager.info().generation == generation:
+        time.sleep(0.02)
+    assert manager.info().generation == generation + 1
+    assert manager.get(store) is not first
+
+
+def test_a_rebuild_that_fails_leaves_the_previous_snapshot_in_service(store, monkeypatch):
+    first = manager.get(store)
+    generation = manager.info().generation
+    tried = threading.Event()
+
+    def broken(_store):
+        tried.set()
+        raise RuntimeError("the store went away mid-build")
+
+    monkeypatch.setattr(snapshot_module, "build", broken)
+    manager.invalidate()
+    assert manager.get(store) is first
+    assert tried.wait(10), "the background rebuild never started"
+
+    deadline = time.time() + 10
+    while time.time() < deadline and manager._rebuilding:
+        time.sleep(0.02)
+    assert manager._rebuilding is False and manager.info().rebuilding is False
+    assert manager.info().generation == generation
+    assert rows(first, "SELECT count(*) AS n FROM clusters") == [{"n": 2}]
+
+
+def test_rebuilds_are_throttled_so_a_busy_fleet_cannot_rebuild_per_request(store, monkeypatch):
+    """Several collectors sweeping move the marker every few seconds; rebuilding
+    a large fleet that often is what made the Query page hang."""
+    manager.get(store)
+    generation = manager.info().generation
+    monkeypatch.setattr(query_config, "rebuild_seconds", 3600)
+    manager._last_attempt = time.time()
+
+    manager.invalidate()
+    manager.get(store)
+    monkeypatch.setattr(snapshot_module, "build",
+                        lambda _s: pytest.fail("a rebuild was scheduled inside the window"))
+    manager.get(store)
+    time.sleep(0.1)
+    assert manager.info().generation == generation
+
+
+def test_a_store_that_cannot_report_its_last_sweep_keeps_the_cached_snapshot(store, monkeypatch):
+    """A Redis hiccup must not turn every query into a full rebuild."""
+    first = manager.get(store)
+
+    def boom():
+        raise ConnectionError("redis is gone")
+
+    monkeypatch.setattr(store, "last_run", boom)
+    assert manager._run_marker(store) is None
+    assert manager.get(store) is first
+
+
+def test_a_retired_connection_that_refuses_to_close_is_only_logged(store, caplog):
+    class _Stubborn:
+        def close(self):
+            raise RuntimeError("a cursor is still reading from it")
+
+    manager.get(store)
+    manager._retired = [_Stubborn()]
+    with caplog.at_level(logging.DEBUG, logger="odl.query.snapshot"):
+        manager.refresh(store)
+    assert "closing a retired snapshot failed" in caplog.text
+
+
+def test_the_module_level_helpers_are_the_process_wide_manager(store):
+    assert snapshot_module.get_snapshot(store) is manager.get(store)
+    snapshot_module.invalidate()
+    assert snapshot_module.info().stale is True
+    assert snapshot_module.info() is manager.info()

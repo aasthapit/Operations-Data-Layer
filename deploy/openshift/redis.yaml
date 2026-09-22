@@ -52,6 +52,11 @@ spec:
     metadata:
       labels: { app: odl, component: redis }
     spec:
+      securityContext:
+        # Pod-level, so a container added later inherits the policy.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       # No runAsUser and no fsGroup: restricted-v2 assigns both from the
       # namespace's ranges, and the PVC is chowned to the assigned fsGroup so
       # the arbitrary UID can write to it. Pinning either one here would be

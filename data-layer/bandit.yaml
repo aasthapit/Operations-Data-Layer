@@ -1,0 +1,29 @@
+# bandit configuration for every Python component in this repository:
+# data-layer/app, data-layer/scripts, mcp-server/server.py and
+# patching-service/app. scripts/scan.sh points all four at this one file.
+#
+# Why it lives here and not at the repository root: there is no pyproject.toml
+# anywhere in the tree, so `[tool.bandit]` has no home, and data-layer/ is
+# already where the shared Python tooling config sits (ruff.toml next door).
+# Moving it is a one-line change in scripts/scan.sh if that stops being true.
+#
+# Nothing is skipped globally, and no plugin is tuned. A finding that is
+# genuinely not a problem is silenced at the line that causes it, with the rule
+# id and the reason:
+#
+#     foo = bar()  # nosec B108 -- <why this is not a problem here>
+#
+# so the suppression is reviewed with the code and disappears with it. The gate
+# in scripts/scan.sh is HIGH severity at MEDIUM or better confidence; the rest
+# is reported and its current baseline is listed in docs/security-scanning.md.
+
+# Test suites are excluded: a fixture token or a bare assert in a test is not a
+# finding, and including them would train everybody to ignore the report.
+exclude_dirs:
+  - '*/tests/*'
+  - '*/.venv/*'
+  - '*/node_modules/*'
+
+# `tests` is deliberately unset so every plugin runs, including ones bandit
+# gains later. Naming a subset here would silently drop new checks.
+skips: []

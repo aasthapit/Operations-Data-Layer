@@ -29,6 +29,11 @@ spec:
       labels:
         app: odl
     spec:
+      securityContext:
+        # Pod-level, so a container added later inherits the policy.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       serviceAccountName: odl
       terminationGracePeriodSeconds: 30
       containers:

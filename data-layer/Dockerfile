@@ -39,7 +39,11 @@ USER 0
 WORKDIR /src
 COPY requirements.txt ./
 RUN python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt \
+    # pip is a build tool: nothing installs anything at run time, and every
+    # scanner would otherwise report the venv's pip against the CVE of the month.
+    && /opt/venv/bin/python -m pip uninstall -y pip \
+    && rm -rf /opt/venv/lib/python3.*/site-packages/pip*
 
 # --------------------------------------------------------------------------- #
 # runtime
@@ -53,6 +57,15 @@ blast radius over a multi-hub OpenShift estate. ODL_ROLE picks the role: api, wo
       org.opencontainers.image.version="0.2.0"
 
 USER 0
+# Pull the base image's own security updates. The tag of a base image is a
+# snapshot; the fixed OpenSSL or libc it needs may have shipped a week after
+# it. Each package manager the supported bases use is tried in turn, so the
+# same Dockerfile builds on Debian and UBI.
+RUN if command -v microdnf >/dev/null 2>&1; then microdnf upgrade -y && microdnf clean all; \
+    elif command -v dnf >/dev/null 2>&1; then dnf upgrade -y && dnf clean all; \
+    elif command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*; \
+    elif command -v apk >/dev/null 2>&1; then apk upgrade --no-cache; \
+    fi
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -62,6 +75,11 @@ ENV PYTHONUNBUFFERED=1 \
     ODL_ROLE=all
 
 COPY --from=builder /opt/venv /opt/venv
+# The base image's own pip goes too, for the same reason; the interpreter and
+# the standard library are all the runtime needs.
+RUN python3 -m pip uninstall -y pip >/dev/null 2>&1 || true \
+    && find / -xdev -type d -name "pip" -path "*site-packages*" -prune -exec rm -rf {} + 2>/dev/null || true \
+    && find / -xdev -type d -name "pip-*.dist-info" -path "*site-packages*" -prune -exec rm -rf {} + 2>/dev/null || true
 COPY app ./app
 COPY config ./config
 COPY scripts ./scripts

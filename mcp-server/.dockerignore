@@ -1,0 +1,28 @@
+# Keep the build context to what the image actually ships: server.py and the
+# requirements it installs. Everything else here is either a local artifact or
+# something that must never reach a layer.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.log
+
+# Tests never run in the image; they run in CI against the source tree.
+tests/
+pytest.ini
+ruff.toml
+requirements-dev.txt
+.coveragerc
+.coverage
+coverage.xml
+htmlcov/
+
+# A local Claude Code / MCP client registration, not part of the server.
+.mcp.json
+.env
+
+# The recipe is not an input to itself.
+Dockerfile
+.dockerignore

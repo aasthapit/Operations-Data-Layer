@@ -30,4 +30,26 @@ export default defineConfig({
       "/healthz": { target, changeOrigin: true },
     },
   },
+
+  // The suite runs in jsdom against the real modules: only the network is
+  // replaced. `src/test/setup.js` installs the browser APIs jsdom does not
+  // have and makes an unmocked fetch a loud failure rather than a hang.
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: "src/test/setup.js",
+    include: ["src/**/*.test.{js,jsx}"],
+    restoreMocks: true,
+    coverage: {
+      provider: "v8",
+      include: ["src/**"],
+      // main.jsx is the mount point (no logic), and the two fixture modules are
+      // themselves test data - counting them would flatter the number.
+      exclude: ["src/main.jsx", "src/test/**", "src/**/fixture.js"],
+      reporter: ["text", "html", "lcov"],
+      // Statements and lines are the gate; functions and branches are reported
+      // so a drop is visible without failing the build on a defensive branch.
+      thresholds: { statements: 70, lines: 70 },
+    },
+  },
 });

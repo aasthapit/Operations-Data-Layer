@@ -52,6 +52,13 @@ def _warm_query_snapshot() -> None:
         log.info("query snapshot warm-up skipped: %s", e)
 
 
+
+def cors_origins(raw: str | None = None) -> list[str]:
+    """ODL_CORS_ORIGINS as a list: comma-separated origins, or "*" (the default)."""
+    value = os.environ.get("ODL_CORS_ORIGINS", "*") if raw is None else raw
+    origins = [o.strip() for o in value.split(",") if o.strip()]
+    return origins or ["*"]
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     m = get_manifest()      # fail fast on a bad manifest
@@ -84,8 +91,12 @@ app = FastAPI(
 )
 # Fleet-wide JSON compresses 5 to 10x; the dashboard's fetches are the win.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+# The dashboard is served from another origin only in development (Vite on
+# its own port); in the pod and on OpenShift nginx proxies /api same-origin.
+# So the default stays open for the laptop and production narrows it to the
+# Route hostname with ODL_CORS_ORIGINS=https://odl.apps.example.com.
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    CORSMiddleware, allow_origins=cors_origins(), allow_methods=["*"], allow_headers=["*"],
 )
 
 app.include_router(clusters.router)

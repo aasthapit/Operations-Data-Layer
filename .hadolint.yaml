@@ -1,0 +1,26 @@
+# hadolint configuration for the four Dockerfiles in this repository.
+#
+# The gate is hadolint's own `error` level: a `warning` or `info` rule is
+# reported by scripts/scan.sh and does not fail the build. Raising a rule to
+# error, or silencing one, happens here and nowhere else.
+failure-threshold: error
+
+# Bases we build FROM. Anything outside this list is an error, which is what
+# catches a Dockerfile quietly retargeted at some random registry.
+trustedRegistries:
+  - docker.io                          # the official python / node / nginx images
+  - registry.access.redhat.com         # the UBI bases used behind a corporate registry
+  - registry.redhat.io
+
+ignored:
+  # DL3002 "Last USER should not be root".
+  #
+  # hadolint evaluates each build stage on its own, so it fires on the `USER 0`
+  # that the BUILDER stages of data-layer/Dockerfile and dashboard/Dockerfile
+  # need - stages that are thrown away and never run anything. The runtime
+  # stage of both ends on a numeric non-root UID (1001:0 and 101:0).
+  #
+  # The real check - "the image that actually runs is not root" - is still
+  # enforced, by semgrep's dockerfile.security.missing-user at ERROR and by
+  # trivy's DS002 at HIGH, both of which look at the final stage only.
+  - DL3002

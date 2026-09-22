@@ -1,0 +1,29 @@
+# Keep the build context to what the image actually ships: the app and the
+# requirements it installs. Everything else here is either a local artifact or
+# something that must never reach a layer.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.log
+
+# Tests never run in the image; they run in CI against the source tree.
+tests/
+pytest.ini
+ruff.toml
+requirements-dev.txt
+.coveragerc
+.coverage
+coverage.xml
+htmlcov/
+
+# A developer convenience that seeds demo jobs over the running API, not part
+# of the service.
+seed_demo.py
+.env
+
+# The recipe is not an input to itself.
+Dockerfile
+.dockerignore

@@ -51,7 +51,7 @@ BUILD_ARGS = $(foreach v,PYTHON_IMAGE NODE_IMAGE NGINX_IMAGE DIST PIP_INDEX_URL 
 
 POD_FILE ?= deploy/pod/odl-pod.yaml
 
-.PHONY: help fleet-venv fleet-up fleet-down fleet-seed fleet-status acm-up acm-down acm-status acm-smoke \
+.PHONY: help test-data-layer test-mcp test-patching test-dashboard test-all lint-all mcp-dev-venv patching-venv scan scan-sast scan-sca scan-secrets scan-iac scan-images scan-tools ci fleet-venv fleet-up fleet-down fleet-seed fleet-status acm-up acm-down acm-status acm-smoke \
         up down logs rebuild ps reset dl-venv test lint rbac \
         images image-backend image-dashboard images-push pod-up pod-down pod-logs pod-render \
         dev-venv dev dev-core dev-api dev-ui dev-mcp dev-down collect redis-cli sql ask \
@@ -111,6 +111,12 @@ help:
 	@echo "  make check-config  try the fleet config like the collector does: hub login, ManagedClusters, cluster access"
 	@echo "  make collect       trigger a fleet sweep on the collector (ODL_API_PORT)"
 	@echo "  make redis-cli     open redis-cli inside the redis container"
+	@echo ""
+	@echo "  make ci            everything the runner checks: lint, tests with coverage gates, security scan"
+	@echo "  make test-all      data-layer, mcp-server, patching-service and dashboard suites (each gated at 70% coverage)"
+	@echo "  make scan          SAST, SCA, secrets and IaC scanners over the tree (docs/security-scanning.md)"
+	@echo "  make scan-images   trivy over the built images (IMAGE_PREFIX / IMAGE_TAG)"
+	@echo "  make scan-tools    install the scanners locally"
 	@echo "  make sql Q='select ...'   run guarded SQL over the fleet snapshot"
 	@echo "  make ask Q='which ...'    ask in English (needs ANTHROPIC_API_KEY)"
 	@echo ""
@@ -166,15 +172,76 @@ reset: down fleet-down
 dl-venv:
 	$(call venv,data-layer/.venv) && $(call pipi,data-layer/.venv) -r data-layer/requirements-dev.txt
 
-test:
-	cd data-layer && .venv/bin/python -m pytest -q
+# ---- tests, coverage gates, lint ------------------------------------------
+# The same commands the CI workflows run (.github/workflows/ci.yml), so a green
+# laptop is a green runner. Each component carries its own .coveragerc with
+# fail_under = 70; the dashboard's thresholds live in its vitest config.
+# `make ci` is the whole gate: lint, every suite, every scanner.
+test: test-data-layer
 
-lint:
-	cd data-layer && .venv/bin/ruff check app tests
+test-data-layer: deps
+	cd data-layer && .venv/bin/python -m pytest -q --cov=app --cov-report=term-missing:skip-covered --cov-report=xml
 
-rbac:
+test-mcp: mcp-dev-venv
+	cd mcp-server && .venv/bin/python -m pytest -q --cov=server --cov-report=term-missing --cov-report=xml
+
+test-patching: patching-venv
+	cd patching-service && .venv/bin/python -m pytest -q --cov=app --cov-report=term-missing --cov-report=xml
+
+test-dashboard:
+	cd dashboard && npm ci --no-audit --no-fund && npm test
+
+test-all: test-data-layer test-mcp test-patching test-dashboard
+
+lint: deps
+	cd data-layer && .venv/bin/ruff check app tests scripts
+
+lint-all: lint mcp-dev-venv patching-venv
+	cd mcp-server && .venv/bin/ruff check .
+	cd patching-service && .venv/bin/ruff check .
+
+mcp-dev-venv:
+	@test -d mcp-server/.venv || $(call venv,mcp-server/.venv)
+	$(call pipi,mcp-server/.venv) -r mcp-server/requirements-dev.txt
+
+patching-venv:
+	@test -d patching-service/.venv || $(call venv,patching-service/.venv)
+	$(call pipi,patching-service/.venv) -r patching-service/requirements-dev.txt
+
+# ---- security scanning ------------------------------------------------------
+# scripts/scan.sh holds the policy (what fails, what is only reported); see
+# docs/security-scanning.md. `make scan-tools` installs the scanners on a Mac
+# (brew) or a Debian/Ubuntu box; CI installs the same pinned versions itself.
+SCAN_OUT ?= reports
+SCAN_FAIL_ON ?= high
+
+scan:
+	SCAN_OUT=$(SCAN_OUT) SCAN_FAIL_ON=$(SCAN_FAIL_ON) scripts/scan.sh all
+
+scan-sast scan-sca scan-secrets scan-iac:
+	SCAN_OUT=$(SCAN_OUT) SCAN_FAIL_ON=$(SCAN_FAIL_ON) scripts/scan.sh $(patsubst scan-%,%,$@)
+
+scan-images:
+	IMAGE_PREFIX=$(IMAGE_PREFIX) IMAGE_TAG=$(IMAGE_TAG) SCAN_OUT=$(SCAN_OUT) SCAN_FAIL_ON=$(SCAN_FAIL_ON) scripts/scan.sh images
+
+scan-tools:
+	@if command -v brew >/dev/null 2>&1; then brew install semgrep trivy gitleaks hadolint shellcheck; \
+	else echo "install trivy, gitleaks and hadolint from their GitHub releases (see .github/workflows/security.yml for the pinned versions)"; fi
+	@test -d data-layer/.venv || $(call venv,data-layer/.venv)
+	$(call pipi,data-layer/.venv) bandit pip-audit semgrep
+	@SCAN_TOOLS_CHECK=1 scripts/scan.sh || true
+
+ci: lint-all test-all scan
+
+rbac: rbac-fleet
 	cd data-layer && ODL_MANIFEST=config/ocp-api-manifest.yaml .venv/bin/python -m app.manifest rbac \
 		> ../deploy/rbac/odl-collector-readonly.yaml && echo "wrote deploy/rbac/odl-collector-readonly.yaml"
+
+# The production profile collects no Secrets or ConfigMaps, so its role does
+# not ask for them: bind this one on real clusters.
+rbac-fleet:
+	cd data-layer && ODL_MANIFEST=config/ocp-api-manifest.fleet.yaml .venv/bin/python -m app.manifest rbac \
+		> ../deploy/rbac/odl-collector-readonly.fleet.yaml && echo "wrote deploy/rbac/odl-collector-readonly.fleet.yaml"
 
 # ---- container images -------------------------------------------------------
 # Two images, one per directory. docs/containers.md covers the build arguments
@@ -210,10 +277,11 @@ images-push:
 PODMAN_REQUIRED = @command -v podman >/dev/null || \
 	(echo "podman is required for the pod (this machine's engine is '$(ENGINE)'); with docker use 'make up', or apply $(POD_FILE) to a Kubernetes cluster"; exit 1)
 
+POD_PORT ?= 8080
 pod-up:
 	$(PODMAN_REQUIRED)
-	podman kube play $(POD_FILE)
-	@echo "dashboard at http://localhost:8080   (make pod-logs, make pod-down)"
+	podman kube play --publish $(POD_PORT):8080 $(POD_FILE)
+	@echo "dashboard at http://localhost:$(POD_PORT)   (make pod-logs, make pod-down)"
 
 pod-down:
 	$(PODMAN_REQUIRED)

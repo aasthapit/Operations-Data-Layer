@@ -1,0 +1,60 @@
+# Findings trivy is told to pass over, each with a reason and, for CVEs, an
+# expiry trivy enforces itself: after expired_at the finding fails the scan
+# again and somebody has to look. Misconfiguration entries are scoped to the
+# files they are about. Nothing goes in here without an id, a reason and,
+# where it applies, a date. trivy reads this file for `trivy fs` and
+# `trivy image` alike (scripts/scan.sh and the workflows point at it).
+#
+# Findings NOT listed here, including everything below the HIGH gate, are
+# reported by `make scan` and tracked in docs/security-scanning.md.
+
+vulnerabilities:
+  # starlette, reached only as FastAPI's dependency: fastapi==0.115.6 pins
+  # starlette<0.42, so the pin cannot move on its own, and clearing the last
+  # four needs starlette 1.3.1, which needs a FastAPI major upgrade. Measured
+  # on this tree, fastapi==0.141.1 pulls starlette 1.6.0 and breaks router
+  # mounting (data-layer tests/test_main.py::test_every_plane_of_the_api_is_mounted).
+  # Exposure is bounded meanwhile: both APIs sit behind the dashboard's nginx,
+  # accept no multipart uploads, serve no StaticFiles on Windows, and run
+  # under a Route that sets the Host header itself. The same seven ids are in
+  # scripts/scan.sh's PIP_AUDIT_IGNORE with the same reason.
+  - id: CVE-2025-54121
+    statement: starlette via fastapi 0.115.6; needs the FastAPI major upgrade
+    expired_at: 2026-12-31
+  - id: CVE-2025-62727
+    statement: starlette via fastapi 0.115.6; needs the FastAPI major upgrade
+    expired_at: 2026-12-31
+  - id: CVE-2026-48710
+    statement: starlette via fastapi 0.115.6; needs the FastAPI major upgrade
+    expired_at: 2026-12-31
+  - id: CVE-2026-48818
+    statement: starlette via fastapi 0.115.6; needs the FastAPI major upgrade
+    expired_at: 2026-12-31
+  - id: CVE-2026-48817
+    statement: starlette via fastapi 0.115.6; needs the FastAPI major upgrade
+    expired_at: 2026-12-31
+  - id: CVE-2026-54283
+    statement: starlette via fastapi 0.115.6; needs the FastAPI major upgrade
+    expired_at: 2026-12-31
+  - id: CVE-2026-54282
+    statement: starlette via fastapi 0.115.6; needs the FastAPI major upgrade
+    expired_at: 2026-12-31
+
+misconfigurations:
+  # The ConfigMap carries the fleet config, whose `password:` key holds the
+  # reference ${OCP_PASSWORD}; the value itself is in the Secret next to it.
+  # The check matches on the key name and cannot see that.
+  - id: AVD-KSV-0109
+    paths:
+      - deploy/pod/odl-pod.yaml
+      - deploy/pod/odl-pod-with-redis.yaml
+    statement: the password key in the fleet config is an environment reference; the secret lives in the Secret
+  # The development profile collects Secrets (get/list, never watch or write)
+  # to read certificate expiry facts; values are scrubbed at collection and
+  # never stored (docs/ocp-api-manifest.md). The production profile disables
+  # the kind, and deploy/rbac/odl-collector-readonly.fleet.yaml, generated
+  # from it, asks for no Secrets access at all: bind that one on real clusters.
+  - id: AVD-KSV-0041
+    paths:
+      - deploy/rbac/odl-collector-readonly.yaml
+    statement: read-only Secrets access for certificate facts in the development profile only; the fleet role has none

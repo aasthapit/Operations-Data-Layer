@@ -26,7 +26,11 @@ def cache_key(name: str, **params) -> str:
     None or empty do not change the key."""
     # False is a real filter value (assigned=false), so only "absent" is dropped
     clean = {k: v for k, v in sorted(params.items()) if v is not None and v != "" and v != []}
-    digest = hashlib.sha1(json.dumps(clean, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    # A cache key, not a security control: SHA-1 only folds a parameter dict
+    # into a short stable string, which is what usedforsecurity=False states.
+    # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- cache key
+    digest = hashlib.sha1(json.dumps(clean, sort_keys=True, default=str).encode(),
+                          usedforsecurity=False).hexdigest()[:16]
     return f"{name}:{digest}" if clean else name
 
 
