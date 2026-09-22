@@ -395,8 +395,10 @@ def test_a_built_in_cannot_be_overwritten_or_deleted(client):
 
 def test_deleting_removes_it_once(client):
     client.put("/api/dashboards/my-view", json=definition())
-    assert client.delete("/api/dashboards/my-view").json() == {"deleted": "my-view"}
-    assert client.delete("/api/dashboards/my-view").status_code == 404
+    first = client.delete("/api/dashboards/my-view")
+    second = client.delete("/api/dashboards/my-view")
+    assert first.json() == {"deleted": "my-view"}
+    assert second.status_code == 404
     assert client.get("/api/dashboards/my-view").status_code == 404
 
 

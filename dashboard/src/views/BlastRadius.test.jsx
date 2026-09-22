@@ -76,7 +76,7 @@ describe("the form", () => {
   it("runs on an image substring alone", async () => {
     const user = userEvent.setup();
     open();
-    await user.type(await screen.findByPlaceholderText(/quay.io\/acme/), "checkout:1.9.2");
+    await user.type(await screen.findByPlaceholderText("quay.io/acme", { exact: false }), "checkout:1.9.2");
     await user.click(screen.getByRole("button", { name: "Compute blast radius" }));
     expect(currentUrl()).toContain("image=checkout%3A1.9.2");
     await waitFor(() => expect(api.blastRadius)

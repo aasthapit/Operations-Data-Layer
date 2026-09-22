@@ -359,6 +359,10 @@ run_bandit() {
     set +e
     "$bin" -r data-layer/app data-layer/scripts mcp-server/server.py patching-service/app \
         -c data-layer/bandit.yaml -f json -o "$json" > "$txt" 2>&1
+    # The same run again as SARIF, for code scanning; bandit is fast enough
+    # that one more pass costs less than teaching the gate to read SARIF.
+    "$bin" -r data-layer/app data-layer/scripts mcp-server/server.py patching-service/app \
+        -c data-layer/bandit.yaml -f sarif -o "$(out_path bandit.sarif)" >/dev/null 2>&1 || true
     set -e
     if [ ! -s "$json" ]; then
         echo "scan: bandit produced no report; see $txt" >&2

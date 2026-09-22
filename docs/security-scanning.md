@@ -176,6 +176,13 @@ Nothing is at the gate: `make ci` runs every scanner above and passes.
 Two things the tree scan caught on first run and that are fixed rather than ignored: the pod manifests published the dashboard on a host port (now `make pod-up` passes `--publish`), and none of the pod specs stated a pod-level security context (now `runAsNonRoot` and a `RuntimeDefault` seccomp profile at the pod level, inherited by every container).
 The collector's read access to Secrets in the development profile (`KSV-0041`) is suppressed for that one file with its reason; the production profile collects no Secrets and `deploy/rbac/odl-collector-readonly.fleet.yaml`, generated from it, asks for none.
 
+## CodeQL
+
+CodeQL runs beside the scanners above (`.github/workflows/codeql.yml`, Python and JavaScript, the `security-and-quality` suite) and reports into the same Security tab; it does not fail the build.
+Its first pass found what the pattern tools cannot: an import cycle only working by import order (`app/llm/anthropic.py`, fixed), side effects inside `assert` (fixed), and a config checker that could have echoed a credential inside an exception message (`scripts/check_fleet_config.py` now redacts every password and token the fleet config resolved).
+Alerts that are by design are dismissed in the Security tab with a written reason rather than silenced in code: `verify=False` behind the explicit `insecure_skip_tls_verify` opt-in, and label-prefix checks CodeQL reads as URL sanitisation.
+The dismissal comments are the record; review them when a rule fires again.
+
 ## Known gaps
 
 Three things this scan reports honestly rather than hides, each needing a decision that is bigger than a scanner setting.

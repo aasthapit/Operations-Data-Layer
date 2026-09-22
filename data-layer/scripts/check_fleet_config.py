@@ -27,9 +27,31 @@ from app.settings import settings  # noqa: E402
 SAMPLE = int(os.environ.get("CHECK_SAMPLE", "3"))
 
 
+# Every password and token the fleet config resolves, so nothing printed here
+# can echo one back: an exception from a login attempt may quote the request
+# that failed, and this script's whole output is meant to be pasted into a
+# ticket.
+_SECRETS: set[str] = set()
+
+
+def _remember_secrets(cfg) -> None:
+    for entry in list(getattr(cfg, "hubs", []) or []) + list(getattr(cfg, "clusters", []) or []):
+        auth = getattr(entry, "auth", None) or {}
+        for key in ("password", "token"):
+            value = auth.get(key) if isinstance(auth, dict) else None
+            if value:
+                _SECRETS.add(str(value))
+
+
+def _redact(text: str) -> str:
+    for secret in _SECRETS:
+        text = text.replace(secret, "***")
+    return text
+
+
 def _short(e: Exception) -> str:
     text = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
-    return text[:160]
+    return _redact(text)[:160]
 
 
 def _timed(fn):
@@ -105,6 +127,7 @@ def main() -> int:
         return 2
     try:
         cfg = load_config(path)
+        _remember_secrets(cfg)
     except Exception as e:  # noqa: BLE001
         print(f"  does not load: {_short(e)}")
         return 2
