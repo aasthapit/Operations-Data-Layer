@@ -24,8 +24,8 @@ def reason(sql, max_limit=100) -> str:
 @pytest.mark.parametrize("sql", [
     "SELECT name FROM clusters",
     "SELECT c.name, n.name FROM clusters AS c JOIN nodes AS n ON n.cluster_name = c.name",
-    "WITH bad AS (SELECT name FROM clusters WHERE overall_status = 'critical') "
-    "SELECT count(*) FROM bad",
+    ("WITH bad AS (SELECT name FROM clusters WHERE overall_status = 'critical') "
+     "SELECT count(*) FROM bad"),
     "SELECT * FROM clusters UNION ALL SELECT * FROM clusters",
     "SELECT * FROM main.clusters",
     "SELECT region, count(*) FROM clusters GROUP BY region HAVING count(*) > 1",

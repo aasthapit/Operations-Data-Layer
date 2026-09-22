@@ -43,6 +43,7 @@ from datetime import UTC, datetime
 from .. import kube
 from ..clusterauth import resolve_bearer_token
 from ..config_loader import load_config
+from ..logsafe import logsafe
 from ..manifest import get_manifest
 from ..query import invalidate as invalidate_query_snapshot
 from ..settings import settings
@@ -438,7 +439,7 @@ def _load_previous(store: Store, name: str, manifest, full: bool) -> Previous | 
         summary = store.get_cluster(name)
         sections = store.sections(name, PREVIOUS_SECTIONS)
     except Exception:  # noqa: BLE001 - a store hiccup means "collect everything"
-        log.exception("reading the previous state of %s failed", name)
+        log.exception("reading the previous state of %s failed", logsafe(name))
         return None
     if summary is None:
         return None
@@ -683,7 +684,7 @@ def refresh_cluster(name: str, full: bool = False) -> dict:
         store.unlock(name)
     invalidate_query_snapshot()
     duration_ms = int((time.time() - started) * 1000)
-    log.info("refresh %s in %dms", name, duration_ms)
+    log.info("refresh %s in %dms", logsafe(name), duration_ms)
     return {"ok": True, "cluster": name, "collect_ms": duration_ms}
 
 

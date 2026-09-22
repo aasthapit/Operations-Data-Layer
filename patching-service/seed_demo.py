@@ -70,8 +70,7 @@ def main():
                   ["ocp-east-3", "ocp-west-3", "ocp-east-2"], "4.16.7",
                   skips=["ocp-east-2"])
 
-    print("== Job 1 ==", json.dumps(call("GET", f"/api/jobs/{j1}")["totals"]
-                                    if False else call("GET", f"/api/jobs/{j1}")["status"]))
+    print("== Job 1 ==", json.dumps(call("GET", f"/api/jobs/{j1}")["status"]))
     d1 = call("GET", f"/api/jobs/{j1}")
     print(f"  {d1['id']} status={d1['status']} success={d1['totals']['success_pct']}% "
           f"approved_by={d1['approved_by']} audit_events={len(d1['audit'])}")

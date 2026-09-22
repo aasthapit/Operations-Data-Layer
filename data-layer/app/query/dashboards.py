@@ -42,6 +42,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from ..logsafe import logsafe
 from ..store import Store
 from .config import query_config
 from .params import NAME_PATTERN, ParamError, placeholders, substitute
@@ -334,7 +335,7 @@ def get_dashboard(store: Store, dashboard_id: str) -> Dashboard | None:
     try:
         return parse_dashboard(document, dashboard_id=dashboard_id, builtin=False)
     except DashboardInvalid:
-        log.warning("stored dashboard %r no longer validates", dashboard_id)
+        log.warning("stored dashboard %r no longer validates", logsafe(dashboard_id))
         raise
 
 

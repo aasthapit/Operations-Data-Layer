@@ -139,7 +139,7 @@ tool_path() {
 install_hint() {
     case "$1" in
         semgrep)   echo "brew install semgrep   (or: pip install semgrep)" ;;
-        bandit)    echo "pip install bandit     (make scan-tools puts it in data-layer/.venv)" ;;
+        bandit)    echo "pip install "bandit[sarif]"     (make scan-tools puts it in data-layer/.venv)" ;;
         pip-audit) echo "pip install pip-audit  (make scan-tools puts it in data-layer/.venv)" ;;
         npm)       echo "install Node 22+ (https://nodejs.org); npm ships with it" ;;
         trivy)     echo "brew install trivy     (or: https://trivy.dev/latest/getting-started/installation/)" ;;

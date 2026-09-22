@@ -7,6 +7,7 @@ the two seams the tests replace; the rest of `run_collection` (health checks,
 persistence, pruning, run bookkeeping) runs for real against fakeredis.
 """
 import copy
+import pathlib
 from datetime import datetime, timedelta
 
 import fakeredis
@@ -547,7 +548,7 @@ def test_shared_access_verifies_against_the_cluster_ca_recorded_by_acm(store, mo
     bundle_path = verify_by_url[cluster_url]
     assert bundle_path == ca_by_url[cluster_url] and bundle_path.endswith(".pem")
     assert verify_by_url["https://api.acm:6443"] == str(corp)      # the hub itself: its own ca_cert
-    content = open(bundle_path).read()
+    content = pathlib.Path(bundle_path).read_text()
     assert "CLUSTER" in content and "CORP" in content        # the cluster's CA plus the corporate one
     assert runner.cluster_ca_bundle(hub, {"name": "x"}) == str(corp)   # no ACM bundle: hub ca_cert
     assert runner.cluster_ca_bundle(HubConfig(name="h", api_url="https://h"), {"name": "x"}) is None

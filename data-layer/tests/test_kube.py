@@ -13,6 +13,7 @@ here rather than in a sweep.
 import base64
 import io
 import json
+import pathlib
 import threading
 
 import orjson
@@ -285,7 +286,7 @@ def test_a_kubeconfig_that_only_exists_in_memory_is_written_out_for_the_loader(m
 
     def load(config_file):
         written["path"] = config_file
-        written["content"] = open(config_file).read()
+        written["content"] = pathlib.Path(config_file).read_text()
         return "api-client"
 
     monkeypatch.setattr(kube.config, "new_client_from_config", load)

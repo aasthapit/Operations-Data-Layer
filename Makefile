@@ -228,7 +228,7 @@ scan-tools:
 	@if command -v brew >/dev/null 2>&1; then brew install semgrep trivy gitleaks hadolint shellcheck; \
 	else echo "install trivy, gitleaks and hadolint from their GitHub releases (see .github/workflows/security.yml for the pinned versions)"; fi
 	@test -d data-layer/.venv || $(call venv,data-layer/.venv)
-	$(call pipi,data-layer/.venv) bandit pip-audit semgrep
+	$(call pipi,data-layer/.venv) "bandit[sarif]" pip-audit semgrep
 	@SCAN_TOOLS_CHECK=1 scripts/scan.sh || true
 
 ci: lint-all test-all scan

@@ -33,6 +33,7 @@ from datetime import date, datetime
 
 import duckdb
 
+from ..logsafe import logsafe
 from ..store import Store
 from .config import query_config
 from .errors import QueryExecutionError, QueryRejected, QueryTimeout
@@ -324,7 +325,7 @@ def ask(question: str, limit: int | None = None, store: Store | None = None) -> 
             raise               # a rerun would only time out again, slower
         except (QueryRejected, QueryExecutionError) as e:
             error = e.reason if isinstance(e, QueryRejected) else str(e)
-            log.info("attempt %d for %r failed: %s", attempt, question[:80], error)
+            log.info("attempt %d for %r failed: %s", attempt, logsafe(question, 80), error)
             attempts.append(Attempt(sql=plan.sql, error=error))
             feedback = _feedback(plan, error)
             continue
