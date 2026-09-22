@@ -19,6 +19,71 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { hasValue } from "../dashboards/model";
 import { applyPatch, newId, runAgent } from "./client";
+import type { AgentEvent, AgentMessage, AgentState } from "./client";
+
+// --------------------------------------------------------------------------- //
+// the render model
+// --------------------------------------------------------------------------- //
+
+/** How far a tool call has got: arguments still arriving, running, finished. */
+export type ActivityStatus = "streaming" | "running" | "done" | "error";
+
+/** What the user said. */
+export interface UserItem {
+  kind: "user";
+  id: string;
+  text: string;
+}
+
+/** What the agent wrote, as it writes it. */
+export interface TextItem {
+  kind: "text";
+  id: string;
+  text: string;
+}
+
+/** Something the page has to say for itself (a failed run, "Stopped."). */
+export interface NoteItem {
+  kind: "note";
+  id: string;
+  tone: string;
+  text: string;
+}
+
+/** One tool call, with both the raw fragment and whatever could be made of it -
+ * so the view never has to know how far the arguments have got. */
+export interface ActivityItem {
+  kind: "activity";
+  id: string;
+  toolCallId: string;
+  name: string;
+  argsText: string;
+  args: Record<string, unknown> | null;
+  status: ActivityStatus;
+  result: unknown;
+  title?: string;
+  label?: string;
+}
+
+export type TranscriptItem = UserItem | TextItem | NoteItem | ActivityItem;
+
+/** One conversation, and everything that is persisted with it. */
+export interface Session {
+  threadId: string;
+  fixture: boolean;
+  messages: AgentMessage[];
+  state: AgentState;
+  transcript: TranscriptItem[];
+}
+
+/** What a finished run cost (the RUN_FINISHED payload). */
+export type RunResult = Record<string, unknown> | null;
+
+/** A RUN_ERROR carries a code (`unavailable`, `limit`, `timeout`, ...) so the
+ * view can say something better than the message alone. */
+export interface AgentRunError extends Error {
+  code?: string;
+}
 
 const PREFIX = "odl.generate.";
 const LAST = `${PREFIX}last`;
@@ -34,13 +99,13 @@ const LAST = `${PREFIX}last`;
 const PARTIAL_TITLE = /"title"\s*:\s*"((?:[^"\\]|\\.)*)/;
 const PARTIAL_NAME = /"name"\s*:\s*"((?:[^"\\]|\\.)*)/;
 
-function peek(text, re) {
+function peek(text: string | undefined, re: RegExp): string {
   const m = re.exec(text || "");
   if (!m) return "";
   try { return JSON.parse(`"${m[1]}"`); } catch { return m[1]; }
 }
 
-function labelFor(name, title, varName) {
+function labelFor(name: string, title: string, varName: string): string {
   switch (name) {
     case "add_panel": return title ? `Adding panel "${title}"` : "Adding panel";
     case "update_panel": return title ? `Updating panel "${title}"` : "Updating panel";
@@ -54,21 +119,21 @@ function labelFor(name, title, varName) {
 
 // An activity item carries both the raw fragment and whatever could be made of
 // it, so the view never has to know how far the arguments have got.
-function describe(item) {
-  const title = item.args?.title || peek(item.argsText, PARTIAL_TITLE);
-  const varName = item.args?.name || peek(item.argsText, PARTIAL_NAME);
+function describe(item: ActivityItem): ActivityItem {
+  const title = String(item.args?.title || peek(item.argsText, PARTIAL_TITLE));
+  const varName = String(item.args?.name || peek(item.argsText, PARTIAL_NAME));
   return { ...item, title, label: labelFor(item.name, title, varName) };
 }
 
 // --------------------------------------------------------------------------- //
 // the transcript
 // --------------------------------------------------------------------------- //
-const emptyState = () => ({
+const emptyState = (): AgentState => ({
   dashboard: { id: "generated", title: "", description: "", variables: [], panels: [] },
   params: {},
 });
 
-const fresh = (fixture) => ({
+const fresh = (fixture: boolean): Session => ({
   threadId: newId("thread"),
   fixture: !!fixture,
   messages: [],
@@ -76,13 +141,15 @@ const fresh = (fixture) => ({
   transcript: [],
 });
 
-const withItem = (session, item) => ({ ...session, transcript: [...session.transcript, item] });
+const withItem = (session: Session, item: TranscriptItem): Session =>
+  ({ ...session, transcript: [...session.transcript, item] });
 
-const note = (session, text, tone = "error") =>
+const note = (session: Session, text: string, tone = "error"): Session =>
   withItem(session, { kind: "note", id: newId("note"), tone, text });
 
 // Replace one transcript entry, found by its id, with fn(entry).
-function amend(session, id, fn) {
+function amend(session: Session, id: string,
+  fn: (item: TranscriptItem) => TranscriptItem): Session {
   let touched = false;
   const transcript = session.transcript.map((item) => {
     if (item.id !== id) return item;
@@ -94,7 +161,10 @@ function amend(session, id, fn) {
 
 // Every event, in one place. It only ever returns a new session - what a run
 // costs and whether it failed are the caller's business, not the transcript's.
-function reduce(session, event) {
+// why: an AgentEvent's fields depend on its type (docs/nl-query.md), and this
+// switch is the one place that knows which. Reading them off an open record is
+// what makes a field the server did not send `undefined` rather than a crash.
+function reduce(session: Session, event: any): Session {
   switch (event.type) {
     case "STATE_SNAPSHOT":
       return { ...session, state: event.snapshot || emptyState() };
@@ -105,14 +175,15 @@ function reduce(session, event) {
       } catch (e) {
         // A patch that does not fit the state is the server's bug, but the
         // conversation is still worth keeping: say so and carry on.
-        return note(session, `A change could not be applied: ${e.message}`);
+        return note(session, `A change could not be applied: ${(e as Error).message}`);
       }
 
     case "TEXT_MESSAGE_START":
       return withItem(session, { kind: "text", id: event.messageId, text: "" });
 
     case "TEXT_MESSAGE_CONTENT":
-      return amend(session, event.messageId, (item) => ({ ...item, text: item.text + (event.delta || "") }));
+      return amend(session, event.messageId, (item) =>
+        ({ ...(item as TextItem), text: (item as TextItem).text + (event.delta || "") }));
 
     case "TOOL_CALL_START":
       return withItem(session, describe({
@@ -127,25 +198,28 @@ function reduce(session, event) {
       }));
 
     case "TOOL_CALL_ARGS":
-      return amend(session, event.toolCallId,
-        (item) => describe({ ...item, argsText: item.argsText + (event.delta || "") }));
+      return amend(session, event.toolCallId, (item) => {
+        const call = item as ActivityItem;
+        return describe({ ...call, argsText: call.argsText + (event.delta || "") });
+      });
 
     case "TOOL_CALL_END":
       return amend(session, event.toolCallId, (item) => {
+        const call = item as ActivityItem;
         // Partial JSON is only JSON once it is whole, and a model that stopped
         // mid-argument is a thing that happens: the call still shows, with
         // whatever the fragment said its title was.
-        let args = null;
-        try { args = JSON.parse(item.argsText); } catch { /* keep the fragment */ }
-        return describe({ ...item, args, status: "running" });
+        let args: ActivityItem["args"] = null;
+        try { args = JSON.parse(call.argsText); } catch { /* keep the fragment */ }
+        return describe({ ...call, args, status: "running" });
       });
 
     case "TOOL_CALL_RESULT": {
-      let content = null;
+      let content: any = null;
       try { content = JSON.parse(event.content); } catch { content = { text: String(event.content ?? "") }; }
       const failed = !!(content && typeof content === "object" && content.error);
-      return amend(session, event.toolCallId,
-        (item) => describe({ ...item, status: failed ? "error" : "done", result: content }));
+      return amend(session, event.toolCallId, (item) =>
+        describe({ ...(item as ActivityItem), status: failed ? "error" : "done", result: content }));
     }
 
     case "MESSAGES_SNAPSHOT":
@@ -163,8 +237,8 @@ function reduce(session, event) {
 
 // A run that ended with tool calls still open (stopped, or a stream that broke)
 // must not leave a spinner turning for ever.
-function finalize(session, reason) {
-  const transcript = session.transcript.map((item) => {
+function finalize(session: Session, reason: string): Session {
+  const transcript: TranscriptItem[] = session.transcript.map((item) => {
     if (item.kind !== "activity" || (item.status !== "streaming" && item.status !== "running")) return item;
     return { ...item, status: "error", result: { error: "The run stopped before this finished." } };
   });
@@ -178,7 +252,7 @@ function finalize(session, reason) {
 // sessionStorage, not localStorage: a conversation belongs to the tab it is
 // happening in, and it should not outlive the window. Every access is guarded -
 // a browser with storage turned off loses the history, not the page.
-function restore(fixture) {
+function restore(fixture: boolean): Session | null {
   try {
     const id = sessionStorage.getItem(LAST);
     if (!id) return null;
@@ -195,7 +269,7 @@ function restore(fixture) {
   }
 }
 
-function persist(session) {
+function persist(session: Session): void {
   try {
     sessionStorage.setItem(PREFIX + session.threadId, JSON.stringify(session));
     sessionStorage.setItem(LAST, session.threadId);
@@ -210,7 +284,7 @@ function persist(session) {
   } catch { /* full, private mode, or storage disabled: the page still works */ }
 }
 
-function forget(threadId) {
+function forget(threadId: string): void {
   try {
     sessionStorage.removeItem(PREFIX + threadId);
     sessionStorage.removeItem(LAST);
@@ -220,28 +294,28 @@ function forget(threadId) {
 // --------------------------------------------------------------------------- //
 // the hook
 // --------------------------------------------------------------------------- //
-export default function useAgentRun({ fixture = false } = {}) {
-  const [session, setSession] = useState(() => restore(fixture) || fresh(fixture));
+export default function useAgentRun({ fixture = false }: { fixture?: boolean } = {}) {
+  const [session, setSession] = useState<Session>(() => restore(fixture) || fresh(fixture));
   const [running, setRunning] = useState(false);
-  const [error, setError] = useState(null);
-  const [result, setResult] = useState(null);
+  const [error, setError] = useState<AgentRunError | null>(null);
+  const [result, setResult] = useState<RunResult>(null);
 
   // Events arrive faster than React re-renders, and a run reads the session it
   // is about to send: both need the live value, not the rendered one.
   const ref = useRef(session);
   ref.current = session;
-  const abort = useRef(null);
+  const abort = useRef<AbortController | null>(null);
   const busy = useRef(false);
 
   useEffect(() => { persist(session); }, [session]);
   useEffect(() => () => abort.current?.abort(), []);
 
-  const update = useCallback((fn) => {
+  const update = useCallback((fn: (session: Session) => Session) => {
     ref.current = fn(ref.current);
     setSession(ref.current);
   }, []);
 
-  const start = useCallback((from) => {
+  const start = useCallback((from: Session) => {
     const controller = new AbortController();
     abort.current = controller;
     busy.current = true;
@@ -249,7 +323,7 @@ export default function useAgentRun({ fixture = false } = {}) {
     setError(null);
     setResult(null);
 
-    const done = (reason) => {
+    const done = (reason: string) => {
       if (abort.current !== controller) return;   // a newer run already owns the view
       abort.current = null;
       busy.current = false;
@@ -264,13 +338,13 @@ export default function useAgentRun({ fixture = false } = {}) {
       state: from.state,
       signal: controller.signal,
       fixture,
-      onEvent: (event) => {
+      onEvent: (event: AgentEvent) => {
         if (event.type === "RUN_ERROR") {
-          const e = new Error(event.message || "The run failed.");
-          e.code = event.code;
+          const e: AgentRunError = new Error(String(event.message || "The run failed."));
+          e.code = event.code as string | undefined;
           setError(e);
         }
-        if (event.type === "RUN_FINISHED") setResult(event.result || null);
+        if (event.type === "RUN_FINISHED") setResult((event.result as RunResult) || null);
         update((s) => reduce(s, event));
       },
     }).then(
@@ -278,7 +352,7 @@ export default function useAgentRun({ fixture = false } = {}) {
       // with an AbortError, the fixture simply stops yielding. The controller
       // is the thing that knows which happened.
       () => done(controller.signal.aborted ? "stopped" : ""),
-      (e) => {
+      (e: AgentRunError) => {
         if (controller.signal.aborted || e?.name === "AbortError") { done("stopped"); return; }
         setError(e);
         update((s) => note(s, String(e?.message || e)));
@@ -287,11 +361,11 @@ export default function useAgentRun({ fixture = false } = {}) {
     );
   }, [fixture, update]);
 
-  const send = useCallback((raw) => {
+  const send = useCallback((raw: unknown) => {
     const text = String(raw || "").trim();
     if (!text || busy.current) return;
-    const message = { id: newId("msg"), role: "user", content: text };
-    const next = {
+    const message: AgentMessage = { id: newId("msg"), role: "user", content: text };
+    const next: Session = {
       ...ref.current,
       messages: [...ref.current.messages, message],
       transcript: [...ref.current.transcript, { kind: "user", id: message.id, text }],
@@ -315,14 +389,14 @@ export default function useAgentRun({ fixture = false } = {}) {
   // The two ways the person, rather than the agent, changes the state: picking a
   // variable's value and retitling the dashboard. Both go into the state that is
   // sent back on the next turn, so the agent sees what the user did.
-  const setParam = useCallback((name, value) => update((s) => {
+  const setParam = useCallback((name: string, value: unknown) => update((s) => {
     const params = { ...s.state.params };
     if (hasValue(value)) params[name] = value;
     else delete params[name];
     return { ...s, state: { ...s.state, params } };
   }), [update]);
 
-  const patchDashboard = useCallback((fields) => update((s) => ({
+  const patchDashboard = useCallback((fields: Record<string, unknown>) => update((s) => ({
     ...s,
     state: { ...s.state, dashboard: { ...s.state.dashboard, ...fields } },
   })), [update]);

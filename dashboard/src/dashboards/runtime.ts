@@ -15,20 +15,56 @@
 // A missing endpoint is remembered for half a minute rather than forever, so a
 // data layer that gains the endpoints mid-session is picked up without a reload.
 import { api } from "../api";
+import type { ApiError, BatchQuery, Loadable } from "../api";
+import type { BatchEntry, DashboardListEntry, QueryValue, SnapshotInfo } from "../api/types";
 import {
   effectiveParams, hasValue, normalizeDefinition, substituteSql, variablesIn,
 } from "./model";
+import type { Definition, Params } from "./model";
 import { fixtureDefinition, fixtureList } from "./fixture";
 
+/** One select variable's options, or why there are none. The values keep the
+ * type the column had: the API hands back whatever the options query selected,
+ * and only the client-side fallback stringifies. */
+export interface VariableOptions {
+  options: Array<{ value: QueryValue; label: QueryValue }>;
+  error?: string;
+}
+
+/** What `runQueries` answers with: a result (or a refusal) per query id. */
+export interface QueryRun {
+  results: Record<string, BatchEntry>;
+  generation: number | null;
+  snapshot: SnapshotInfo | null;
+}
+
+/** A dashboard run, whichever path produced it - the view cannot tell which,
+ * which is the point. `local` marks the one the browser ran itself. */
+export interface DashboardRun {
+  dashboard: Definition;
+  params: Params;
+  variables: Record<string, VariableOptions>;
+  results: Record<string, BatchEntry>;
+  generation: number | null;
+  snapshot: SnapshotInfo | null;
+  local?: boolean;
+}
+
+/** Whether to read the built-in fixture dashboards instead of the API. */
+export interface DescriptorOptions {
+  fixture?: boolean;
+}
+
 const RETRY_MS = 30000;
-const missingUntil = new Map();
+const missingUntil = new Map<string, number>();
 
-const isMissing = (e) => !!e && (e.status === 404 || e.status === 405 || e.status === 501);
-const isDown = (key) => (missingUntil.get(key) || 0) > Date.now();
-const markDown = (key) => missingUntil.set(key, Date.now() + RETRY_MS);
-const markUp = (key) => missingUntil.delete(key);
+const isMissing = (e: ApiError | null | undefined) =>
+  !!e && (e.status === 404 || e.status === 405 || e.status === 501);
+const isDown = (key: string) => (missingUntil.get(key) || 0) > Date.now();
+const markDown = (key: string) => missingUntil.set(key, Date.now() + RETRY_MS);
+const markUp = (key: string) => missingUntil.delete(key);
 
-export const batchAvailable = () => !isDown("batch");
+export const batchAvailable = (): boolean => !isDown("batch");
 
 // --------------------------------------------------------------------------- //
 // queries
@@ -37,7 +73,8 @@ export const batchAvailable = () => !isDown("batch");
 //
 // One failing query is that panel's error, not the page's: the others still
 // render. A cancelled request is the exception - it means the view went away.
-export async function runQueries(queries, params, signal) {
+export async function runQueries(queries: BatchQuery[], params: Params,
+  signal?: AbortSignal): Promise<QueryRun> {
   if (!queries.length) return { results: {}, generation: null, snapshot: null };
 
   if (!isDown("batch")) {
@@ -50,13 +87,14 @@ export async function runQueries(queries, params, signal) {
         snapshot: res?.snapshot || null,
       };
     } catch (e) {
-      if (e?.name === "AbortError" || !isMissing(e)) throw e;
+      const error = e as ApiError;
+      if (error?.name === "AbortError" || !isMissing(error)) throw e;
       markDown("batch");
     }
   }
 
-  const results = {};
-  let generation = null;
+  const results: Record<string, BatchEntry> = {};
+  let generation: number | null = null;
   for (const q of queries) {
     const sql = substituteSql(q.sql, params);
     try {
@@ -65,8 +103,9 @@ export async function runQueries(queries, params, signal) {
       results[q.id] = r;
       if (r && r.generation != null) generation = r.generation;
     } catch (e) {
-      if (e?.name === "AbortError") throw e;
-      results[q.id] = { error: String(e?.message || e), sql };
+      const error = e as ApiError;
+      if (error?.name === "AbortError") throw e;
+      results[q.id] = { error: String(error?.message || e), sql };
     }
   }
   return { results, generation, snapshot: null };
@@ -77,7 +116,7 @@ export async function runQueries(queries, params, signal) {
 // there. The answer is {options} or {options: [], error} rather than a throw:
 // a variable whose options failed still draws its selector, empty, next to the
 // reason it is empty.
-function optionsFrom(result) {
+function optionsFrom(result: BatchEntry | undefined | null): VariableOptions {
   if (!result) return { options: [] };
   if (result.error) return { options: [], error: String(result.error) };
   const columns = result.columns || [];
@@ -86,8 +125,8 @@ function optionsFrom(result) {
     return { options: [], error: "the options query must return a column named 'value'" };
   }
   const labelAt = columns.indexOf("label") >= 0 ? columns.indexOf("label") : valueAt;
-  const seen = new Set();
-  const options = [];
+  const seen = new Set<string>();
+  const options: VariableOptions["options"] = [];
   for (const row of result.rows || []) {
     const value = row[valueAt];
     if (value == null || value === "") continue;
@@ -104,7 +143,10 @@ function optionsFrom(result) {
 // running a definition here
 // --------------------------------------------------------------------------- //
 // Same response shape as POST /run, so the view does not know which path it got.
-export async function runLocally(definition, given, signal) {
+// why: `definition` is a stored document, a fixture or an unsaved draft, and
+// normalizeDefinition is exactly what turns it into a Definition.
+export async function runLocally(definition: any, given: Params,
+  signal?: AbortSignal): Promise<DashboardRun> {
   const def = normalizeDefinition(definition);
   const params = effectiveParams(def, given);
 
@@ -113,7 +155,7 @@ export async function runLocally(definition, given, signal) {
     .map((v) => ({ id: `var:${v.name}`, sql: v.sql, limit: 500 }));
   const varRun = await runQueries(varQueries, params, signal);
 
-  const variables = {};
+  const variables: Record<string, VariableOptions> = {};
   for (const v of def.variables) {
     variables[v.name] = v.sql ? optionsFrom(varRun.results[`var:${v.name}`]) : { options: [] };
   }
@@ -121,8 +163,8 @@ export async function runLocally(definition, given, signal) {
   // A panel naming a variable with no value cannot be substituted - in its SQL
   // or in its title, which is also filled in server-side. The server words that
   // the same way, and the view turns it into "Choose a hub above".
-  const results = {};
-  const runnable = [];
+  const results: Record<string, BatchEntry> = {};
+  const runnable: BatchQuery[] = [];
   for (const panel of def.panels) {
     const used = [...variablesIn(panel.sql), ...variablesIn(panel.title)];
     const unset = used.find((name) => !hasValue(params[name]));
@@ -143,14 +185,15 @@ export async function runLocally(definition, given, signal) {
   };
 }
 
-async function runViaApi(id, params, signal) {
+async function runViaApi(id: string, params: Params, signal?: AbortSignal): Promise<DashboardRun> {
   if (!isDown(`run:${id}`)) {
     try {
       const res = await api.runDashboard(id, params).load(signal);
       markUp(`run:${id}`);
       return { ...res, dashboard: normalizeDefinition(res?.dashboard, id) };
     } catch (e) {
-      if (e?.name === "AbortError" || !isMissing(e)) throw e;
+      const error = e as ApiError;
+      if (error?.name === "AbortError" || !isMissing(error)) throw e;
       markDown(`run:${id}`);
     }
   }
@@ -161,24 +204,27 @@ async function runViaApi(id, params, signal) {
 // --------------------------------------------------------------------------- //
 // descriptors (what the SWR cache is keyed on)
 // --------------------------------------------------------------------------- //
-const key = (params) => {
+const key = (params: Params | null | undefined): string => {
   try {
-    return Object.keys(params || {}).sort()
-      .map((k) => `${k}=${Array.isArray(params[k]) ? params[k].join("|") : params[k]}`)
+    const values = params || {};
+    return Object.keys(values).sort()
+      .map((k) => `${k}=${Array.isArray(values[k]) ? (values[k] as unknown[]).join("|") : values[k]}`)
       .join("&");
   } catch {
     return "";
   }
 };
 
-export function listDescriptor({ fixture } = {}) {
+export function listDescriptor({ fixture }: DescriptorOptions = {}):
+Loadable<{ dashboards: DashboardListEntry[] }> {
   if (fixture) {
     return { url: "fixture:/api/dashboards", load: async () => ({ dashboards: fixtureList() }) };
   }
   return api.dashboards();
 }
 
-export function definitionDescriptor(id, { fixture } = {}) {
+export function definitionDescriptor(id: string, { fixture }: DescriptorOptions = {}):
+Loadable<unknown> {
   if (fixture) {
     return {
       url: `fixture:/api/dashboards/${id}`,
@@ -192,7 +238,8 @@ export function definitionDescriptor(id, { fixture } = {}) {
   return api.dashboard(id);
 }
 
-export function runDescriptor(id, params, { fixture } = {}) {
+export function runDescriptor(id: string, params: Params,
+  { fixture }: DescriptorOptions = {}): Loadable<DashboardRun> {
   const suffix = `?params=${key(params)}`;
   if (fixture) {
     return {
@@ -212,7 +259,7 @@ export function runDescriptor(id, params, { fixture } = {}) {
 
 // A draft being edited is not saved anywhere, so it runs here. The cache key
 // spells out only what changes the rows - retitling a panel does not re-query.
-export function draftRunDescriptor(draft, params) {
+export function draftRunDescriptor(draft: Definition, params: Params): Loadable<DashboardRun> {
   const shape = JSON.stringify({
     p: (draft.panels || []).map((p) => [p.id, p.sql, p.limit]),
     v: (draft.variables || []).map((v) => [v.name, v.sql, v.default, v.multi]),

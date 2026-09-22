@@ -53,6 +53,9 @@ class BatchRequest(BaseModel):
     queries: list[BatchQueryRequest] = Field(min_length=1, max_length=MAX_BATCH_QUERIES)
     params: dict[str, Any] = Field(
         default_factory=dict,
+        # Pydantic renders dict[str, Any] as a bare object; without this the
+        # generated client type accepts no keys at all (Record<string, never>).
+        json_schema_extra={"additionalProperties": True},
         description="Values for the {{placeholders}}, substituted as SQL literals.")
 
 

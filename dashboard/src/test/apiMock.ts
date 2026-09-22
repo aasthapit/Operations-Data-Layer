@@ -1,4 +1,4 @@
-// A stand-in for src/api.js that answers out of a table the test fills in.
+// A stand-in for src/api.ts that answers out of a table the test fills in.
 //
 // The views do not know the network exists: they ask `api` for a descriptor and
 // hand it to useFetch, which keys the SWR cache on the descriptor's url. So the
@@ -13,7 +13,14 @@
 // to stub that" into a message rather than into a silent empty page.
 import { vi } from "vitest";
 
-// Everything api.js hands back as a request descriptor.
+/** What a test puts in the table: the answer itself, or a function called with
+ * the arguments the view passed (so it can vary by filter, or throw). */
+export type Answer = unknown | ((...args: any[]) => unknown);
+
+/** The mock: every endpoint of `api`, plus the table behind them. */
+export type ApiMock = Record<string, any> & { __answers: Map<string, Answer> };
+
+// Everything api.ts hands back as a request descriptor.
 const READS = [
   "overview", "summary", "clusters", "cluster", "clusterNodes", "clusterNamespaces",
   "clusterWorkloads", "clusterPodIssues", "clusterResources", "timeline", "versions",
@@ -32,7 +39,7 @@ const CALLS = ["refresh", "runSql", "askQuery", "queryBatch", "saveDashboard", "
 // /api/<name> - because two views borrow from the cache by prefix
 // (cache.search("/api/clusters", ...)), and a key that did not match would
 // quietly turn that borrowing off.
-const key = (name, args) => {
+const key = (name: string, args: unknown[]): string => {
   try {
     return `/api/${name}?${JSON.stringify(args)}`;
   } catch {
@@ -40,10 +47,10 @@ const key = (name, args) => {
   }
 };
 
-export function createApiMock() {
-  const answers = new Map();
+export function createApiMock(): ApiMock {
+  const answers = new Map<string, Answer>();
 
-  const settle = (name, args) => {
+  const settle = (name: string, args: unknown[]): Promise<unknown> => {
     if (!answers.has(name)) {
       return Promise.reject(new Error(
         `api.${name}() was called but this test gave it no answer - add it to answer(api, {...})`));
@@ -52,24 +59,24 @@ export function createApiMock() {
     return Promise.resolve().then(() => (typeof value === "function" ? value(...args) : value));
   };
 
-  const api = { __answers: answers };
+  const api: ApiMock = { __answers: answers };
 
   for (const name of READS) {
-    api[name] = vi.fn((...args) => {
-      let pending = null;
+    api[name] = vi.fn((...args: unknown[]) => {
+      let pending: Promise<unknown> | null = null;
       const run = () => (pending || (pending = settle(name, args)));
       return {
         url: key(name, args),
         load: () => settle(name, args),
-        then: (ok, fail) => run().then(ok, fail),
-        catch: (fail) => run().catch(fail),
-        finally: (done) => run().finally(done),
+        then: (ok: any, fail: any) => run().then(ok, fail),
+        catch: (fail: any) => run().catch(fail),
+        finally: (done: any) => run().finally(done),
       };
     });
   }
 
   for (const name of CALLS) {
-    api[name] = vi.fn((...args) => settle(name, args));
+    api[name] = vi.fn((...args: unknown[]) => settle(name, args));
   }
 
   return api;
@@ -77,7 +84,7 @@ export function createApiMock() {
 
 // Put answers on the mock. Call it again to change one; pass undefined to take
 // an endpoint away again (which is how a test says "this build has no /agent").
-export function answer(api, table) {
+export function answer(api: ApiMock, table: Record<string, Answer>): ApiMock {
   for (const [name, value] of Object.entries(table)) {
     if (value === undefined) api.__answers.delete(name);
     else api.__answers.set(name, value);
@@ -89,5 +96,5 @@ export function answer(api, table) {
 export const notFound = (message = "404 Not Found") =>
   () => { throw Object.assign(new Error(message), { status: 404 }); };
 
-export const fails = (message, status) =>
+export const fails = (message: string, status?: number) =>
   () => { throw Object.assign(new Error(message), status ? { status } : {}); };

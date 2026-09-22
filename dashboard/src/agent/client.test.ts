@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { applyPatch, newId, runAgent } from "./client";
+import type { AgentEvent, AgentState } from "./client";
 
 // --------------------------------------------------------------------------- //
 // the stream
 // --------------------------------------------------------------------------- //
 // A body that hands out exactly the chunks it was given, so a test can decide
 // where a frame is cut in half.
-function bodyOf(chunks) {
+function bodyOf(chunks: string[]) {
   const encoder = new TextEncoder();
   let i = 0;
   return {
@@ -18,16 +19,18 @@ function bodyOf(chunks) {
   };
 }
 
-function streaming(chunks) {
-  const fetchMock = vi.fn(async () => ({ ok: true, status: 200, body: bodyOf(chunks) }));
+function streaming(chunks: string[]) {
+  const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
+    ({ ok: true, status: 200, body: bodyOf(chunks) }));
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
-const frame = (event) => `data: ${JSON.stringify(event)}\n\n`;
+const frame = (event: unknown) => `data: ${JSON.stringify(event)}\n\n`;
 
-async function collect(chunks) {
-  const events = [];
+// `streaming()` has already stubbed fetch by the time this is called.
+async function collect() {
+  const events: AgentEvent[] = [];
   await runAgent({ messages: [], state: {}, threadId: "t", runId: "r",
     onEvent: (e) => events.push(e) });
   return events;
@@ -46,8 +49,8 @@ describe("runAgent", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/agent/run");
     expect(init.method).toBe("POST");
-    expect(init.headers.accept).toBe("text/event-stream");
-    const body = JSON.parse(init.body);
+    expect((init.headers as Record<string, string>).accept).toBe("text/event-stream");
+    const body = JSON.parse(init.body as string);
     expect(body.threadId).toBe("thread_1");
     expect(body.messages[0].content).toBe("Review production");
     expect(body.state.dashboard.id).toBe("generated");
@@ -164,7 +167,7 @@ describe("runAgent", () => {
 // JSON Patch
 // --------------------------------------------------------------------------- //
 describe("applyPatch", () => {
-  const state = () => ({
+  const state = (): AgentState => ({
     dashboard: { id: "generated", title: "", panels: [{ id: "p1", title: "One" }] },
     params: { hub: "hub-east" },
   });
@@ -207,7 +210,8 @@ describe("applyPatch", () => {
   it("appends to an array with the - token, which is how a panel arrives", () => {
     const after = applyPatch(state(),
       [{ op: "add", path: "/dashboard/panels/-", value: { id: "p2", title: "Two" } }]);
-    expect(after.dashboard.panels.map((p) => p.id)).toEqual(["p1", "p2"]);
+    const panels = after.dashboard.panels as Array<{ id: string }>;
+    expect(panels.map((p) => p.id)).toEqual(["p1", "p2"]);
   });
 
   it("inserts at an index, replaces at an index and removes an index", () => {

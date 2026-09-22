@@ -9,15 +9,40 @@
 //   ...
 import { useCallback, useEffect, useState } from "react";
 
-function parse() {
+/** The URL, parsed. `segments` is the path split and decoded, which is how
+ * every view reads its own parameters. */
+export interface Route {
+  path: string;
+  query: Record<string, string>;
+  segments: string[];
+}
+
+export interface NavigateOptions {
+  /** Replace the current history entry instead of pushing a new one. */
+  replace?: boolean;
+}
+
+/** What `useRoute` hands a view: the parsed URL plus the two ways to change it. */
+export interface RouteApi extends Route {
+  navigate: (path: string, query?: QueryValues, options?: NavigateOptions) => void;
+  back: (fallback?: string, query?: QueryValues) => void;
+}
+
+/** Query-string values as a view supplies them. `false` and empty drop out, so
+ * a filter that is off leaves no trace in the URL. */
+export type QueryValues = Record<string, string | number | boolean | null | undefined>;
+
+function parse(): Route {
   const path = window.location.pathname.replace(/\/+$/, "") || "/";
   const query = Object.fromEntries(new URLSearchParams(window.location.search));
   return { path, query, segments: path.split("/").filter(Boolean).map(decodeURIComponent) };
 }
 
-export function buildUrl(path, query = {}) {
+export function buildUrl(path: string, query: QueryValues = {}): string {
   const qs = new URLSearchParams(
-    Object.entries(query).filter(([, v]) => v !== "" && v != null && v !== false)
+    Object.entries(query)
+      .filter(([, v]) => v !== "" && v != null && v !== false)
+      .map(([k, v]) => [k, String(v)])
   ).toString();
   return path + (qs ? `?${qs}` : "");
 }
@@ -26,12 +51,12 @@ export function buildUrl(path, query = {}) {
 // itself, so it survives a reload and follows back/forward: "← All clusters"
 // can then step back to the list the user actually came from (filters and all)
 // and still do something sensible when the detail page was opened cold.
-const depth = () => {
-  const s = window.history.state;
+const depth = (): number => {
+  const s = window.history.state as { odl?: unknown } | null;
   return s && typeof s.odl === "number" ? s.odl : 0;
 };
 
-export function useRoute() {
+export function useRoute(): RouteApi {
   const [route, setRoute] = useState(parse);
 
   useEffect(() => {
@@ -42,7 +67,8 @@ export function useRoute() {
 
   // navigate(path, query, { replace }) - replace is for filter/search changes so
   // the back button steps between pages, not between keystrokes.
-  const navigate = useCallback((path, query = {}, { replace = false } = {}) => {
+  const navigate = useCallback((path: string, query: QueryValues = {},
+    { replace = false }: NavigateOptions = {}) => {
     const url = buildUrl(path, query);
     if (url === window.location.pathname + window.location.search) return;
     const next = { odl: replace ? depth() : depth() + 1 };
@@ -55,7 +81,7 @@ export function useRoute() {
 
   // A "← back to the list" affordance: step back through our own history when
   // there is any, otherwise go to the page that link stands for.
-  const back = useCallback((fallback = "/", query = {}) => {
+  const back = useCallback((fallback = "/", query: QueryValues = {}) => {
     if (depth() > 0) window.history.back();
     else navigate(fallback, query);
   }, [navigate]);
@@ -63,9 +89,17 @@ export function useRoute() {
   return { ...route, navigate, back };
 }
 
-// Filters stored in the query string. Returns [values, set(key, value), clear()].
-export function useQueryFilters(route, keys) {
-  const values = {};
+/** Filters stored in the query string: the values, a setter, a reset, and
+ * whether any of them is on. */
+export type QueryFilters = [
+  values: Record<string, string>,
+  set: (key: string, value: string) => void,
+  clear: () => void,
+  active: boolean,
+];
+
+export function useQueryFilters(route: RouteApi, keys: string[]): QueryFilters {
+  const values: Record<string, string> = {};
   keys.forEach((k) => { values[k] = route.query[k] || ""; });
   const set = (k, v) => route.navigate(route.path, { ...route.query, [k]: v || "" }, { replace: true });
   const clear = () => {
@@ -79,6 +113,7 @@ export function useQueryFilters(route, keys) {
 
 // The same, for the handful of places that set several keys at once (running a
 // blast-radius query replaces the whole form).
-export function setQuery(route, next, { replace = false } = {}) {
+export function setQuery(route: RouteApi, next: QueryValues,
+  { replace = false }: NavigateOptions = {}) {
   route.navigate(route.path, next, { replace });
 }

@@ -40,6 +40,9 @@ _BUILTIN_IS_READ_ONLY = "'{id}' is a built-in dashboard; clone it under another 
 class RunRequest(BaseModel):
     params: dict[str, Any] = Field(
         default_factory=dict,
+        # Pydantic renders dict[str, Any] as a bare object; without this the
+        # generated client type accepts no keys at all (Record<string, never>).
+        json_schema_extra={"additionalProperties": True},
         description="Values for the dashboard's variables; missing ones fall back to the default.")
 
 

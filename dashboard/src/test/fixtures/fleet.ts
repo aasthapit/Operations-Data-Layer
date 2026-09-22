@@ -1,11 +1,27 @@
 // Fleet responses, in the shapes data-layer/app/serialize.py produces.
 //
+// Typed with `src/api/types.ts`: these annotations are what check the
+// hand-written response interfaces, so a fixture that drifts from a handler is
+// a type error rather than a test that passes against a shape the API does not
+// serve.
+//
 // Two hubs, five clusters, one of each status and one mid-upgrade: enough for a
 // table to sort, a filter to narrow and a status pill to be worth asserting on.
 // Names, regions and versions are the ones the sim fleet actually uses, because
 // a fixture that says "foo" hides a formatting bug that "ocp-prod-iad-01" finds.
 
-export const HUBS = [
+import type {
+  BlastRadiusResponse,
+  ClusterSummary,
+  ClustersResponse,
+  InsightsSummaryResponse,
+  OperatorVersionsResponse,
+  OverviewResponse,
+  SummaryResponse,
+  VersionsResponse,
+} from "../../api/types";
+
+export const HUBS: OverviewResponse["hubs"] = [
   {
     name: "hub-east",
     region: "us-east-1",
@@ -26,8 +42,8 @@ export const HUBS = [
   },
 ];
 
-function clusterSummary(over = {}) {
-  const base = {
+function clusterSummary(over: Partial<ClusterSummary> = {}): ClusterSummary {
+  const base: ClusterSummary = {
     name: "ocp-prod-iad-01",
     hub: "hub-east",
     region: "us-east-1",
@@ -59,7 +75,7 @@ function clusterSummary(over = {}) {
   return { ...base, ...over };
 }
 
-export const CLUSTERS = [
+export const CLUSTERS: ClusterSummary[] = [
   clusterSummary(),
   clusterSummary({
     name: "ocp-prod-iad-02",
@@ -119,9 +135,10 @@ export const CLUSTERS = [
   }),
 ];
 
-export const clustersResponse = (rows = CLUSTERS) => ({ count: rows.length, clusters: rows });
+export const clustersResponse = (rows: ClusterSummary[] = CLUSTERS): ClustersResponse =>
+  ({ count: rows.length, clusters: rows });
 
-export const OVERVIEW = {
+export const OVERVIEW: OverviewResponse = {
   primary_dimension: "hub",
   clusters_total: CLUSTERS.length,
   counts: { healthy: 2, warning: 1, critical: 1, unknown: 1 },
@@ -136,7 +153,7 @@ export const OVERVIEW = {
 
 // The same document mid-sweep: the banner, the progress bar and the per-
 // collector breakdown all come off this one.
-export const OVERVIEW_SWEEPING = {
+export const OVERVIEW_SWEEPING: OverviewResponse = {
   ...OVERVIEW,
   sweep: {
     running: true,
@@ -153,31 +170,31 @@ export const OVERVIEW_SWEEPING = {
   },
 };
 
-export const SUMMARY_BY_HUB = {
+export const SUMMARY_BY_HUB: SummaryResponse = {
   group_by: "hub",
   groups: [
     { key: "hub-east", total: 4, rollup_status: "critical",
       counts: { healthy: 1, warning: 1, critical: 1, unknown: 1 },
-      applications: 22, unassigned_namespaces: 3 },
+      applications: 22, namespaces: 38, unassigned_namespaces: 3 },
     { key: "hub-west", total: 1, rollup_status: "healthy",
       counts: { healthy: 1, warning: 0, critical: 0, unknown: 0 },
-      applications: 6, unassigned_namespaces: 0 },
+      applications: 6, namespaces: 10, unassigned_namespaces: 0 },
   ],
 };
 
-export const SUMMARY_BY_REGION = {
+export const SUMMARY_BY_REGION: SummaryResponse = {
   group_by: "region",
   groups: [
     { key: "us-east-1", total: 4, rollup_status: "critical",
       counts: { healthy: 1, warning: 1, critical: 1, unknown: 1 },
-      applications: 22, unassigned_namespaces: 3 },
+      applications: 22, namespaces: 38, unassigned_namespaces: 3 },
     { key: "us-west-2", total: 1, rollup_status: "healthy",
       counts: { healthy: 1, warning: 0, critical: 0, unknown: 0 },
-      applications: 6, unassigned_namespaces: 0 },
+      applications: 6, namespaces: 10, unassigned_namespaces: 0 },
   ],
 };
 
-export const INSIGHTS_SUMMARY = {
+export const INSIGHTS_SUMMARY: InsightsSummaryResponse = {
   certificates: { expired: 1, expiring: 5 },
   pod_issues: { platform: 22, application: 2 },
   quotas_near_limit: 2,
@@ -191,22 +208,29 @@ export const INSIGHTS_SUMMARY = {
   clusters_without_metrics: 1,
 };
 
-export const VERSIONS = {
+export const VERSIONS: VersionsResponse = {
   versions: [
     { version: "4.16.7", count: 3,
       clusters: [
-        { name: "ocp-prod-iad-01", status: "healthy" },
-        { name: "ocp-prod-iad-02", status: "warning" },
-        { name: "ocp-dev-iad-01", status: "unknown" },
+        { name: "ocp-prod-iad-01", hub: "hub-east", region: "us-east-1",
+          environment: "prod", status: "healthy", upgrading: false },
+        { name: "ocp-prod-iad-02", hub: "hub-east", region: "us-east-1",
+          environment: "prod", status: "warning", upgrading: false },
+        { name: "ocp-dev-iad-01", hub: "hub-east", region: "us-east-1",
+          environment: "dev", status: "unknown", upgrading: false },
       ] },
-    { version: "4.16.4", count: 1, clusters: [{ name: "ocp-prod-sjc-01", status: "healthy" }] },
-    { version: "4.15.22", count: 1, clusters: [{ name: "ocp-stage-iad-01", status: "critical" }] },
+    { version: "4.16.4", count: 1,
+      clusters: [{ name: "ocp-prod-sjc-01", hub: "hub-west", region: "us-west-2",
+        environment: "prod", status: "healthy", upgrading: false }] },
+    { version: "4.15.22", count: 1,
+      clusters: [{ name: "ocp-stage-iad-01", hub: "hub-east", region: "us-east-1",
+        environment: "stage", status: "critical", upgrading: true }] },
   ],
-  channels: ["stable-4.15", "stable-4.16"],
+  channels: [{ channel: "stable-4.15", count: 1 }, { channel: "stable-4.16", count: 4 }],
   distinct_versions: 3,
 };
 
-export const OPERATOR_VERSIONS = {
+export const OPERATOR_VERSIONS: OperatorVersionsResponse = {
   operators: [
     { operator: "ingress", distinct: 2,
       versions: [{ version: "4.16.7", count: 4 }, { version: "4.15.22", count: 1 }] },
@@ -216,7 +240,11 @@ export const OPERATOR_VERSIONS = {
   ],
 };
 
-export const BLAST_RADIUS = {
+export const BLAST_RADIUS: BlastRadiusResponse = {
+  query: {
+    operator: null, operator_version: null, ocp_version: "4.16.7", degraded_only: false,
+    olm_operator: null, olm_version: null, image: null,
+  },
   summary: {
     clusters_impacted: 2,
     applications_impacted: 3,
@@ -225,21 +253,38 @@ export const BLAST_RADIUS = {
     workloads_impacted: 2,
     by_environment: { prod: 1, stage: 1 },
     by_hub: { "hub-east": 2 },
+    by_region: { "us-east-1": 2 },
     platform_namespaces_impacted: ["openshift-ingress"],
   },
   clusters: [
-    { name: "ocp-prod-iad-02", hub: "hub-east", environment: "prod",
+    { name: "ocp-prod-iad-02", hub: "hub-east", region: "us-east-1", datacenter: "iad1",
+      environment: "prod", ocp_version: "4.16.7",
       reason: "ocp_version 4.16.7", status: "warning" },
-    { name: "ocp-stage-iad-01", hub: "hub-east", environment: "stage",
+    { name: "ocp-stage-iad-01", hub: "hub-east", region: "us-east-1", datacenter: "iad1",
+      environment: "stage", ocp_version: "4.16.7",
       reason: "ocp_version 4.16.7", status: "critical" },
   ],
   applications: [
-    { app: "checkout", team: "payments", tier: "critical", cluster_count: 2,
-      clusters: [{ cluster: "ocp-prod-iad-02" }, { cluster: "ocp-stage-iad-01" }] },
-    { app: "catalog", team: "retail", tier: "standard", cluster_count: 1,
-      clusters: [{ cluster: "ocp-prod-iad-02" }] },
-    { app: "search", team: "retail", tier: "standard", cluster_count: 1,
-      clusters: [{ cluster: "ocp-stage-iad-01" }] },
+    { app: "checkout", assigned: true, team: "payments", tier: "critical",
+      namespace: "checkout-prod", cluster_count: 2,
+      clusters: [
+        { cluster: "ocp-prod-iad-02", hub: "hub-east", region: "us-east-1",
+          environment: "prod", status: "warning", app_status: "warning" },
+        { cluster: "ocp-stage-iad-01", hub: "hub-east", region: "us-east-1",
+          environment: "stage", status: "critical", app_status: "healthy" },
+      ] },
+    { app: "catalog", assigned: true, team: "retail", tier: "standard",
+      namespace: "catalog-prod", cluster_count: 1,
+      clusters: [
+        { cluster: "ocp-prod-iad-02", hub: "hub-east", region: "us-east-1",
+          environment: "prod", status: "warning", app_status: "healthy" },
+      ] },
+    { app: "search", assigned: true, team: "retail", tier: "standard",
+      namespace: "search-stage", cluster_count: 1,
+      clusters: [
+        { cluster: "ocp-stage-iad-01", hub: "hub-east", region: "us-east-1",
+          environment: "stage", status: "critical", app_status: "healthy" },
+      ] },
   ],
   workloads: [
     { cluster: "ocp-prod-iad-02", namespace: "checkout-prod", kind: "Deployment",

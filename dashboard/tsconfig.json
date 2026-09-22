@@ -1,0 +1,42 @@
+{
+  // Phase 1 of ADR-0005. `allowJs` is what lets .js/.jsx and .ts/.tsx coexist on
+  // one branch: the modules that have been converted are checked, the ones that
+  // have not are still resolved (so an import from a .tsx into a .jsx module is
+  // a real edge in the graph) but not checked themselves - `checkJs: false`.
+  //
+  // `strict` and `noImplicitAny` are off here and turned on in Phase 2, so this
+  // phase is a mechanical conversion rather than a conversion plus a thousand
+  // null checks in one reviewable change.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    // The browser APIs the app is written against (fetch, history, AbortController).
+    // Not implied by `target`, so it has to be named.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+
+    "allowJs": true,
+    "checkJs": false,
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+
+    // Vite transpiles file by file, so anything that needs whole-program
+    // knowledge to emit (const enums, re-exported types without `export type`)
+    // has to be an error here rather than a runtime surprise.
+    "isolatedModules": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+
+    // `vite/client` types import.meta.env; `vitest/globals` types the describe /
+    // it / expect the suite uses without importing them; `node` is there for the
+    // one test that shells out - src/api/schema.test.ts regenerates schema.ts
+    // into a temp directory and diffs it, which needs node:child_process and
+    // node:fs.
+    "types": ["vite/client", "vitest/globals", "node"]
+  },
+  "include": ["src", "vite.config.ts"]
+}

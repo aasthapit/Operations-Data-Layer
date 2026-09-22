@@ -14,14 +14,16 @@ import { afterEach, beforeEach, vi } from "vitest";
 // browser APIs jsdom does not have
 // --------------------------------------------------------------------------- //
 class TestResizeObserver {
-  constructor(callback) { this.callback = callback; }
+  callback: ResizeObserverCallback;
+  constructor(callback: ResizeObserverCallback) { this.callback = callback; }
   observe() {}
   unobserve() {}
   disconnect() {}
 }
 
 class TestIntersectionObserver {
-  constructor(callback) { this.callback = callback; }
+  callback: IntersectionObserverCallback;
+  constructor(callback: IntersectionObserverCallback) { this.callback = callback; }
   observe() {}
   unobserve() {}
   disconnect() {}
@@ -29,10 +31,14 @@ class TestIntersectionObserver {
 }
 
 globalThis.ResizeObserver = TestResizeObserver;
-globalThis.IntersectionObserver = TestIntersectionObserver;
+// why: the stub answers the three calls the app makes and nothing else, so it
+// deliberately does not carry IntersectionObserver's root / rootMargin /
+// thresholds. Naming the global's own type is what says that is on purpose.
+globalThis.IntersectionObserver =
+  TestIntersectionObserver as unknown as typeof globalThis.IntersectionObserver;
 
 if (!window.matchMedia) {
-  window.matchMedia = (query) => ({
+  window.matchMedia = (query: string) => ({
     matches: false,
     media: query,
     onchange: null,
@@ -53,11 +59,15 @@ if (!URL.revokeObjectURL) URL.revokeObjectURL = () => {};
 
 // jsdom measures nothing, so a chart asked for its card's width gets zero and
 // draws at its fallback. A fixed width makes the SVG assertions stable.
-if (!Element.prototype.getBoundingClientRect.__odlPatched) {
-  const rect = () => ({
+// The marker is read back off the function itself so a second import of this
+// module does not wrap the stub in another stub.
+type PatchedRect = (() => DOMRect) & { __odlPatched?: true };
+
+if (!(Element.prototype.getBoundingClientRect as PatchedRect).__odlPatched) {
+  const rect: PatchedRect = () => ({
     width: 640, height: 320, top: 0, left: 0, right: 640, bottom: 320, x: 0, y: 0,
     toJSON() { return this; },
-  });
+  }) as DOMRect;
   rect.__odlPatched = true;
   Element.prototype.getBoundingClientRect = rect;
 }
@@ -80,31 +90,37 @@ HTMLCanvasElement.prototype.getContext = () => null;
 // Stored keys are ordinary enumerable own properties, because that is what the
 // real thing does and what `Object.keys(sessionStorage)` in useAgentRun relies
 // on; the methods are defined non-enumerable so they do not look like entries.
-function createStorage() {
-  const storage = {};
-  const hidden = (name, value) =>
+function createStorage(): Storage {
+  const storage: Record<string, string> = {};
+  const hidden = (name: string, value: unknown) =>
     Object.defineProperty(storage, name, { value, writable: true, configurable: true });
-  const entry = (key, value) =>
+  const entry = (key: string, value: string) =>
     Object.defineProperty(storage, key, { value, enumerable: true, writable: true, configurable: true });
 
-  hidden("getItem", (key) => {
+  hidden("getItem", (key: string) => {
     const k = String(key);
     return Object.prototype.propertyIsEnumerable.call(storage, k) ? storage[k] : null;
   });
-  hidden("setItem", (key, value) => entry(String(key), String(value)));
-  hidden("removeItem", (key) => { delete storage[String(key)]; });
+  hidden("setItem", (key: string, value: string) => entry(String(key), String(value)));
+  hidden("removeItem", (key: string) => { delete storage[String(key)]; });
   hidden("clear", () => { Object.keys(storage).forEach((k) => { delete storage[k]; }); });
-  hidden("key", (index) => Object.keys(storage)[index] ?? null);
+  hidden("key", (index: number) => Object.keys(storage)[index] ?? null);
   Object.defineProperty(storage, "length", {
     get: () => Object.keys(storage).length, configurable: true,
   });
-  return storage;
+  // why: the object IS the store - the keys are the entries and the methods are
+  // hidden behind defineProperty, so nothing here can be seen as `Storage` until
+  // it is finished being built.
+  return storage as unknown as Storage;
 }
 
 const localStorageStub = createStorage();
 const sessionStorageStub = createStorage();
-for (const [name, value] of [["localStorage", localStorageStub],
-  ["sessionStorage", sessionStorageStub]]) {
+const stubs: Array<[string, Storage]> = [
+  ["localStorage", localStorageStub],
+  ["sessionStorage", sessionStorageStub],
+];
+for (const [name, value] of stubs) {
   Object.defineProperty(window, name, { value, writable: true, configurable: true });
   if (globalThis !== window) {
     Object.defineProperty(globalThis, name, { value, writable: true, configurable: true });

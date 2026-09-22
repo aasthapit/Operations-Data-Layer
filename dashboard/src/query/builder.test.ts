@@ -7,10 +7,12 @@ import {
   operatorInput, operatorLabel, operatorsFor, pruneState, sameState, sortableColumns,
   stateForTable, storeSaved, tableOf, toCsv, toObjects,
 } from "./builder";
+import type { BuilderState, Filter } from "./builder";
 import { QUERY_SCHEMA } from "../test/fixtures/platform";
 
 const schema = QUERY_SCHEMA;
-const state = (table = "clusters", over = {}) => ({ ...stateForTable(schema, table), ...over });
+const state = (table = "clusters", over: Partial<BuilderState> = {}): BuilderState =>
+  ({ ...stateForTable(schema, table), ...over });
 
 describe("kindOf", () => {
   it("maps the DuckDB types the schema declares onto the four builder kinds", () => {
@@ -214,7 +216,7 @@ describe("buildSql", () => {
   });
 
   it("joins several filters with the chosen connective", () => {
-    const filters = [
+    const filters: Filter[] = [
       { id: "f1", column: "region", op: "eq", value: "us-east-1", value2: "" },
       { id: "f2", column: "environment", op: "eq", value: "prod", value2: "" },
     ];
@@ -282,7 +284,9 @@ describe("buildSql", () => {
   });
 
   it("names the filter that is not finished rather than writing half a condition", () => {
-    const cases = [
+    // The last case names an operator this build does not have, so the entries
+    // are plain string maps rather than Filters and are cast at the use site.
+    const cases: Array<[Record<string, string>, string]> = [
       [{ column: "", op: "eq", value: "" }, "Filter 1: pick a column."],
       [{ column: "gone", op: "eq", value: "x" }, 'Filter 1: "gone" is not in this data set.'],
       [{ column: "region", op: "eq", value: "  " }, "Filter 1: enter a value."],
@@ -298,7 +302,10 @@ describe("buildSql", () => {
     ];
     cases.forEach(([filter, message]) => {
       const built = buildSql(schema,
-        state("clusters", { filters: [{ id: "f1", value2: "", ...filter }], sorts: [] }));
+        state("clusters", {
+          filters: [{ id: "f1", value2: "", ...filter } as unknown as Filter],
+          sorts: [],
+        }));
       expect(built.problems).toContain(message);
     });
   });
@@ -468,7 +475,9 @@ describe("pruneState", () => {
   it("sameState compares by value and survives something it cannot serialise", () => {
     expect(sameState({ a: 1 }, { a: 1 })).toBe(true);
     expect(sameState({ a: 1 }, { a: 2 })).toBe(false);
-    const cyclic = {};
+    // why: a value JSON.stringify cannot walk is the case under test, and
+    // TypeScript has no type for "an object that points at itself".
+    const cyclic: any = {};
     cyclic.self = cyclic;
     expect(sameState(cyclic, cyclic)).toBe(false);
   });
@@ -492,7 +501,8 @@ describe("sharing a query", () => {
   });
 
   it("answers an empty string rather than throwing for a state it cannot encode", () => {
-    const cyclic = { table: "clusters" };
+    // why: as above - the point of the test is a state that cannot be encoded.
+    const cyclic: any = { table: "clusters" };
     cyclic.self = cyclic;
     expect(encodeState(cyclic)).toBe("");
   });

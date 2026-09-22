@@ -52,3 +52,58 @@ Those are two migrations with different costs and different reasons, so this rec
 ## Measured
 
 Filled in by phase as each lands: files converted, `tsc` errors cleared, bundle size before and after, test count and coverage at each gate, and the run time of the suite.
+
+### Phase 1 - TypeScript tooling, API types, pure modules
+
+TypeScript 5.9.3 (the last 5.x; 7.x is not taken yet because the installed `@types/react@18` and Vite 6's own typings are what this phase has to keep working against), `@types/react@18.3.31`, `@types/react-dom@18.3.7`, `@types/node@26`, `openapi-typescript@7.13.0`.
+
+**Files converted (29 moved with `git mv`, so history follows them).**
+
+| Group | Files |
+|---|---|
+| Config | `vite.config.js` -> `vite.config.ts` |
+| Pure modules | `router`, `cache`, `hooks`, `api`, `query/builder`, `dashboards/model`, `dashboards/runtime`, `dashboards/fixture`, `agent/client`, `agent/useAgentRun`, `agent/fixture` |
+| Their tests | the eight `.test.js` beside them, plus `router.test.jsx` and `hooks.test.jsx` as `.test.tsx` |
+| Test support | `test/setup`, `test/apiMock`, `test/harness` (`.tsx`), and all five files under `test/fixtures/` |
+| Added | `src/api/schema.ts` (generated), `src/api/types.ts` (hand-written), `src/api/schema.test.ts` (drift), `tsconfig.json`, `data-layer/scripts/export_openapi.py`, `data-layer/openapi.json`, `data-layer/tests/test_openapi_export.py` |
+
+Components and views stayed `.jsx`, as Phase 2 owns them; `allowJs` resolves them and `checkJs: false` leaves them unchecked.
+
+**`tsc --noEmit` errors: 0 before, 0 after.**
+Both zeroes are honest but neither is interesting on its own: at the start the config was added to a tree with no `.ts` file in it, so there was nothing to check.
+The number that mattered was per file, and every batch was cleared before the next file moved - 19 on typing the fleet fixture, 15 on the insights fixture, 25 on the agent client and its test, 20 on `api` and `hooks`, and ones and twos elsewhere.
+
+**What the type check actually caught.**
+Typing the fixtures with `src/api/types.ts` turned up eleven places where a fixture and its handler disagreed, which is the claim in the Context section paying for itself before a single component was touched:
+
+- `VERSIONS.channels` was a list of channel names; `versions.py:_distribution` returns `{channel, count}` rows.
+- `VERSIONS.versions[].clusters[]` carried `{name, status}`; the handler also sends `hub`, `region`, `environment` and `upgrading`.
+- `BLAST_RADIUS` had no `query` echo and no `summary.by_region`; its clusters had no `datacenter` or `ocp_version`, and its applications had no `assigned` or `namespace` and only `{cluster}` per placement.
+- `SUMMARY_BY_*.groups[]` had no `namespaces` count.
+- `CLUSTER_RESOURCES` carried a top-level `kind`, which `clusters.py:get_resources` does not send (the kind is a query parameter).
+- `REFERENCES` had the reverse problem: a top-level `kind` instead of one per row.
+- `MANIFEST` was missing `keep_annotations`, `threshold_scope`, `health_checks` and `applications`.
+- `MANIFEST_AVAILABILITY.totals` counted objects; the handler counts clusters per status, and the per-resource entries were missing `collected_at`, `cached` and `interval_seconds`.
+- `APPLICATIONS`/`APPLICATION_DETAIL` were missing `total`, `offset`, `regions` and the whole `namespaces` section.
+- `STORAGE` was missing `default` on a class, `class` on a PVC, and `pvs` entirely.
+- `POD_ISSUES`, `ROUTES` and the application workload detail were each missing fields their serializer always sends.
+
+All eleven were fixed in the fixtures rather than papered over in the interfaces, so the suite now runs against the shapes the API serves.
+
+**Bundle**: `dist/assets/*.js` 401.90 kB raw / **119.69 kB gzip** before, 402.15 kB raw / **119.77 kB gzip** after (+0.08 kB gzip, entirely the `default` flag and the extra fixture-shaped branches; types erase).
+CSS unchanged at 30.86 kB / 6.65 kB gzip.
+
+**Tests**: 896 in 34 files before, **898 in 35 files** after - the two added are the schema drift test and its path spot-check.
+The data layer gained four (`tests/test_openapi_export.py`) and stands at **758 passing**.
+
+**Coverage** (the gate is statements and lines >= 70%):
+
+| | Before | After |
+|---|---|---|
+| Statements | 89.12% (3868/4340) | 89.11% (3881/4355) |
+| Branches | 82.81% (3499/4225) | 82.78% (3496/4223) |
+| Functions | 86.38% (1427/1652) | 86.29% (1429/1656) |
+| Lines | 90.91% (3151/3466) | 90.98% (3178/3493) |
+
+**Suite time**: 9.22 s before, 9.07 s after (`vitest run`, warm).
+`tsc --noEmit` adds about 1.4 s to the gate.

@@ -3,7 +3,13 @@
 // a scalar `y`), because reconciling that with the Chart component's own words
 // is exactly what chartFromWire is for.
 
-export const DASHBOARD_LIST = {
+import type {
+  DashboardDefinition,
+  DashboardRunResponse,
+  DashboardsResponse,
+} from "../../api/types";
+
+export const DASHBOARD_LIST: DashboardsResponse = {
   dashboards: [
     { id: "hub-review", title: "Hub review - {{hub}}",
       description: "Every cluster one hub manages.", builtin: true, panels: 2,
@@ -14,7 +20,7 @@ export const DASHBOARD_LIST = {
   ],
 };
 
-export const HUB_REVIEW = {
+export const HUB_REVIEW: DashboardDefinition = {
   id: "hub-review",
   title: "Hub review - {{hub}}",
   description: "Every cluster one hub manages.",
@@ -35,7 +41,7 @@ export const HUB_REVIEW = {
   updated_by: "a.sthapit",
 };
 
-export const CAPACITY_WATCH = {
+export const CAPACITY_WATCH: DashboardDefinition = {
   id: "capacity-watch",
   title: "Capacity watch",
   description: "",
@@ -53,7 +59,7 @@ export const CAPACITY_WATCH = {
 // What POST /api/dashboards/{id}/run answers with: the definition, the
 // parameters it actually used, every select variable's options, and one result
 // per panel - including a panel that could not run.
-export const HUB_REVIEW_RUN = {
+export const HUB_REVIEW_RUN: DashboardRunResponse = {
   dashboard: HUB_REVIEW,
   params: { hub: "hub-east" },
   variables: {
@@ -77,5 +83,14 @@ export const HUB_REVIEW_RUN = {
     },
   },
   generation: 11,
-  snapshot: { generation: 11, built_at: "2026-09-20T20:58:11+00:00" },
+  snapshot: {
+    generation: 11,
+    built_at: "2026-09-20T20:58:11+00:00",
+    age_seconds: 42,
+    build_ms: 107,
+    stale: false,
+    rebuilding: false,
+    rows: { clusters: 5, pod_issues: 24, hubs: 2 },
+    total_rows: 31,
+  },
 };

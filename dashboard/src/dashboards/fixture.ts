@@ -9,8 +9,13 @@
 // They are a development aid, not a fallback: nothing reaches them unless the
 // URL asks for them by name.
 import { normalizeDefinition } from "./model";
+import type { Definition } from "./model";
+import type { DashboardListEntry } from "../api/types";
 
-const DEFINITIONS = [
+// Written the way a dashboard author writes one by hand (a scalar `y`, a bare
+// `{type: bars}`), which is exactly what normalizeDefinition is for - so they
+// are documents on the way in, not Definitions.
+const DEFINITIONS: unknown[] = [
   {
     id: "fixture-hub",
     title: "Hub overview - {{hub}}",
@@ -129,14 +134,19 @@ LIMIT 20`,
   },
 ];
 
-const byId = new Map(DEFINITIONS.map((d) => [d.id, normalizeDefinition(d)]));
+const byId = new Map<string, Definition>(
+  DEFINITIONS.map((d) => {
+    const def = normalizeDefinition(d);
+    return [def.id, def];
+  }));
 
-export const fixtureDefinition = (id) => {
+// A deep copy, so a page that edits a fixture cannot change the next reader's.
+export const fixtureDefinition = (id: string): Definition | null => {
   const def = byId.get(id);
-  return def ? JSON.parse(JSON.stringify(def)) : null;
+  return def ? (JSON.parse(JSON.stringify(def)) as Definition) : null;
 };
 
-export const fixtureList = () => [...byId.values()].map((d) => ({
+export const fixtureList = (): DashboardListEntry[] => [...byId.values()].map((d) => ({
   id: d.id,
   title: d.title,
   description: d.description,

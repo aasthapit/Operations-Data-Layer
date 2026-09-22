@@ -1,4 +1,7 @@
-import { defineConfig } from "vite";
+// `defineConfig` comes from vitest/config rather than from vite: it is vite's
+// own, widened with the `test` block below, so the suite's options are typed
+// instead of being an untyped bag on a vite config.
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // In dev, proxy API calls to the data layer so the app runs same-origin.
@@ -24,7 +27,7 @@ export default defineConfig({
       "/api/patching": {
         target: process.env.VITE_PATCHING_TARGET || "http://localhost:18010",
         changeOrigin: true,
-        rewrite: (p) => p.replace(/^\/api\/patching/, "/api"),
+        rewrite: (p: string) => p.replace(/^\/api\/patching/, "/api"),
       },
       "/api": { target, changeOrigin: true },
       "/healthz": { target, changeOrigin: true },
@@ -32,20 +35,20 @@ export default defineConfig({
   },
 
   // The suite runs in jsdom against the real modules: only the network is
-  // replaced. `src/test/setup.js` installs the browser APIs jsdom does not
+  // replaced. `src/test/setup.ts` installs the browser APIs jsdom does not
   // have and makes an unmocked fetch a loud failure rather than a hang.
   test: {
     environment: "jsdom",
     globals: true,
-    setupFiles: "src/test/setup.js",
-    include: ["src/**/*.test.{js,jsx}"],
+    setupFiles: "src/test/setup.ts",
+    include: ["src/**/*.test.{js,jsx,ts,tsx}"],
     restoreMocks: true,
     coverage: {
       provider: "v8",
       include: ["src/**"],
-      // main.jsx is the mount point (no logic), and the two fixture modules are
+      // main.jsx is the mount point (no logic), and the fixture modules are
       // themselves test data - counting them would flatter the number.
-      exclude: ["src/main.jsx", "src/test/**", "src/**/fixture.js"],
+      exclude: ["src/main.jsx", "src/test/**", "src/**/fixture.{js,ts}"],
       reporter: ["text", "html", "lcov"],
       // Statements and lines are the gate; functions and branches are reported
       // so a drop is visible without failing the build on a defensive branch.

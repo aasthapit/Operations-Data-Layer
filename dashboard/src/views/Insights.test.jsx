@@ -179,7 +179,9 @@ describe("storage", () => {
     open("storage");
     const classes = (await screen.findByRole("heading", { name: "Storage classes" }))
       .closest(".card");
-    const row = within(classes).getByRole("cell", { name: "gp3-csi" }).closest("tr");
+    // The name cell also carries the "default" tag when the class is the
+    // cluster's default one, which gp3-csi is in the fixture.
+    const row = within(classes).getByRole("cell", { name: "gp3-csi default" }).closest("tr");
     expect(within(row).getByText("ebs.csi.aws.com")).toBeInTheDocument();
     expect(within(row).getByText("1024.0 GiB")).toBeInTheDocument();
     // clusters, pvcs, bound, pending

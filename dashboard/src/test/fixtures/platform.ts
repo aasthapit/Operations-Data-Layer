@@ -1,7 +1,22 @@
 // Utilization, the patching system of record, the collection manifest and the
 // query plane's schema - the four responses the remaining pages are built from.
 
-export const METRICS_HEALTH = {
+import type {
+  CapacityResponse,
+  CollectorTimingsResponse,
+  ManifestAvailabilityResponse,
+  ManifestResponse,
+  MetricsHealthResponse,
+  PatchJobResponse,
+  PatchJobsResponse,
+  PatchReportResponse,
+  QueryResult,
+  QuerySchemaResponse,
+  TopNamespacesResponse,
+  TopNodesResponse,
+} from "../../api/types";
+
+export const METRICS_HEALTH: MetricsHealthResponse = {
   source: "metrics.k8s.io (via each cluster's API server)",
   reachable: true,
   clusters_with_metrics: 4,
@@ -9,37 +24,40 @@ export const METRICS_HEALTH = {
   without_metrics: ["ocp-dev-iad-01"],
 };
 
-export const METRICS_HEALTH_DOWN = {
+export const METRICS_HEALTH_DOWN: MetricsHealthResponse = {
   ...METRICS_HEALTH,
   reachable: false,
   clusters_with_metrics: 0,
   without_metrics: [],
 };
 
-export const TOP_NAMESPACES = {
+export const TOP_NAMESPACES: TopNamespacesResponse = {
   by: "cpu",
   unit: "cores",
   results: [
     { namespace: "checkout-prod", cluster: "ocp-prod-iad-02", class: "application",
-      team: "payments", value: 6.02 },
+      app: "checkout", team: "payments", value: 6.02 },
     { namespace: "openshift-monitoring", cluster: "ocp-prod-iad-02", class: "platform",
-      team: null, value: 3.41 },
+      app: null, team: null, value: 3.41 },
     { namespace: "catalog-prod", cluster: "ocp-prod-iad-01", class: "application",
-      team: "retail", value: 1.44 },
+      app: "catalog", team: "retail", value: 1.44 },
   ],
 };
 
-export const TOP_NODES = {
+export const TOP_NODES: TopNodesResponse = {
   by: "cpu",
   unit: "percent",
   results: [
-    { node: "ip-10-4-1-21.ec2.internal", cluster: "ocp-prod-iad-02", value: 92.4 },
-    { node: "ip-10-4-3-12.ec2.internal", cluster: "ocp-stage-iad-01", value: 78.1 },
-    { node: "ip-10-6-1-4.ec2.internal", cluster: "ocp-prod-sjc-01", value: 33.0 },
+    { node: "ip-10-4-1-21.ec2.internal", cluster: "ocp-prod-iad-02",
+      roles: ["control-plane", "master"], value: 92.4 },
+    { node: "ip-10-4-3-12.ec2.internal", cluster: "ocp-stage-iad-01",
+      roles: ["worker"], value: 78.1 },
+    { node: "ip-10-6-1-4.ec2.internal", cluster: "ocp-prod-sjc-01",
+      roles: ["worker"], value: 33.0 },
   ],
 };
 
-export const CAPACITY_BY_CLUSTER = {
+export const CAPACITY_BY_CLUSTER: CapacityResponse = {
   group_by: "cluster",
   results: [
     { cluster: "ocp-prod-iad-02", clusters: 1, with_metrics: 1, used_cores: 80.9,
@@ -53,7 +71,7 @@ export const CAPACITY_BY_CLUSTER = {
   ],
 };
 
-export const CAPACITY_BY_HUB = {
+export const CAPACITY_BY_HUB: CapacityResponse = {
   group_by: "hub",
   results: [
     { hub: "hub-east", clusters: 4, with_metrics: 3, used_cores: 150.3,
@@ -70,14 +88,14 @@ export const CAPACITY_BY_HUB = {
 // --------------------------------------------------------------------------- //
 // patching
 // --------------------------------------------------------------------------- //
-export const PATCH_REPORT = {
+export const PATCH_REPORT: PatchReportResponse = {
   jobs_total: 5,
   jobs_by_status: { completed: 2, running: 1, paused: 1, failed: 1 },
   avg_success_pct: 86,
   clusters: { succeeded: 11, failed: 2, pending: 3 },
 };
 
-export const PATCH_JOBS = {
+export const PATCH_JOBS: PatchJobsResponse = {
   count: 2,
   jobs: [
     {
@@ -109,7 +127,7 @@ export const PATCH_JOBS = {
   ],
 };
 
-export const PATCH_JOB = {
+export const PATCH_JOB: PatchJobResponse = {
   ...PATCH_JOBS.jobs[0],
   started_at: "2026-09-20T14:10:00+00:00",
   finished_at: null,
@@ -134,7 +152,7 @@ export const PATCH_JOB = {
 // --------------------------------------------------------------------------- //
 // the collection manifest
 // --------------------------------------------------------------------------- //
-export const MANIFEST = {
+export const MANIFEST: ManifestResponse = {
   source: "/app/config/ocp-api-manifest.yaml",
   resources: [
     { key: "clusterversion", kind: "ClusterVersion", api_group: "config.openshift.io",
@@ -164,39 +182,79 @@ export const MANIFEST = {
       tier: ["odl.io/tier"],
     },
   },
+  keep_annotations: [
+    "openshift.io/requester",
+    "openshift.io/display-name",
+    "deployment.kubernetes.io/revision",
+  ],
   thresholds: {
     certificate_expiry_days: 30,
     pod_restart_threshold: 5,
     capacity_warning_percent: 85,
     cluster_admin_roles: ["cluster-admin"],
   },
+  threshold_scope: {
+    certificate_expiry_days: "collection+evaluation",
+    pod_restart_threshold: "collection",
+    capacity_warning_percent: "evaluation",
+    cluster_admin_roles: "collection",
+  },
+  health_checks: [
+    { name: "cluster-reachable", title: "Cluster reachable", enabled: true,
+      severity: "critical", units: [], warn: {}, fail: {},
+      description: "Whether the collector could connect to the cluster at all." },
+    { name: "cpu-headroom", title: "CPU headroom", enabled: true, severity: "warning",
+      units: ["percent"], warn: { percent: 85 }, fail: { percent: 95 },
+      description: "How much of the fleet's allocatable CPU is already requested." },
+  ],
+  applications: {
+    source: "labels",
+    mapping: null,
+    platform_apps: [],
+  },
 };
 
-export const MANIFEST_AVAILABILITY = {
+export const MANIFEST_AVAILABILITY: ManifestAvailabilityResponse = {
   resources: ["clusterversion", "routes", "clusterserviceversions"],
   clusters: [
     {
       name: "ocp-prod-iad-02",
+      reachable: true,
+      status: "warning",
+      last_synced: "2026-09-20T20:58:02.911312+00:00",
       resources: {
-        clusterversion: { status: "collected", count: 1, duration_ms: 12, error: null },
-        routes: { status: "collected", count: 24, duration_ms: 61, error: null },
+        clusterversion: { status: "collected", count: 1, duration_ms: 12, error: null,
+          collected_at: "2026-09-20T20:58:02+00:00", cached: false, interval_seconds: 0 },
+        routes: { status: "collected", count: 24, duration_ms: 61, error: null,
+          collected_at: "2026-09-20T20:58:02+00:00", cached: false, interval_seconds: 300,
+          bytes: 81920, objects: 24, parse_ms: 4, requests: 1 },
         clusterserviceversions: { status: "forbidden", count: 0, duration_ms: 3,
-          error: "clusterserviceversions.operators.coreos.com is forbidden" },
+          error: "clusterserviceversions.operators.coreos.com is forbidden",
+          collected_at: "2026-09-20T20:58:02+00:00", cached: false, interval_seconds: 900 },
       },
     },
     {
       name: "ocp-stage-iad-01",
+      reachable: true,
+      status: "critical",
+      last_synced: "2026-09-20T20:57:40.221000+00:00",
       resources: {
-        clusterversion: { status: "collected", count: 1, duration_ms: 14, error: null },
+        clusterversion: { status: "collected", count: 1, duration_ms: 14, error: null,
+          collected_at: "2026-09-20T20:57:40+00:00", cached: false, interval_seconds: 0 },
         routes: { status: "unavailable", count: 0, duration_ms: 2,
-          error: "the server could not find the requested resource" },
+          error: "the server could not find the requested resource",
+          collected_at: "2026-09-20T20:57:40+00:00", cached: true, interval_seconds: 300 },
       },
     },
   ],
-  totals: { clusterversion: 2, routes: 24 },
+  totals: {
+    clusterversion: { collected: 2 },
+    routes: { collected: 1, unavailable: 1 },
+    clusterserviceversions: { forbidden: 1 },
+  },
 };
 
-export const COLLECTOR_TIMINGS = {
+export const COLLECTOR_TIMINGS: CollectorTimingsResponse = {
   stages: ["fetch_ms", "parse_ms", "assemble_ms", "health_ms", "persist_ms"],
   fleet: {
     clusters: 2,
@@ -230,7 +288,7 @@ export const COLLECTOR_TIMINGS = {
 // Three tables is enough for every builder rule: `clusters` is the join target,
 // `pod_issues` carries a cluster_name so the join is offered, and `hubs` does
 // not so it is refused.
-export const QUERY_SCHEMA = {
+export const QUERY_SCHEMA: QuerySchemaResponse = {
   tables: [
     {
       name: "clusters",
@@ -292,7 +350,7 @@ export const QUERY_SCHEMA = {
 };
 
 // A result in the wire shape POST /api/query/sql answers with.
-export const queryResult = (over = {}) => ({
+export const queryResult = (over: Partial<QueryResult> = {}): QueryResult => ({
   columns: ["name", "overall_status", "health_score"],
   column_types: ["VARCHAR", "VARCHAR", "INTEGER"],
   rows: [

@@ -1,12 +1,20 @@
 // One cluster document, as serialize.cluster_detail builds it: the summary row
 // plus every detail section the ClusterDetail tabs read.
+import type {
+  CertificatesResponse,
+  ClusterDetail,
+  ClusterResourcesResponse,
+  ClusterTimelineResponse,
+  ClusterWorkloadsResponse,
+  EventsResponse,
+} from "../../api/types";
 import { CLUSTERS } from "./fleet";
 
 const summary = CLUSTERS[1];      // ocp-prod-iad-02: warning, so the tabs have something to say
 
 export const CLUSTER_NAME = summary.name;
 
-export const CLUSTER_DETAIL = {
+export const CLUSTER_DETAIL: ClusterDetail = {
   ...summary,
   cluster_id: "7f3c1d2e-6b41-4f9a-9a1e-2c8e5b0d7a11",
   infrastructure_name: "ocp-prod-iad-02-x9f2c",
@@ -195,7 +203,7 @@ export const CLUSTER_DETAIL = {
   ],
 };
 
-export const CLUSTER_TIMELINE = {
+export const CLUSTER_TIMELINE: ClusterTimelineResponse = {
   cluster: CLUSTER_NAME,
   snapshots: [
     { at: "2026-09-20T18:00:00+00:00", resolution: "hour", samples: 12, health_score: 91,
@@ -207,7 +215,7 @@ export const CLUSTER_TIMELINE = {
   ],
 };
 
-export const CLUSTER_WORKLOADS = {
+export const CLUSTER_WORKLOADS: ClusterWorkloadsResponse = {
   cluster: CLUSTER_NAME,
   count: 2,
   workloads: [
@@ -269,9 +277,8 @@ export const CLUSTER_WORKLOADS = {
   ],
 };
 
-export const CLUSTER_RESOURCES = {
+export const CLUSTER_RESOURCES: ClusterResourcesResponse = {
   cluster: CLUSTER_NAME,
-  kind: "routes",
   count: 2,
   resources: [
     {
@@ -293,7 +300,7 @@ export const CLUSTER_RESOURCES = {
   ],
 };
 
-export const CLUSTER_CERTIFICATES = {
+export const CLUSTER_CERTIFICATES: CertificatesResponse = {
   count: 1,
   within_days: 30,
   certificates: [
@@ -308,7 +315,7 @@ export const CLUSTER_CERTIFICATES = {
   ],
 };
 
-export const CLUSTER_EVENTS = {
+export const CLUSTER_EVENTS: EventsResponse = {
   count: 1,
   by_reason: { FailedScheduling: 1 },
   events: [

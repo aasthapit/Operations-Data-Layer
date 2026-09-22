@@ -189,7 +189,7 @@ test-patching: patching-venv
 	cd patching-service && .venv/bin/python -m pytest -q --cov=app --cov-report=term-missing --cov-report=xml
 
 test-dashboard:
-	cd dashboard && npm ci --no-audit --no-fund && npm test
+	cd dashboard && npm ci --no-audit --no-fund && npm run typecheck && npm test
 
 test-all: test-data-layer test-mcp test-patching test-dashboard
 

@@ -188,7 +188,9 @@ describe("runDashboard", () => {
 describe("the endpoint table", () => {
   // Every read the dashboard can make, and the URL it asks for. The urls are
   // what the SWR cache keys on, so a change here is a change to the cache.
-  const READS = [
+  // Each entry is [the call, the url it must key on]; the annotation is what
+  // makes it a tuple rather than an array of unions, so `it.each` can spread it.
+  const READS: Array<[() => { url: string; load: () => Promise<unknown> }, string]> = [
     [() => api.overview(), "/api/health/overview"],
     [() => api.summary("region"), "/api/health/summary?group_by=region"],
     [() => api.clusters({ hub: "hub-east" }), "/api/clusters?hub=hub-east"],

@@ -94,7 +94,7 @@ jobs:
           path: patching-service/coverage.xml
 
   dashboard:
-    name: dashboard (tests, coverage >= 70%, build)
+    name: dashboard (typecheck, tests, coverage >= 70%, build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -107,6 +107,7 @@ jobs:
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
       - run: npm ci
+      - run: npm run typecheck
       - name: Tests with coverage gate
         run: npm test
       - run: npm run build

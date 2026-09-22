@@ -12,7 +12,74 @@
 // The API holds no session: the browser owns the thread and sends the whole of
 // it every time, so a reload or a second tab is not a special case.
 import { BASE } from "../api";
+import type { ApiError } from "../api";
 import { fixtureRun } from "./fixture";
+
+// --------------------------------------------------------------------------- //
+// the protocol
+// --------------------------------------------------------------------------- //
+
+/** One AG-UI event. The type is the discriminator and the rest of the fields
+ * depend on it (docs/nl-query.md, "The event stream"), so this stays an open
+ * record: `useAgentRun` is the one place that reads the per-type fields, and it
+ * is written to survive a field that is not there. */
+export interface AgentEvent {
+  type: string;
+  [field: string]: unknown;
+}
+
+/** One message of the thread, as AG-UI writes it (camelCase on the wire). */
+export interface AgentMessage {
+  id: string;
+  role: string;
+  content?: string | null;
+  toolCallId?: string | null;
+  [field: string]: unknown;
+}
+
+/** `{dashboard, params}` - the shared state the deltas apply to. The dashboard
+ * inside it is the same definition shape the dashboards API stores. */
+export interface AgentState {
+  dashboard: Record<string, unknown>;
+  params: Record<string, unknown>;
+}
+
+/** One RFC 6902 operation, of the three the agent emits. */
+export interface PatchOp {
+  op: string;
+  path: string;
+  value?: unknown;
+}
+
+/** The AG-UI RunAgentInput that goes on the wire (docs/nl-query.md). The API
+ * holds no session, so the whole thread goes on every turn. */
+export interface RunAgentBody {
+  threadId: string;
+  runId: string;
+  parentRunId: string | null;
+  state: AgentState | Record<string, unknown>;
+  messages: AgentMessage[];
+  tools: unknown[];
+  context: unknown[];
+  forwardedProps: Record<string, unknown>;
+}
+
+/** What `runAgent` is called with: the body's fields, plus how to reach the
+ * caller and how to stop. */
+export interface RunAgentInput {
+  messages: AgentMessage[];
+  /** Posted back verbatim; nothing here reads inside it. `AgentState` is the
+   * shape the Generate view holds, and a caller with only part of one (a test,
+   * a first turn) is not this file's problem. */
+  state: AgentState | Record<string, unknown>;
+  threadId: string;
+  runId: string;
+  parentRunId?: string | null;
+  signal?: AbortSignal;
+  onEvent: (event: AgentEvent) => void;
+  /** Run the scripted conversation instead of the API. */
+  fixture?: boolean;
+}
 
 // --------------------------------------------------------------------------- //
 // ids
@@ -21,7 +88,7 @@ let seq = 0;
 
 // Unique within this tab, which is all an id on this thread has to be: the
 // server echoes ours back and mints its own for the messages it makes.
-export function newId(prefix = "id") {
+export function newId(prefix = "id"): string {
   seq += 1;
   return `${prefix}_${Date.now().toString(36)}${seq.toString(36)}`;
 }
@@ -29,9 +96,9 @@ export function newId(prefix = "id") {
 // --------------------------------------------------------------------------- //
 // JSON Patch (RFC 6902, the three operations the agent emits)
 // --------------------------------------------------------------------------- //
-const unescape = (token) => token.replace(/~1/g, "/").replace(/~0/g, "~");
+const unescape = (token: string) => token.replace(/~1/g, "/").replace(/~0/g, "~");
 
-function parsePointer(path) {
+function parsePointer(path: unknown): string[] {
   if (path === "" || path == null) return [];
   const text = String(path);
   if (!text.startsWith("/")) throw new Error(`"${text}" is not a JSON pointer`);
@@ -40,8 +107,11 @@ function parsePointer(path) {
 
 // Applied to a copy along the path only: every node that did not change keeps
 // its identity, so React re-renders the panel that moved and not the grid.
-function applyOp(node, tokens, op, value, path) {
-  const bad = (why) => { throw new Error(`cannot ${op} "${path}": ${why}`); };
+// why: a patch walks an arbitrary JSON document, so the node under the pointer
+// is an array, an object or a leaf, and which one is exactly what the branches
+// below decide. `never` is the return of `bad`, which always throws.
+function applyOp(node: any, tokens: string[], op: string, value: unknown, path: string): any {
+  const bad = (why: string): never => { throw new Error(`cannot ${op} "${path}": ${why}`); };
   const [token, ...rest] = tokens;
 
   if (Array.isArray(node)) {
@@ -91,10 +161,14 @@ function applyOp(node, tokens, op, value, path) {
 
 // applyPatch(state, ops) -> a new state. Never mutates what it was given, and
 // throws rather than guessing when an op does not fit the shape it lands on.
-export function applyPatch(state, ops) {
-  let next = state;
-  for (const op of ops || []) {
-    if (!op || typeof op !== "object") throw new Error("a patch op must be an object");
+// `ops` is what a STATE_DELTA carried, so it is checked rather than trusted:
+// an entry that is not an operation, or an operation this build does not
+// implement, throws instead of being skipped.
+export function applyPatch<T>(state: T, ops: readonly unknown[] | null | undefined): T {
+  let next: any = state;
+  for (const raw of ops || []) {
+    if (!raw || typeof raw !== "object") throw new Error("a patch op must be an object");
+    const op = raw as PatchOp;
     const kind = op.op;
     if (kind !== "add" && kind !== "replace" && kind !== "remove") {
       throw new Error(`unsupported patch op "${kind}"`);
@@ -119,8 +193,8 @@ export function applyPatch(state, ops) {
 // (comments, event:, id:, retry:) is not ours to interpret. A frame can be split
 // across chunks and a chunk can hold several frames, so the tail of the buffer
 // is kept until its terminator arrives.
-function parseFrame(frame) {
-  const data = [];
+function parseFrame(frame: string): AgentEvent | null {
+  const data: string[] = [];
   let name = "";
   for (const raw of frame.split("\n")) {
     const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
@@ -134,7 +208,7 @@ function parseFrame(frame) {
   }
   if (!data.length) return null;
   try {
-    const event = JSON.parse(data.join("\n"));
+    const event = JSON.parse(data.join("\n")) as AgentEvent;
     if (!event || typeof event !== "object") return null;
     // The type rides in the payload; an SSE event: field naming the same thing
     // is accepted as a fallback so a stricter server is also understood.
@@ -148,8 +222,8 @@ function parseFrame(frame) {
   }
 }
 
-async function readStream(res, onEvent) {
-  const reader = res.body.getReader();
+async function readStream(res: Response, onEvent: (event: AgentEvent) => void): Promise<void> {
+  const reader = (res.body as ReadableStream<Uint8Array>).getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   for (;;) {
@@ -175,14 +249,14 @@ async function readStream(res, onEvent) {
 // The same error shape the rest of the app throws: the status is carried, so a
 // 404 (no such endpoint in this build) can be told from a 503 (no credentials)
 // without reading the message.
-async function streamError(res) {
+async function streamError(res: Response): Promise<ApiError> {
   const text = await res.text().catch(() => "");
-  let detail = null;
+  let detail: unknown = null;
   try { detail = text ? JSON.parse(text).detail : null; } catch { /* not JSON */ }
   const message = typeof detail === "string" ? detail
     : detail ? JSON.stringify(detail)
       : text || `${res.status} ${res.statusText}`;
-  const error = new Error(message);
+  const error: ApiError = new Error(message);
   error.status = res.status;
   error.detail = detail;
   return error;
@@ -193,8 +267,8 @@ async function streamError(res) {
 // the caller decides what a run means; this only decides what an event is.
 export async function runAgent({
   messages, state, threadId, runId, parentRunId = null, signal, onEvent, fixture = false,
-}) {
-  const body = {
+}: RunAgentInput): Promise<void> {
+  const body: RunAgentBody = {
     threadId,
     runId,
     parentRunId,

@@ -381,13 +381,14 @@ flowchart LR
       <section id="measured">
         <h2>Measured</h2>
         <p>Filled in as each phase lands.</p>
+        <p class="tnote">Phase 1 also typed the test fixtures against the response interfaces and found eleven places where a fixture misdescribed its endpoint (channel rows, blast-radius placements, manifest availability totals, storage classes); all eleven were fixed in the fixtures. The backend now marks the two free-form <span class="mono">params</span> bodies as open objects so the generated request types accept keys.</p>
         <div class="scroll">
           <table>
             <caption>Per phase</caption>
             <thead><tr><th>Phase</th><th class="num">Files converted</th><th class="num">tsc errors cleared</th><th class="num">Tests</th><th class="num">Coverage</th><th class="num">Bundle (gzip)</th><th class="num">Suite time</th></tr></thead>
             <tbody>
-              <tr><td>start</td><td class="num">0</td><td class="num">-</td><td class="num">896</td><td class="num">89.1% / 90.9%</td><td class="num">110 KB</td><td class="num">10 s</td></tr>
-              <tr><td>1</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td></tr>
+              <tr><td>start</td><td class="num">0</td><td class="num">-</td><td class="num">896</td><td class="num">89.1% / 90.9%</td><td class="num">119.7 KB</td><td class="num">9.2 s</td></tr>
+              <tr><td>1 · tooling, API types, pure modules</td><td class="num">29 moved, 7 added</td><td class="num">~80 in per-file batches</td><td class="num">898</td><td class="num">89.1% / 91.0%</td><td class="num">119.8 KB</td><td class="num">9.1 s</td></tr>
               <tr><td>2</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td></tr>
               <tr><td>3, 4, 5</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td></tr>
             </tbody>

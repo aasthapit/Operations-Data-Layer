@@ -1,5 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as cache from "./cache";
+import type { ApiError, Loadable } from "./api";
+
+/** What `useFetch` holds between renders. `key` is the request URL, which is
+ * also the cache key. */
+interface FetchState<T> {
+  key: string | null;
+  data: T | null;
+  error: ApiError | null;
+  loading: boolean;
+  stale: boolean;
+}
+
+export interface Fetched<T> {
+  data: T | null;
+  error: ApiError | null;
+  loading: boolean;
+  stale: boolean;
+  reload: () => void;
+}
 
 // Stale-while-revalidate data fetching.
 //
@@ -16,7 +35,7 @@ import * as cache from "./cache";
 // views asking for the same thing share one response and one in-flight fetch.
 // The fetch is aborted when the last hook waiting on it unmounts or moves to a
 // different key, so a burst of clicks cannot paint an old response over a new one.
-export function useFetch(fn, deps = []) {
+export function useFetch<T = unknown>(fn: () => Loadable<T>, deps: unknown[] = []): Fetched<T> {
   const fnRef = useRef(fn);
   fnRef.current = fn;
 
@@ -26,9 +45,9 @@ export function useFetch(fn, deps = []) {
   const req = useMemo(() => fnRef.current(), deps);
   const key = req && req.url ? req.url : null;
 
-  const [state, setState] = useState(() => fromCache(key));
+  const [state, setState] = useState<FetchState<T>>(() => fromCache<T>(key));
   const [nonce, setNonce] = useState(0);
-  if (state.key !== key) setState(fromCache(key));
+  if (state.key !== key) setState(fromCache<T>(key));
 
   const reqRef = useRef(req);
   reqRef.current = req;
@@ -39,8 +58,8 @@ export function useFetch(fn, deps = []) {
     setState((s) => (s.loading && s.key === key ? s : { ...s, key, loading: true, stale: s.data != null }));
     const { promise, release } = cache.request(key, (signal) => reqRef.current.load(signal));
     promise.then(
-      (data) => { if (live) setState({ key, data, error: null, loading: false, stale: false }); },
-      (error) => {
+      (data) => { if (live) setState({ key, data: data as T, error: null, loading: false, stale: false }); },
+      (error: ApiError) => {
         if (!live || cache.isAbort(error)) return;
         setState((s) => ({ ...s, key, error, loading: false, stale: false }));
       }
@@ -67,11 +86,11 @@ export function useFetch(fn, deps = []) {
   return { data: state.data, error: state.error, loading: state.loading, stale: state.stale, reload };
 }
 
-function fromCache(key) {
+function fromCache<T>(key: string | null): FetchState<T> {
   const cached = cache.peek(key);
   return {
     key,
-    data: cached === undefined ? null : cached,
+    data: cached === undefined ? null : (cached as T),
     error: null,
     loading: !!key,
     stale: cached !== undefined,

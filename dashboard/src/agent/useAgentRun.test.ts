@@ -1,6 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import useAgentRun from "./useAgentRun";
+import type { ActivityItem, TranscriptItem } from "./useAgentRun";
+import type { AgentEvent } from "./client";
 
 // The wire is scripted; everything else - the patch, the ids, the transcript,
 // the persistence - is the real thing.
@@ -10,10 +12,17 @@ vi.mock("./client", async (importOriginal) => ({
 }));
 
 const { runAgent } = await import("./client");
+const runAgentMock = vi.mocked(runAgent);
+
+// The transcript is a union, and these say which arm a test is looking at.
+const asActivity = (item: TranscriptItem | undefined) => item as ActivityItem;
+const resultOf = (item: TranscriptItem | undefined) =>
+  asActivity(item).result as Record<string, unknown>;
 
 // Play a list of events as one run, then resolve the way a finished stream does.
-function script(events, { fail = null, hang = false } = {}) {
-  runAgent.mockImplementation(async ({ onEvent, signal }) => {
+function script(events: AgentEvent[],
+  { fail = null, hang = false }: { fail?: Error | null; hang?: boolean } = {}) {
+  runAgentMock.mockImplementation(async ({ onEvent, signal }) => {
     for (const event of events) {
       if (signal?.aborted) return;
       onEvent(event);
@@ -41,9 +50,9 @@ const ADD_PANEL = [
     content: JSON.stringify({ row_count: 4, columns: ["name", "overall_status"] }) },
 ];
 
-beforeEach(() => { runAgent.mockReset(); });
+beforeEach(() => { runAgentMock.mockReset(); });
 
-const run = (options) => renderHook(() => useAgentRun(options));
+const run = (options?: { fixture?: boolean }) => renderHook(() => useAgentRun(options));
 
 describe("a first run", () => {
   it("starts empty, with a thread of its own and nothing said yet", () => {
@@ -63,7 +72,7 @@ describe("a first run", () => {
       { id: expect.stringMatching(/^msg_/), role: "user", content: "Review production" },
     ]);
     expect(result.current.transcript[0]).toMatchObject({ kind: "user", text: "Review production" });
-    expect(runAgent.mock.calls[0][0].messages).toHaveLength(1);
+    expect(runAgentMock.mock.calls[0][0].messages).toHaveLength(1);
   });
 
   it("ignores an empty question", async () => {
@@ -148,11 +157,11 @@ describe("the events", () => {
     script([SNAPSHOT, ...ADD_PANEL]);
     const { result } = run();
     await act(async () => { result.current.send("go"); });
-    const activity = result.current.transcript.find((i) => i.kind === "activity");
+    const activity = asActivity(result.current.transcript.find((i) => i.kind === "activity"));
     expect(activity.status).toBe("done");
     expect(activity.args).toEqual({ title: "Clusters on {{hub}}", w: 6 });
     expect(activity.label).toBe('Adding panel "Clusters on {{hub}}"');
-    expect(activity.result.row_count).toBe(4);
+    expect((activity.result as { row_count: number }).row_count).toBe(4);
   });
 
   it("still shows a call whose arguments the model stopped writing mid-way", async () => {
@@ -164,7 +173,7 @@ describe("the events", () => {
     ]);
     const { result } = run();
     await act(async () => { result.current.send("go"); });
-    const activity = result.current.transcript[1];
+    const activity = asActivity(result.current.transcript[1]);
     expect(activity.args).toBeNull();
     expect(activity.label).toBe('Updating panel "Pod issues"');
     expect(activity.result).toEqual({ text: "not json either" });
@@ -180,8 +189,8 @@ describe("the events", () => {
     ]);
     const { result } = run();
     await act(async () => { result.current.send("go"); });
-    expect(result.current.transcript[1].status).toBe("error");
-    expect(result.current.transcript[1].result.error).toBe("unknown table 'pods'");
+    expect(asActivity(result.current.transcript[1]).status).toBe("error");
+    expect(resultOf(result.current.transcript[1]).error).toBe("unknown table 'pods'");
   });
 
   it("names each tool call in the words a person would use", async () => {
@@ -196,7 +205,7 @@ describe("the events", () => {
     ]);
     const { result } = run();
     await act(async () => { result.current.send("go"); });
-    expect(result.current.transcript.slice(1).map((i) => i.label)).toEqual([
+    expect(result.current.transcript.slice(1).map((i) => asActivity(i).label)).toEqual([
       "Removing panel", 'Adding variable "hub"', "Previewing a query",
       "Setting the title", "something_new", "Adding panel",
     ]);
@@ -251,9 +260,10 @@ describe("stopping and failing", () => {
     await waitFor(() => expect(result.current.running).toBe(true));
     act(() => { result.current.stop(); });
     await waitFor(() => expect(result.current.running).toBe(false));
-    const activity = result.current.transcript.find((i) => i.kind === "activity");
+    const activity = asActivity(result.current.transcript.find((i) => i.kind === "activity"));
     expect(activity.status).toBe("error");
-    expect(activity.result.error).toBe("The run stopped before this finished.");
+    expect((activity.result as { error: string }).error)
+      .toBe("The run stopped before this finished.");
     expect(result.current.transcript.at(-1)).toMatchObject({ text: "Stopped.", tone: "muted" });
   });
 

@@ -8,7 +8,7 @@ The suites stand in fakes for all of them, which is what lets the coverage gates
 
 | Workflow | File | Runs | What it gates |
 |---|---|---|---|
-| CI | `.github/workflows/ci.yml` | every push, every PR | lint, the four test suites with their coverage gates, the dashboard build, both container images built and scanned |
+| CI | `.github/workflows/ci.yml` | every push, every PR | lint, the dashboard type check, the four test suites with their coverage gates, the dashboard build, both container images built and scanned |
 | Security | `.github/workflows/security.yml` | every push, every PR, Mondays, on demand | `scripts/scan.sh all`: SAST, SCA, secrets, IaC (see [security-scanning.md](security-scanning.md)) |
 | CodeQL | `.github/workflows/codeql.yml` | pushes to `main` and `feat/**`, PRs to `main`, Mondays | GitHub's semantic analysis for Python and JavaScript |
 | Dependabot | `.github/dependabot.yml` | weekly | dependency update PRs for pip, npm, Docker bases and the actions themselves |
@@ -22,7 +22,7 @@ Findings from the scanners and from CodeQL land in the repository's Security tab
 | `data-layer` | `app` >= 70% lines | `data-layer/.coveragerc` | `make test-data-layer` |
 | `mcp-server` | `server` >= 70% | `mcp-server/.coveragerc` | `make test-mcp` |
 | `patching-service` | `app` >= 70% | `patching-service/.coveragerc` | `make test-patching` |
-| `dashboard` | statements and lines >= 70% | the `test.coverage.thresholds` block of `dashboard/vite.config.js` | `make test-dashboard` |
+| `dashboard` | statements and lines >= 70% | the `test.coverage.thresholds` block of `dashboard/vite.config.ts` | `make test-dashboard` |
 
 Seventy is the floor, not the target: the data layer runs well above it, and a change that drops a component below the floor fails the build rather than lowering the bar.
 To raise a gate, change the number in that component's config; to see what is uncovered, read the `term-missing` output the command prints or open `htmlcov/index.html` (Python) and `dashboard/coverage/index.html` (dashboard).
@@ -35,6 +35,11 @@ To raise a gate, change the number in that component's config; to see what is un
 - The patching service's database: SQLAlchemy models on an in-memory database.
 - Models: the `set_generator` and `set_model` seams (scripted answers) and a fake Ollama session; the Anthropic SDK is exercised against a fake client, never the network.
 - The dashboard: `vitest` with `jsdom`, `@testing-library/react`, and `vi.mock` of the `api` module returning fixtures shaped like the real endpoints.
+
+## The type check
+
+The dashboard runs `npm run typecheck` (`tsc --noEmit`) before its tests, in CI and in `make test-dashboard`, so a shape mismatch at the API boundary is a build failure rather than a runtime surprise ([ADR-0005](adr/0005-dashboard-typescript-and-mui.md)).
+Two tests keep the types honest either side of that boundary: `data-layer/tests/test_openapi_export.py` asserts the committed `data-layer/openapi.json` still matches `app.openapi()`, and `dashboard/src/api/schema.test.ts` asserts the generated `src/api/schema.ts` still matches that document.
 
 ## Running it locally
 

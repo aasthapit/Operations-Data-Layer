@@ -2,8 +2,26 @@
 // Each carries at least one row that is not healthy, because the interesting
 // column in every one of these tables is the status column.
 
-export const APPLICATIONS = {
+import type {
+  ApplicationDetail,
+  ApplicationsResponse,
+  CertificatesResponse,
+  ClusterAdminsResponse,
+  EventsResponse,
+  ImagesResponse,
+  MachineConfigPoolsResponse,
+  OlmOperatorsResponse,
+  PodIssuesResponse,
+  QuotasResponse,
+  ReferencesResponse,
+  RoutesResponse,
+  StorageResponse,
+} from "../../api/types";
+
+export const APPLICATIONS: ApplicationsResponse = {
   count: 3,
+  total: 3,
+  offset: 0,
   source: "labels",
   teams: ["payments", "retail"],
   applications: [
@@ -16,6 +34,7 @@ export const APPLICATIONS = {
       cluster_count: 2,
       clusters: ["ocp-prod-iad-02", "ocp-stage-iad-01"],
       hubs: ["hub-east"],
+      regions: ["us-east-1"],
       environments: ["prod", "stage"],
       namespace_environments: ["prod", "stage"],
       workloads: 9,
@@ -34,6 +53,7 @@ export const APPLICATIONS = {
       cluster_count: 1,
       clusters: ["ocp-prod-iad-01"],
       hubs: ["hub-east"],
+      regions: ["us-east-1"],
       environments: ["prod"],
       namespace_environments: ["prod"],
       workloads: 4,
@@ -52,6 +72,7 @@ export const APPLICATIONS = {
       cluster_count: 4,
       clusters: ["ocp-prod-iad-01", "ocp-prod-sjc-01"],
       hubs: ["hub-east", "hub-west"],
+      regions: ["us-east-1", "us-west-2"],
       environments: [],
       namespace_environments: [],
       workloads: 3,
@@ -64,34 +85,100 @@ export const APPLICATIONS = {
   ],
 };
 
-export const APPLICATION_DETAIL = {
+export const APPLICATION_DETAIL: ApplicationDetail = {
   app: "checkout",
   team: "payments",
   tier: "critical",
   assigned: true,
   status: "warning",
   cluster_count: 2,
+  clusters: ["ocp-prod-iad-02", "ocp-stage-iad-01"],
+  hubs: ["hub-east"],
+  regions: ["us-east-1"],
+  environments: ["prod", "stage"],
   namespace_environments: ["prod", "stage"],
+  workloads: 9,
+  replicas_desired: 22,
+  replicas_ready: 19,
+  pod_issues: 3,
+  cpu_used_cores: 7.12,
+  memory_used_bytes: 15032385536,
   placements: [
     {
-      cluster: "ocp-prod-iad-02", hub: "hub-east", environment: "prod", ocp_version: "4.16.7",
+      cluster: "ocp-prod-iad-02", hub: "hub-east", region: "us-east-1",
+      environment: "prod", ocp_version: "4.16.7",
       cluster_status: "warning", namespace: "checkout-prod", namespace_environment: "prod",
       status: "warning", workloads: 6, replicas_desired: 14, replicas_ready: 12, pod_issues: 3,
       cpu_used_cores: 6.02, memory_used_bytes: 12884901888,
     },
     {
-      cluster: "ocp-stage-iad-01", hub: "hub-east", environment: "stage", ocp_version: "4.15.22",
+      cluster: "ocp-stage-iad-01", hub: "hub-east", region: "us-east-1",
+      environment: "stage", ocp_version: "4.15.22",
       cluster_status: "critical", namespace: "checkout-stage", namespace_environment: "stage",
       status: "healthy", workloads: 3, replicas_desired: 8, replicas_ready: 7, pod_issues: 0,
       cpu_used_cores: 1.1, memory_used_bytes: 2147483648,
     },
   ],
+  // serialize.namespace_dict, one row per placement.
+  namespaces: [
+    {
+      name: "checkout-prod",
+      class: "application",
+      app: "checkout",
+      team: "payments",
+      tier: "critical",
+      environment: "prod",
+      assigned: true,
+      ownership_source: "label",
+      status: "warning",
+      phase: "Active",
+      requester: "payments-bot",
+      display_name: "Checkout",
+      labels: { "app.kubernetes.io/part-of": "checkout" },
+      workloads: 6,
+      replicas_desired: 14,
+      replicas_ready: 12,
+      pods: { total: 16, running: 12, pending: 2, failed: 2, succeeded: 0, restarts: 31, issues: 3 },
+      cpu: { requests_cores: 8.5, limits_cores: 16, used_cores: 6.02 },
+      memory: { requests_bytes: 17179869184, limits_bytes: 34359738368, used_bytes: 12884901888 },
+      resource_counts: { routes: 2, services: 4, configmaps: 7, secrets: 5 },
+      images: ["quay.io/acme/checkout:1.9.2"],
+      created_at: "2026-04-11T11:02:00+00:00",
+    },
+    {
+      name: "checkout-stage",
+      class: "application",
+      app: "checkout",
+      team: "payments",
+      tier: "critical",
+      environment: "stage",
+      assigned: true,
+      ownership_source: "label",
+      status: "healthy",
+      phase: "Active",
+      requester: "payments-bot",
+      display_name: null,
+      labels: { "app.kubernetes.io/part-of": "checkout" },
+      workloads: 3,
+      replicas_desired: 8,
+      replicas_ready: 7,
+      pods: { total: 8, running: 7, pending: 1, failed: 0, succeeded: 0, restarts: 2, issues: 0 },
+      cpu: { requests_cores: 2, limits_cores: 4, used_cores: 1.1 },
+      memory: { requests_bytes: 4294967296, limits_bytes: 8589934592, used_bytes: 2147483648 },
+      resource_counts: { routes: 1, services: 2 },
+      images: ["quay.io/acme/checkout:1.9.2"],
+      created_at: "2026-04-11T11:04:00+00:00",
+    },
+  ],
   workloads_detail: [
     {
-      cluster: "ocp-prod-iad-02", namespace: "checkout-prod", kind: "Deployment",
-      name: "checkout-api", status: "degraded",
+      cluster: "ocp-prod-iad-02", namespace: "checkout-prod", class: "application",
+      kind: "Deployment", name: "checkout-api", status: "degraded",
       replicas: { desired: 6, ready: 4, available: 4, updated: 6 },
       images: ["quay.io/acme/checkout:1.9.2"],
+      service_account: "checkout",
+      strategy: "RollingUpdate",
+      created_at: "2026-05-02T08:00:00+00:00",
       containers: [{
         name: "api",
         env: [
@@ -104,7 +191,7 @@ export const APPLICATION_DETAIL = {
   ],
 };
 
-export const CERTIFICATES = {
+export const CERTIFICATES: CertificatesResponse = {
   count: 2,
   within_days: 30,
   certificates: [
@@ -126,23 +213,25 @@ export const CERTIFICATES = {
   ],
 };
 
-export const POD_ISSUES = {
+export const POD_ISSUES: PodIssuesResponse = {
   count: 2,
   by_reason: { CrashLoopBackOff: 1, Unschedulable: 1 },
   pod_issues: [
     { cluster: "ocp-prod-iad-02", namespace: "checkout-prod", class: "application",
-      name: "checkout-api-7d9f8b6c4-2xk9p", reason: "CrashLoopBackOff", restarts: 19,
+      name: "checkout-api-7d9f8b6c4-2xk9p", node: "ip-10-4-1-21.ec2.internal",
+      phase: "Running", reason: "CrashLoopBackOff", restarts: 19,
       containers_ready: "0/1", owner: "ReplicaSet/checkout-api-7d9f8b6c4",
       message: "back-off 5m0s restarting failed container=api",
       started_at: "2026-09-20T18:12:04+00:00" },
     { cluster: "ocp-stage-iad-01", namespace: "openshift-monitoring", class: "platform",
-      name: "prometheus-k8s-1", reason: "Unschedulable", restarts: 0,
+      name: "prometheus-k8s-1", node: null, phase: "Pending",
+      reason: "Unschedulable", restarts: 0,
       containers_ready: "0/3", owner: "StatefulSet/prometheus-k8s",
       message: "0/5 nodes are available", started_at: "2026-09-20T19:40:00+00:00" },
   ],
 };
 
-export const QUOTAS = {
+export const QUOTAS: QuotasResponse = {
   count: 1,
   quotas: [
     {
@@ -156,7 +245,7 @@ export const QUOTAS = {
   ],
 };
 
-export const OLM_OPERATORS = {
+export const OLM_OPERATORS: OlmOperatorsResponse = {
   operators: [
     {
       package: "elasticsearch-operator",
@@ -179,7 +268,7 @@ export const OLM_OPERATORS = {
   ],
 };
 
-export const MACHINE_CONFIG_POOLS = {
+export const MACHINE_CONFIG_POOLS: MachineConfigPoolsResponse = {
   count: 2,
   pools: [
     { cluster: "ocp-stage-iad-01", environment: "stage", pool: "worker", status: "degraded",
@@ -191,38 +280,48 @@ export const MACHINE_CONFIG_POOLS = {
   ],
 };
 
-export const STORAGE = {
+export const STORAGE: StorageResponse = {
   storage_classes: [
     { name: "gp3-csi", provisioners: ["ebs.csi.aws.com"], clusters: ["ocp-prod-iad-02"],
-      pvcs: 12, bound: 11, pending: 1, requested_bytes: 1099511627776 },
+      default: true, pvcs: 12, bound: 11, pending: 1, requested_bytes: 1099511627776 },
     { name: "efs-sc", provisioners: ["efs.csi.aws.com"], clusters: ["ocp-prod-iad-02",
-      "ocp-stage-iad-01"], pvcs: 4, bound: 4, pending: 0, requested_bytes: 107374182400 },
+      "ocp-stage-iad-01"], default: false, pvcs: 4, bound: 4, pending: 0,
+      requested_bytes: 107374182400 },
   ],
   pvcs: [
-    { cluster: "ocp-prod-iad-02", namespace: "checkout-prod", name: "checkout-data",
+    { cluster: "ocp-prod-iad-02", namespace: "checkout-prod", class: "application",
+      name: "checkout-data",
       status: "pending", storage_class: "gp3-csi", requested_bytes: 107374182400,
       capacity_bytes: null, volume: null, mounted_by: [] },
-    { cluster: "ocp-prod-iad-02", namespace: "checkout-prod", name: "checkout-logs",
+    { cluster: "ocp-prod-iad-02", namespace: "checkout-prod", class: "application",
+      name: "checkout-logs",
       status: "bound", storage_class: "gp3-csi", requested_bytes: 53687091200,
       capacity_bytes: 53687091200, volume: "pvc-3b1f", mounted_by: ["checkout-api"] },
   ],
+  pvs: [
+    { cluster: "ocp-prod-iad-02", name: "pvc-3b1f", status: "bound",
+      storage_class: "gp3-csi", capacity_bytes: 53687091200,
+      reclaim_policy: "Delete", claim: "checkout-prod/checkout-logs" },
+  ],
 };
 
-export const ROUTES = {
+export const ROUTES: RoutesResponse = {
   count: 2,
   routes: [
-    { cluster: "ocp-prod-iad-02", namespace: "checkout-prod", name: "checkout",
+    { cluster: "ocp-prod-iad-02", namespace: "checkout-prod", class: "application",
+      name: "checkout",
       host: "checkout.apps.ocp-prod-iad-02.acme.example", path: "/", service: "checkout",
       port: "8080", tls_termination: "edge", insecure_policy: "Redirect",
       status: "admitted", routers: ["default"] },
-    { cluster: "ocp-stage-iad-01", namespace: "checkout-stage", name: "checkout",
+    { cluster: "ocp-stage-iad-01", namespace: "checkout-stage", class: "application",
+      name: "checkout",
       host: "checkout.apps.ocp-stage-iad-01.acme.example", path: "", service: "checkout",
       port: null, tls_termination: null, insecure_policy: null,
       status: "rejected", routers: [] },
   ],
 };
 
-export const EVENTS = {
+export const EVENTS: EventsResponse = {
   count: 2,
   by_reason: { FailedScheduling: 1, BackOff: 1 },
   events: [
@@ -239,7 +338,7 @@ export const EVENTS = {
   ],
 };
 
-export const IMAGES = {
+export const IMAGES: ImagesResponse = {
   count: 2,
   group_by: "image",
   images: [
@@ -271,12 +370,12 @@ export const IMAGES = {
   ],
 };
 
-export const REFERENCES = {
+export const REFERENCES: ReferencesResponse = {
   count: 1,
-  kind: "Secret",
   references: [
     {
-      cluster: "ocp-prod-iad-02", namespace: "checkout-prod", name: "checkout-db",
+      cluster: "ocp-prod-iad-02", namespace: "checkout-prod", kind: "Secret",
+      name: "checkout-db",
       workloads: [
         { kind: "Deployment", name: "checkout-api", via: "env" },
         { kind: "CronJob", name: "checkout-reconcile", via: "envFrom" },
@@ -285,7 +384,7 @@ export const REFERENCES = {
   ],
 };
 
-export const CLUSTER_ADMINS = {
+export const CLUSTER_ADMINS: ClusterAdminsResponse = {
   count: 2,
   subjects: [
     { kind: "Group", name: "sre-oncall", namespace: null, role: "cluster-admin",

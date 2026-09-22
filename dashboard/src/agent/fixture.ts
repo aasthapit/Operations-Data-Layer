@@ -13,16 +13,21 @@
 // The SQL is the query plane's own: with a data layer behind the dev server the
 // panels fill with real rows, exactly as a generated dashboard would.
 
+import type { AgentEvent, AgentMessage, AgentState, RunAgentBody } from "./client";
+
+/** The thread the script builds up as it goes, handed back in MESSAGES_SNAPSHOT. */
+type Sink = AgentMessage[];
+
 const STEP = 26;        // ms between two deltas of the same message
 const BEAT = 220;       // ms between two events that are different thoughts
 
-const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+const sleep = (ms: number) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 // Word by word, the way a model streams: enough chunks that the view has to
 // handle a partial message, few enough that the run does not crawl.
-const chunks = (text, size = 4) => {
+const chunks = (text: string, size = 4): string[] => {
   const words = String(text).split(" ");
-  const out = [];
+  const out: string[] = [];
   for (let i = 0; i < words.length; i += size) {
     out.push((i ? " " : "") + words.slice(i, i + size).join(" "));
   }
@@ -31,8 +36,8 @@ const chunks = (text, size = 4) => {
 
 // Arguments arrive as partial JSON, which is the whole reason the view shows a
 // streaming title: the cut is deliberately mid-token.
-const slices = (text, size = 36) => {
-  const out = [];
+const slices = (text: string, size = 36): string[] => {
+  const out: string[] = [];
   for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
   return out;
 };
@@ -130,13 +135,13 @@ ORDER BY 3 DESC`,
   h: 3,
 };
 
-const emptyState = () => ({
+const emptyState = (): AgentState => ({
   dashboard: { id: "generated", title: "", description: "", variables: [], panels: [] },
   params: {},
 });
 
 // What add_panel answers with: the shape of the result, never the rows.
-const panelResult = (panel, columns, rowCount) => ({
+const panelResult = (panel: { id: string }, columns: string[], rowCount: number) => ({
   id: panel.id,
   columns,
   column_types: columns.map(() => "VARCHAR"),
@@ -149,7 +154,7 @@ const panelResult = (panel, columns, rowCount) => ({
 // --------------------------------------------------------------------------- //
 // Each of these is one message in the thread as well as a burst of events, so
 // the run collects what it emitted and hands it back in MESSAGES_SNAPSHOT.
-async function* narrate(messageId, text, sink) {
+async function* narrate(messageId: string, text: string, sink: Sink): AsyncGenerator<AgentEvent> {
   yield { type: "TEXT_MESSAGE_START", messageId, role: "assistant" };
   for (const delta of chunks(text)) {
     await sleep(STEP);
@@ -159,7 +164,8 @@ async function* narrate(messageId, text, sink) {
   sink.push({ id: messageId, role: "assistant", content: text });
 }
 
-async function* callTool(messageId, toolCallId, name, args, sink) {
+async function* callTool(messageId: string, toolCallId: string, name: string, args: unknown,
+  sink: Sink): AsyncGenerator<AgentEvent> {
   const encoded = JSON.stringify(args);
   yield { type: "TOOL_CALL_START", toolCallId, toolCallName: name, parentMessageId: messageId };
   for (const delta of slices(encoded)) {
@@ -174,7 +180,8 @@ async function* callTool(messageId, toolCallId, name, args, sink) {
   });
 }
 
-function toolResult(messageId, toolCallId, content, sink) {
+function toolResult(messageId: string, toolCallId: string, content: unknown,
+  sink: Sink): AgentEvent {
   const encoded = JSON.stringify(content);
   sink.push({ id: messageId, role: "tool", toolCallId, content: encoded });
   return { type: "TOOL_CALL_RESULT", messageId, toolCallId, content: encoded, role: "tool" };
@@ -185,10 +192,10 @@ function toolResult(messageId, toolCallId, content, sink) {
 // --------------------------------------------------------------------------- //
 // The first question builds the dashboard; anything after it edits what is
 // already there, which is the behaviour the ADR asks the experiment to prove.
-async function* build(input, emitted) {
+async function* build(input: RunAgentBody, emitted: Sink): AsyncGenerator<AgentEvent> {
   const { threadId, runId } = input;
   const started = Date.now();
-  const id = (suffix) => `fix_${runId}_${suffix}`;
+  const id = (suffix: string) => `fix_${runId}_${suffix}`;
 
   yield { type: "RUN_STARTED", threadId, runId };
   yield { type: "STATE_SNAPSHOT", snapshot: emptyState() };
@@ -283,14 +290,17 @@ async function* build(input, emitted) {
   };
 }
 
-async function* refine(input, emitted) {
+async function* refine(input: RunAgentBody, emitted: Sink): AsyncGenerator<AgentEvent> {
   const { threadId, runId } = input;
   const started = Date.now();
-  const id = (suffix) => `fix_${runId}_${suffix}`;
+  const id = (suffix: string) => `fix_${runId}_${suffix}`;
 
   // The follow-up edits the state the client is holding, so it has to find the
   // panel in that state rather than assume where the build left it.
-  const panels = input.state?.dashboard?.panels || [];
+  // why: the state is whatever the client is holding, and this reads one path
+  // into it defensively - an empty or older state falls through to panel 0.
+  const dashboard = (input.state as any)?.dashboard;
+  const panels: Array<{ id?: string }> = dashboard?.panels || [];
   const at = Math.max(0, panels.findIndex((p) => p.id === ISSUES_PANEL.id));
   const target = panels.length ? at : 0;
 
@@ -329,8 +339,9 @@ async function* refine(input, emitted) {
 
 // fixtureRun(input) -> the events of one run, as they would arrive on the wire.
 // A signal that aborts ends the generator, the way a closed stream would.
-export async function* fixtureRun(input, signal) {
-  const emitted = [];
+export async function* fixtureRun(input: RunAgentBody,
+  signal?: AbortSignal): AsyncGenerator<AgentEvent> {
+  const emitted: Sink = [];
   const asked = (input.messages || []).filter((m) => m.role === "user").length;
   const script = asked > 1 ? refine : build;
   try {
@@ -339,6 +350,6 @@ export async function* fixtureRun(input, signal) {
       yield event;
     }
   } catch (e) {
-    yield { type: "RUN_ERROR", message: String(e?.message || e), code: "fixture_failed" };
+    yield { type: "RUN_ERROR", message: String((e as Error)?.message || e), code: "fixture_failed" };
   }
 }
