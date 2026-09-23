@@ -1,9 +1,13 @@
+import { Box, Button, Chip, Stack } from "@mui/material";
+import CancelIcon from "@mui/icons-material/Cancel";
 import { api } from "../api";
 import type { ClusterSummary } from "../api/types";
 import { useFetch } from "../hooks";
 import { useQueryFilters } from "../router";
 import type { RouteApi } from "../router";
-import { Pill, ErrorBanner, FilterSelect, UsageBar, DataTable, SkeletonTable } from "../components";
+import {
+  Card, Muted, Pill, Tag, ToneText, ErrorBanner, FilterSelect, UsageBar, DataTable, SkeletonTable,
+} from "../components";
 import type { Column } from "../components";
 
 interface ClustersProps {
@@ -24,13 +28,13 @@ const COLUMNS: Column<ClusterSummary>[] = [
     filterValue: (c) => `${c.region} / ${c.datacenter}`,
     render: (c) => `${c.region} / ${c.datacenter}`,
   },
-  { key: "environment", label: "Env", render: (c) => <span className="tag">{c.environment}</span> },
+  { key: "environment", label: "Env", render: (c) => <Tag>{c.environment}</Tag> },
   {
     key: "ocp_version", label: "OCP version", className: "mono nowrap",
     render: (c) => (
       <>
         {c.ocp_version}
-        {c.upgrading && <span className="muted"> → {c.desired_version} ({c.upgrade_percent}%)</span>}
+        {c.upgrading && <Muted> → {c.desired_version} ({c.upgrade_percent}%)</Muted>}
       </>
     ),
   },
@@ -54,15 +58,15 @@ const COLUMNS: Column<ClusterSummary>[] = [
     key: "apps", label: "Apps",
     sortValue: (c) => c.applications ?? c.namespaces.application,
     filterValue: (c) => `${c.applications ?? c.namespaces.application}`,
-    render: (c) => <>{c.applications ?? c.namespaces.application} <span className="muted">/ {c.namespaces.application} ns</span></>,
+    render: (c) => <>{c.applications ?? c.namespaces.application} <Muted>/ {c.namespaces.application} ns</Muted></>,
   },
   {
     key: "pod_issues", label: "Pod issues",
-    render: (c) => (c.pod_issues ? <span style={{ color: "var(--warning)" }}>{c.pod_issues}</span> : <span className="muted">0</span>),
+    render: (c) => (c.pod_issues ? <ToneText tone="warning">{c.pod_issues}</ToneText> : <Muted>0</Muted>),
   },
   {
     key: "certs_expiring", label: "Certs",
-    render: (c) => (c.certs_expiring ? <span style={{ color: "var(--critical)" }}>{c.certs_expiring}</span> : <span className="muted">0</span>),
+    render: (c) => (c.certs_expiring ? <ToneText tone="critical">{c.certs_expiring}</ToneText> : <Muted>0</Muted>),
   },
   {
     key: "checks", label: "Checks", className: "nowrap",
@@ -73,9 +77,9 @@ const COLUMNS: Column<ClusterSummary>[] = [
     filterValue: (c) => `${c.checks.passed} passed ${c.checks.warned} warned ${c.checks.failed} failed`,
     render: (c) => (
       <>
-        <span style={{ color: "var(--healthy)" }}>{c.checks.passed}✓</span>{" "}
-        {c.checks.warned ? <span style={{ color: "var(--warning)" }}>{c.checks.warned}!</span> : null}{" "}
-        {c.checks.failed ? <span style={{ color: "var(--critical)" }}>{c.checks.failed}✕</span> : null}
+        <ToneText tone="healthy">{c.checks.passed}✓</ToneText>{" "}
+        {c.checks.warned ? <ToneText tone="warning">{c.checks.warned}!</ToneText> : null}{" "}
+        {c.checks.failed ? <ToneText tone="critical">{c.checks.failed}✕</ToneText> : null}
       </>
     ),
   },
@@ -94,23 +98,21 @@ export default function Clusters({ route, onOpen }: ClustersProps) {
   const opts = buildOptions(meta.data?.clusters || []);
 
   return (
-    <div>
-      <div className="filters">
+    <Box>
+      <Stack direction="row" spacing={1.25} useFlexGap sx={{ mb: 2, flexWrap: "wrap", alignItems: "center" }}>
         <FilterSelect label="Hub" value={filters.hub} options={opts.hub} onChange={(v) => set("hub", v)} />
         <FilterSelect label="Region" value={filters.region} options={opts.region} onChange={(v) => set("region", v)} />
         <FilterSelect label="Data center" value={filters.datacenter} options={opts.datacenter} onChange={(v) => set("datacenter", v)} />
         <FilterSelect label="Environment" value={filters.environment} options={opts.environment} onChange={(v) => set("environment", v)} />
         <FilterSelect label="Status" value={filters.status} options={["healthy", "warning", "critical", "unknown"]} onChange={(v) => set("status", v)} />
         <FilterSelect label="OCP version" value={filters.version} options={opts.version} onChange={(v) => set("version", v)} />
-        {filters.team && <Chip label="team" value={filters.team} onClear={() => set("team", "")} />}
-        {filters.upgrading && <Chip label="upgrading" value={filters.upgrading} onClear={() => set("upgrading", "")} />}
-        {anyFilter && (
-          <button className="btn" style={{ alignSelf: "flex-end" }} onClick={clear}>Clear</button>
-        )}
-      </div>
+        {filters.team && <FilterChip label="team" value={filters.team} onClear={() => set("team", "")} />}
+        {filters.upgrading && <FilterChip label="upgrading" value={filters.upgrading} onClear={() => set("upgrading", "")} />}
+        {anyFilter && <Button variant="outlined" color="inherit" onClick={clear}>Clear</Button>}
+      </Stack>
 
       {error && !data ? <ErrorBanner error={error} /> : (
-        <div className="card flush">
+        <Card flush>
           {!data ? <SkeletonTable columns={8} rows={10} /> : (
             <DataTable
               id="clusters"
@@ -123,24 +125,32 @@ export default function Clusters({ route, onOpen }: ClustersProps) {
               footer={`${data.count ?? data.clusters.length} clusters`}
             />
           )}
-        </div>
+        </Card>
       )}
-    </div>
+    </Box>
   );
 }
 
-interface ChipProps {
+interface FilterChipProps {
   label: string;
   value: string;
   onClear: () => void;
 }
 
-function Chip({ label, value, onClear }: ChipProps) {
+/** A filter that arrived from elsewhere - a click on the overview - and so has
+ * no dropdown of its own to clear it from. */
+function FilterChip({ label, value, onClear }: FilterChipProps) {
   return (
-    <span className="tag" style={{ alignSelf: "flex-end", padding: "5px 8px" }}>
-      {label}: {value}
-      <span className="link" style={{ marginLeft: 6 }} onClick={onClear} title={`Clear ${label}`}>×</span>
-    </span>
+    <Chip
+      variant="outlined"
+      label={`${label}: ${value}`}
+      onDelete={onClear}
+      // The icon names the action rather than the chip: the delete control is
+      // what a pointer and a keyboard both land on, and "Clear team" is what it
+      // does. `titleAccess` is what puts that name inside the SVG.
+      deleteIcon={<CancelIcon titleAccess={`Clear ${label}`} />}
+      sx={{ height: 30, borderRadius: "5px", fontWeight: 400 }}
+    />
   );
 }
 

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Manifest from "./Manifest";
@@ -8,7 +8,11 @@ import type { ApiMock } from "../test/apiMock";
 import {
   COLLECTOR_TIMINGS, MANIFEST, MANIFEST_AVAILABILITY,
 } from "../test/fixtures/platform";
-import { closestElement } from "../test/harness";
+import { closestElement, renderThemed } from "../test/harness";
+
+/** A data row of a table. The grid draws divs, so a row is what carries the
+ * role rather than a `<tr>`. */
+const GRID_ROW = '[role="row"]';
 
 vi.mock("../api", async () => {
   const { createApiMock } = await import("../test/apiMock");
@@ -31,14 +35,14 @@ beforeEach(() => {
 function open() {
   const onOpen = vi.fn();
   const user = userEvent.setup();
-  const view = render(<Manifest onOpen={onOpen} />);
+  const view = renderThemed(<Manifest onOpen={onOpen} />);
   return { onOpen, user, ...view };
 }
 
 // Three tables on this page carry a row per resource kind, so every lookup is
-// scoped to the card it belongs to.
-const card = async (heading: string) =>
-  closestElement(await screen.findByRole("heading", { name: heading }), ".card");
+// scoped to the card it belongs to. Each card is a landmark named after its
+// own heading, which is what makes that scoping a query rather than a walk.
+const card = (heading: string) => screen.findByRole("region", { name: heading });
 
 describe("what the manifest declares", () => {
   it("counts the resources that are switched on, and names the file they come from", async () => {
@@ -72,19 +76,21 @@ describe("what the manifest declares", () => {
   it("draws a row per declared resource, saying what each one is for", async () => {
     open();
     const row = closestElement(
-      within(await card("Resources")).getByRole("cell", { name: "routes" }), "tr");
+      within(await card("Resources")).getByRole("gridcell", { name: "routes" }), GRID_ROW);
     expect(within(row).getByText("Route")).toBeInTheDocument();
     expect(within(row).getByText("route.openshift.io/v1")).toBeInTheDocument();
     expect(within(row).getByText("namespaced · limit 2000")).toBeInTheDocument();
-    expect(within(row).getByText("enabled")).toHaveClass("chip", "ok");
+    expect(within(row).getByText("enabled").closest("[data-status]"))
+      .toHaveAttribute("data-status", "enabled");
     expect(within(row).getByText(/Which hostname each namespace serves/)).toBeInTheDocument();
   });
 
   it("says which resources are switched off", async () => {
     open();
     const row = closestElement(
-      within(await card("Resources")).getByRole("cell", { name: "clusterserviceversions" }), "tr");
-    expect(within(row).getByText("disabled")).toHaveClass("chip", "disabled");
+      within(await card("Resources")).getByRole("gridcell", { name: "clusterserviceversions" }), GRID_ROW);
+    expect(within(row).getByText("disabled").closest("[data-status]"))
+      .toHaveAttribute("data-status", "disabled");
   });
 
   it("shows nothing but the error when the manifest cannot be read", async () => {
@@ -99,7 +105,7 @@ describe("availability per cluster", () => {
   it("draws a column per cluster and a row per resource", async () => {
     open();
     const row = closestElement(
-      within(await card("Availability per cluster")).getByRole("cell", { name: "routes" }), "tr");
+      within(await card("Availability per cluster")).getByRole("gridcell", { name: "routes" }), GRID_ROW);
     expect(within(row).getByText("24")).toBeInTheDocument();
     expect(within(row).getByText("n/a")).toBeInTheDocument();
   });
@@ -107,7 +113,7 @@ describe("availability per cluster", () => {
   it("says 403 where RBAC denied the read, with the reason in the title", async () => {
     open();
     const row = closestElement(within(await card("Availability per cluster"))
-      .getByRole("cell", { name: "clusterserviceversions" }), "tr");
+      .getByRole("gridcell", { name: "clusterserviceversions" }), GRID_ROW);
     const denied = within(row).getByText("403");
     expect(denied).toHaveAttribute("title",
       "clusterserviceversions.operators.coreos.com is forbidden");
@@ -152,7 +158,7 @@ describe("where the collector's time goes", () => {
   it("draws a row per cluster with what its collection cost", async () => {
     open();
     const row = closestElement(
-      within(await card("Collector timing")).getByRole("cell", { name: "ocp-prod-sjc-01" }), "tr");
+      within(await card("Collector timing")).getByRole("gridcell", { name: "ocp-prod-sjc-01" }), GRID_ROW);
     expect(within(row).getByText("hub-west")).toBeInTheDocument();
     expect(within(row).getByText("901")).toBeInTheDocument();
     expect(within(row).getByText("21 / 9")).toBeInTheDocument();

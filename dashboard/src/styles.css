@@ -1,790 +1,95 @@
-:root {
-  --bg: #0f1419;
-  --bg-elev: #161b22;
-  --bg-elev-2: #1c232c;
-  --border: #2a313c;
-  --border-soft: #222831;
-  --text: #e6edf3;
-  --text-dim: #9aa7b4;
-  --text-faint: #6b7785;
-  --accent: #4f9cf9;
-  --accent-dim: #1f6feb;
+/* What is left of the stylesheet after ADR-0005, phase 3.
+ *
+ * Everything that decided how the app looks - the 31 custom properties, the
+ * cards, the tables, the filter bars, the dashboard grid, the generate page -
+ * is now in src/theme.ts and in the `sx` of the components that use it. Two
+ * things could not move, and they are the whole of this file:
+ *
+ *   1. The colour the page is painted before React mounts. MUI's CssBaseline
+ *      runs when the app renders, which is one frame too late to stop a reload
+ *      flashing the wrong background; the inline script in index.html sets
+ *      `data-theme` on <html> before the first paint and these two rules are
+ *      what it selects.
+ *
+ *   2. Five class names ResultTable.tsx still emits. That file belongs to
+ *      phase 4 and this phase must not edit it, so the rules it depends on stay
+ *      here until it moves to the theme; nothing else in the app uses them.
+ *      They go with it, and this file goes with them.
+ */
 
-  --healthy: #3fb950;
-  --healthy-bg: rgba(63, 185, 80, 0.14);
-  --warning: #d29922;
-  --warning-bg: rgba(210, 153, 34, 0.14);
-  --critical: #f85149;
-  --critical-bg: rgba(248, 81, 73, 0.14);
-  --unknown: #6b7785;
-  --unknown-bg: rgba(107, 119, 133, 0.14);
-
-  /* ----- chart series -----
-     Eight categorical slots for identity ("which hub is this line?"), in the
-     order they were validated against this card surface (#161b22, --bg-elev):
-     every adjacent pair clears the colour-blind separation floor, the chroma
-     floor and 3:1 contrast on the surface. The order is the safety mechanism,
-     so slots are taken in order and never reshuffled or generated past eight.
-     These are not the status colours: --healthy / --warning / --critical mean
-     good and bad, and a series that happens to sit in slot 6 means neither. */
-  --series-1: #3987e5;
-  --series-2: #d95926;
-  --series-3: #199e70;
-  --series-4: #c98500;
-  --series-5: #d55181;
-  --series-6: #008300;
-  --series-7: #9085e9;
-  --series-8: #e66767;
-  /* one series is not an identity problem: it gets the accent */
-  --chart-line: var(--accent);
-  --chart-grid: #242c37;                 /* one step off the card surface */
-
+/* ----- 1. the first paint ------------------------------------------------ */
+:root,
+:root[data-theme="dark"] {
   color-scheme: dark;
-
-  --radius: 10px;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-  --topbar-h: 58px;
+  --odl-bg: #0f1419;
+  --odl-text: #e6edf3;
+  --odl-faint: #6b7785;
+  --odl-accent: #4f9cf9;
+  --odl-healthy: #3fb950;
+  --odl-warning: #d29922;
+  --odl-critical: #f85149;
+  --odl-border: #2a313c;
+  --odl-surface: #1c232c;
 }
 
-* { box-sizing: border-box; }
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
-    Arial, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
+:root[data-theme="light"] {
+  color-scheme: light;
+  --odl-bg: #f4f6f9;
+  --odl-text: #151b23;
+  --odl-faint: #6b7785;
+  --odl-accent: #0b64d0;
+  --odl-healthy: #177d37;
+  --odl-warning: #8a6100;
+  --odl-critical: #c62828;
+  --odl-border: #d3dae2;
+  --odl-surface: #eef1f5;
 }
 
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-
-/* ----- layout ----- */
-.app { display: flex; flex-direction: column; min-height: 100vh; }
-
-.topbar {
-  display: flex; align-items: center; gap: 16px 24px; flex-wrap: wrap;
-  padding: 8px 24px; min-height: 58px;
-  background: var(--bg-elev);
-  border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; z-index: 10;
+html {
+  background: var(--odl-bg);
+  color: var(--odl-text);
 }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; }
-.brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent);
-  box-shadow: 0 0 10px var(--accent); }
-.brand small { color: var(--text-faint); font-weight: 400; }
 
-.nav { display: flex; gap: 4px; margin-left: 8px; flex-wrap: wrap; }
-.nav button {
-  background: none; border: none; color: var(--text-dim);
-  padding: 8px 14px; border-radius: 7px; cursor: pointer; font-size: 13.5px;
-  font-weight: 500; white-space: nowrap;
+/* ----- 2. what ResultTable.tsx still asks for ---------------------------- */
+/* A cell's value, by what it is: a reading that has to line up, something
+   secondary, something to click, a state, or a string too long for a column. */
+.mono {
+  font-family: "SF Mono", ui-monospace, "Menlo", monospace;
+  font-size: 12.5px;
 }
-.nav button:hover { background: var(--bg-elev-2); color: var(--text); }
-.nav button.active { background: var(--accent-dim); color: #fff; }
 
-.topbar .spacer { flex: 1; }
-.topbar .meta { color: var(--text-faint); font-size: 12.5px; text-align: right; }
-/* What happened to the last refresh, next to the button that asked for it:
-   "queued to a collector", or why it could not be. */
-.refresh-note { color: var(--text-faint); font-size: 12.5px; white-space: nowrap; }
+.muted { color: var(--odl-faint); }
 
-.btn {
-  background: var(--bg-elev-2); color: var(--text); border: 1px solid var(--border);
-  padding: 7px 13px; border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 500;
-}
-.btn:hover { border-color: var(--accent); }
-.btn.primary { background: var(--accent-dim); border-color: var(--accent-dim); color: #fff; }
-.btn:disabled { opacity: 0.5; cursor: default; }
-
-.content { padding: 24px; max-width: 1400px; margin: 0 auto; width: 100%; }
-
-/* ----- cards ----- */
-.card {
-  background: var(--bg-elev); border: 1px solid var(--border-soft);
-  border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow);
-}
-.card h3 { margin: 0 0 14px; font-size: 13px; text-transform: uppercase;
-  letter-spacing: 0.04em; color: var(--text-dim); font-weight: 600; }
-.grid { display: grid; gap: 16px; }
-.section-title { font-size: 18px; font-weight: 600; margin: 4px 0 16px; }
-.row { display: flex; gap: 16px; flex-wrap: wrap; }
-
-/* ----- stat tiles ----- */
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
-.stat {
-  background: var(--bg-elev); border: 1px solid var(--border-soft);
-  border-radius: var(--radius); padding: 16px 18px;
-}
-.stat .label { color: var(--text-dim); font-size: 12.5px; }
-.stat .value { font-size: 30px; font-weight: 700; margin-top: 4px; }
-.stat.healthy .value { color: var(--healthy); }
-.stat.warning .value { color: var(--warning); }
-.stat.critical .value { color: var(--critical); }
-.stat.unknown .value { color: var(--unknown); }
-.stat.accent .value { color: var(--accent); }
-
-/* ----- status pills & dots ----- */
-.pill {
-  display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px;
-  border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: capitalize;
-}
-.pill.healthy { background: var(--healthy-bg); color: var(--healthy); }
-.pill.warning { background: var(--warning-bg); color: var(--warning); }
-.pill.critical { background: var(--critical-bg); color: var(--critical); }
-.pill.unknown { background: var(--unknown-bg); color: var(--unknown); }
-
-.dot-s { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.dot-s.healthy { background: var(--healthy); }
-.dot-s.warning { background: var(--warning); }
-.dot-s.critical { background: var(--critical); }
-.dot-s.unknown { background: var(--unknown); }
-.dot-s.pass { background: var(--healthy); }
-.dot-s.warn { background: var(--warning); }
-.dot-s.fail { background: var(--critical); }
-
-/* ----- health stacked bar ----- */
-.hbar { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--bg-elev-2); }
-.hbar > span { display: block; height: 100%; }
-.hbar .healthy { background: var(--healthy); }
-.hbar .warning { background: var(--warning); }
-.hbar .critical { background: var(--critical); }
-.hbar .unknown { background: var(--unknown); }
-
-/* ----- tables ----- */
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th { text-align: left; color: var(--text-dim); font-weight: 600; font-size: 12px;
-  text-transform: uppercase; letter-spacing: 0.03em; padding: 9px 12px;
-  border-bottom: 1px solid var(--border); }
-td { padding: 10px 12px; border-bottom: 1px solid var(--border-soft); }
-tbody tr:hover { background: var(--bg-elev-2); }
-tr.clickable { cursor: pointer; }
-.mono { font-family: "SF Mono", ui-monospace, "Menlo", monospace; font-size: 12.5px; }
-
-/* ----- region/group cards ----- */
-.group-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
-.group-card { background: var(--bg-elev); border: 1px solid var(--border-soft);
-  border-radius: var(--radius); padding: 16px; }
-.group-card .gc-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.group-card .gc-name { font-weight: 600; font-size: 15px; }
-.group-card .gc-total { color: var(--text-faint); font-size: 12.5px; }
-.group-card .gc-counts { display: flex; gap: 14px; margin-top: 12px; font-size: 12.5px; color: var(--text-dim); }
-.group-card .gc-counts b { color: var(--text); }
-
-/* ----- filters ----- */
-.filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
-select, textarea,
-input[type="text"], input[type="number"], input[type="date"], input[type="search"] {
-  background: var(--bg-elev-2); border: 1px solid var(--border); color: var(--text);
-  padding: 7px 10px; border-radius: 7px; font-size: 13px; outline: none;
-  font-family: inherit;
-}
-select:focus, input:focus, textarea:focus { border-color: var(--accent); }
-input[type="checkbox"] { accent-color: var(--accent); }
-label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--text-dim); }
-
-.toggle-group { display: inline-flex; background: var(--bg-elev-2); border: 1px solid var(--border);
-  border-radius: 8px; padding: 2px; }
-.toggle-group button { background: none; border: none; color: var(--text-dim); padding: 6px 12px;
-  border-radius: 6px; cursor: pointer; font-size: 13px; }
-.toggle-group button.active { background: var(--accent-dim); color: #fff; }
-
-/* ----- checks ----- */
-.checklist { display: flex; flex-direction: column; gap: 2px; }
-.check { display: flex; align-items: center; gap: 10px; padding: 9px 6px;
-  border-bottom: 1px solid var(--border-soft); }
-.check .ttl { flex: 1; }
-.check .msg { color: var(--text-faint); font-size: 12.5px; }
-.check.fail .ttl { color: var(--critical); }
-.check.warn .ttl { color: var(--warning); }
-
-/* ----- misc ----- */
-.muted { color: var(--text-faint); }
-.dim { color: var(--text-dim); }
-.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 13px; }
-.kv .k { color: var(--text-dim); }
-.tag { background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 5px;
-  padding: 1px 7px; font-size: 11.5px; color: var(--text-dim); }
-.tag.critical { color: var(--critical); border-color: rgba(248,81,73,0.4); }
-.banner { padding: 10px 14px; border-radius: 8px; background: var(--critical-bg);
-  color: var(--critical); border: 1px solid rgba(248,81,73,0.3); margin-bottom: 16px; }
-.loading { color: var(--text-faint); padding: 40px; text-align: center; }
-
-/* ----- pending placeholders -----
-   A block where content is about to land. The sweep is decoration: with reduced
-   motion asked for it is a plain block, which still reads as "not here yet". */
-.skeleton {
-  display: inline-block; position: relative; overflow: hidden; vertical-align: middle;
-  background: var(--bg-elev-2); border-radius: 5px;
-}
-.skeleton::after {
-  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.055), transparent);
-  animation: skeleton-sweep 1.3s ease-in-out infinite;
-}
-@keyframes skeleton-sweep { to { transform: translateX(100%); } }
-@media (prefers-reduced-motion: reduce) {
-  .skeleton::after { animation: none; }
-}
-.skeleton-lines { display: flex; flex-direction: column; gap: 10px; padding: 14px 0; }
-.skeleton-table td { border-bottom: 1px solid var(--border-soft); }
-.back { color: var(--text-dim); cursor: pointer; font-size: 13px; margin-bottom: 10px; display: inline-block; }
-.back:hover { color: var(--text); }
-.spark { display: block; }
-.empty { color: var(--text-faint); padding: 28px; text-align: center; font-size: 13px; }
-.progress-mini { height: 5px; background: var(--bg-elev-2); border-radius: 3px; overflow: hidden; width: 90px; }
-.progress-mini > span { display: block; height: 100%; background: var(--accent); }
-
-/* ----- v0.2: inventory / insights additions ----- */
-.stat.clickable { cursor: pointer; }
-.stat.clickable:hover { border-color: var(--accent); }
-.stat .sub { color: var(--text-faint); font-size: 11.5px; margin-top: 2px; }
-.toggle-group .count { margin-left: 6px; font-size: 11px; color: var(--text-faint); }
-.toggle-group button.active .count { color: rgba(255,255,255,0.75); }
-
-.usage { display: inline-flex; align-items: center; gap: 8px; }
-.usage-bar { display: inline-block; height: 8px; border-radius: 4px; background: var(--bg-elev-2); overflow: hidden; }
-.usage-bar > span { display: block; height: 100%; }
-.usage-bar .healthy { background: var(--healthy); }
-.usage-bar .warning { background: var(--warning); }
-.usage-bar .critical { background: var(--critical); }
-.usage-pct { font-size: 12px; color: var(--text-dim); min-width: 32px; text-align: right; }
-
-.chip { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 11.5px; border: 1px solid var(--border);
-  background: var(--bg-elev-2); color: var(--text-dim); }
-.chip.ok, .chip.collected, .chip.healthy, .chip.admitted, .chip.bound, .chip.succeeded, .chip.updated, .chip.valid,
-.chip.active, .chip.atlatestknown { color: var(--healthy); border-color: rgba(63,185,80,0.35); }
-.chip.warning, .chip.updating, .chip.expiring, .chip.pending, .chip.progressing, .chip.paused, .chip.unavailable,
-.chip.suspended, .chip.upgrade-pending, .chip.inactive { color: var(--warning); border-color: rgba(210,153,34,0.35); }
-.chip.critical, .chip.degraded, .chip.expired, .chip.exhausted, .chip.failed, .chip.rejected, .chip.forbidden,
-.chip.error, .chip.lost { color: var(--critical); border-color: rgba(248,81,73,0.35); }
-.chip.disabled, .chip.unknown { color: var(--text-faint); }
-.chip.mono { font-family: "SF Mono", ui-monospace, "Menlo", monospace; }
-
-.matrix { overflow-x: auto; }
-.matrix table { font-size: 12px; }
-.matrix th.rot { writing-mode: vertical-rl; transform: rotate(180deg); text-transform: none; letter-spacing: 0;
-  padding: 8px 6px; white-space: nowrap; }
-.matrix td.cell { text-align: center; padding: 4px 6px; }
-.matrix td.cell .m { display: inline-block; min-width: 26px; padding: 1px 4px; border-radius: 4px; font-size: 11px;
-  font-family: "SF Mono", ui-monospace, "Menlo", monospace; }
-.matrix .m.collected { background: var(--healthy-bg); color: var(--healthy); }
-.matrix .m.unavailable { background: var(--unknown-bg); color: var(--text-faint); }
-.matrix .m.forbidden, .matrix .m.error { background: var(--critical-bg); color: var(--critical); }
-.matrix .m.disabled { color: var(--text-faint); }
-
-.section-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
-.section-head .desc { color: var(--text-faint); font-size: 12.5px; }
-.card.flush { padding: 0; }
-.card.flush > .card-head { padding: 18px 18px 0; }
-.card.flush > .card-head h3 { margin-bottom: 12px; }
-.card.flush > .card-head .desc { color: var(--text-faint); font-size: 12.5px; margin: -6px 0 12px; }
-td.wrap { white-space: normal; max-width: 420px; }
-td.nowrap, th.nowrap { white-space: nowrap; }
-.env-list { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
-.env-list .src { color: var(--text-faint); }
-.kv.wide { grid-template-columns: max-content 1fr max-content 1fr; }
-.link { color: var(--accent); cursor: pointer; }
+.link { color: var(--odl-accent); cursor: pointer; }
 .link:hover { text-decoration: underline; }
-.scroll { max-height: 520px; overflow: auto; }
-.search { min-width: 260px; }
-.hbar { position: relative; }
-.hbar .req-marker { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text-dim); opacity: 0.8; }
 
-/* ----- data table: sortable headers, per-column filters, sticky header ----- */
-.dt-wrap { --dt-top: var(--topbar-h); }
-/* inside the capped scroll container the header sticks to the container, not
-   to the page under the topbar */
-.dt-wrap .scroll { --dt-top: 0px; }
-
-.dt { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
-
-.dt-bar { display: flex; align-items: center; gap: 10px; padding: 0 12px 10px; }
-.dt .dt-head th { padding: 0; height: 36px; background: var(--bg-elev); position: sticky;
-  top: var(--dt-top); z-index: 3; }
-.dt .dt-filters td { padding: 0 8px 8px; background: var(--bg-elev); border-bottom: 1px solid var(--border);
-  position: sticky; z-index: 2; vertical-align: top; }
-.dt-dense .dt-head th { height: 30px; }
-.dt-dense td, .dt-dense .dt-sort { padding: 6px 10px; }
-
-.dt-sort {
-  display: flex; align-items: center; gap: 4px; width: 100%; height: 100%;
-  background: none; border: 0; margin: 0; padding: 9px 12px; cursor: pointer;
-  color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left;
-}
-.dt-sort:hover { color: var(--text); }
-.dt-sort.active { color: var(--text); }
-.dt-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
-.dt th.dt-right .dt-sort { justify-content: flex-end; }
-.dt th.dt-center .dt-sort { justify-content: center; }
-.dt .dt-static { display: inline-block; padding: 9px 12px; }
-.dt-arrow { color: var(--text-faint); font-size: 9px; line-height: 1; opacity: 0.7; flex: none; }
-.dt-arrow.active { color: var(--accent); opacity: 1; }
-
-.dt-wrap .dt-filter {
-  width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--border-soft);
-  color: var(--text); padding: 3px 6px; border-radius: 5px; font-size: 11.5px; height: 24px;
-  outline: none;
-}
-.dt-wrap select.dt-filter { padding: 2px 4px; }
-.dt-wrap .dt-filter:focus { border-color: var(--accent); }
-.dt-wrap .dt-filter::placeholder { color: var(--text-faint); }
-
-.dt-wrap .dt-search {
-  min-width: 220px; background: var(--bg-elev-2); border: 1px solid var(--border); color: var(--text);
-  padding: 5px 9px; border-radius: 7px; font-size: 12.5px; outline: none;
-}
-.dt-wrap .dt-search:focus { border-color: var(--accent); }
-.dt-count { color: var(--text-faint); font-size: 12px; }
-.dt-clear {
-  background: none; border: 1px solid var(--border); color: var(--text-dim);
-  padding: 4px 10px; border-radius: 7px; cursor: pointer; font-size: 12px;
-}
-.dt-clear:hover { border-color: var(--accent); color: var(--text); }
-
-.dt td { border-bottom: 1px solid var(--border-soft); }
-.dt td.dt-right, .dt th.dt-right { text-align: right; }
-.dt td.dt-center, .dt th.dt-center { text-align: center; }
-.dt tr.dt-expanded:hover { background: none; }
-.dt tr.dt-expanded > td { background: var(--bg); padding: 0 12px; }
-/* a table nested in an expanded row is short: a sticky header there would only
-   collide with the outer table's own sticky header */
-.dt-expanded .dt thead th, .dt-expanded .dt thead td { position: static; }
-.dt-foot { color: var(--text-faint); font-size: 12.5px; padding: 10px 12px 12px; }
-
-/* a page of rows at a time: a three-thousand row table renders in one frame,
-   and the rest is one click away */
-.dt-more { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--border-soft); }
-
-/* ----- query builder ----------------------------------------------------- */
-/* A left rail of controls that stays put, and the SQL plus the rows it
-   produced filling the rest of the width. */
-.q-layout { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; align-items: start; }
-.q-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
-/* the single column must be capped, or a wide result table sizes the
-   card to its own max-content and the page scrolls sideways */
-.q-rail {
-  padding: 0; position: sticky; top: calc(var(--topbar-h) + 24px);
-  max-height: calc(100vh - var(--topbar-h) - 48px); overflow: auto;
-}
-@media (max-width: 1080px) {
-  .q-layout { grid-template-columns: 1fr; }
-  .q-rail { position: static; max-height: none; }
+.q-trunc {
+  display: inline-block;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
-.q-sec { padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
-.q-sec:last-child { border-bottom: 0; }
-.q-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-.q-title { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em;
-  color: var(--text-dim); font-weight: 600; }
-.q-actions { display: flex; align-items: center; gap: 6px; flex: none; }
-.q-mini { background: none; border: 1px solid var(--border); color: var(--text-dim);
-  border-radius: 5px; padding: 1px 7px; font-size: 11px; cursor: pointer; }
-.q-mini:hover { border-color: var(--accent); color: var(--text); }
-.q-desc { color: var(--text-faint); font-size: 11.5px; margin: 6px 0 0; }
-
-.q-rail select,
-.q-rail input[type="text"], .q-rail input[type="number"], .q-rail input[type="date"] {
-  font-size: 12px; padding: 4px 7px; border-radius: 6px; max-width: 100%;
+.chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  border: 1px solid var(--odl-border);
+  background: var(--odl-surface);
+  color: var(--odl-faint);
 }
-.q-full { width: 100%; flex: 1 1 100%; min-width: 0; }
-.q-grow { flex: 1 1 110px; min-width: 0; }
-.q-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
-.q-row:last-child { margin-bottom: 0; }
-.q-x { background: none; border: 1px solid var(--border); color: var(--text-faint);
-  border-radius: 6px; width: 24px; height: 24px; line-height: 1; font-size: 14px;
-  cursor: pointer; flex: none; }
-.q-x:hover { border-color: var(--critical); color: var(--critical); }
-.q-add { background: none; border: 1px dashed var(--border); color: var(--text-dim);
-  border-radius: 6px; padding: 4px 10px; font-size: 11.5px; cursor: pointer;
-  width: 100%; margin-top: 4px; }
-.q-add:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
-.q-add:disabled { opacity: 0.4; cursor: default; }
-.q-filter, .q-agg { border-left: 2px solid var(--border); padding-left: 8px; margin-bottom: 10px; }
-
-.q-list { max-height: 260px; overflow: auto; margin: 0 -4px; padding: 0 4px; }
-.q-check { display: flex; align-items: center; gap: 7px; padding: 3px 2px; font-size: 12.5px;
-  cursor: pointer; }
-.q-check input { margin: 0; flex: none; }
-.q-check.q-off { opacity: 0.45; cursor: default; }
-.q-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.q-type { color: var(--text-faint); font-size: 10.5px; flex: none; }
-.q-subhead { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
-  color: var(--text-faint); margin: 10px 0 4px; }
-.toggle-group.q-tiny button { padding: 2px 8px; font-size: 11.5px; }
-
-.q-sql { margin: 0; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border-soft);
-  border-radius: 8px; white-space: pre-wrap; word-break: break-word; line-height: 1.55;
-  color: var(--text); overflow-x: auto; }
-.q-sql-edit { width: 100%; display: block; resize: vertical; }
-.q-problems { margin: 10px 0 0; padding-left: 18px; color: var(--warning); font-size: 12.5px; }
-.q-meta { margin-top: 12px; color: var(--text-faint); font-size: 12.5px; }
-.q-ran { margin-top: 8px; }
-.q-ran summary { cursor: pointer; color: var(--text-dim); }
-.q-ran summary:hover { color: var(--text); }
-.q-ran .q-sql { margin-top: 8px; }
-
-.q-answer { margin-top: 12px; font-size: 13px; }
-.q-assumptions { margin: 6px 0 0; padding-left: 18px; color: var(--text-dim); font-size: 12.5px; }
-.q-examples { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px;
-  font-size: 12px; }
-.q-example { cursor: pointer; font: inherit; font-size: 11.5px; }
-.q-example:hover { border-color: var(--accent); color: var(--text); }
-
-.q-trunc { display: inline-block; max-width: 360px; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; vertical-align: bottom; }
-
-/* ----- charts ------------------------------------------------------------ */
-/* The data is the only loud thing: hairline grid one step off the surface,
-   2px lines, markers only under the pointer, and everything that is text
-   wearing a text colour rather than a series colour. */
-.chart { padding: 2px 0 0; }
-.chart-plot { position: relative; }
-.chart-plot svg { display: block; width: 100%; touch-action: none; }
-.chart-plot svg:focus { outline: none; }
-.chart-plot svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
-
-.chart-grid line { stroke: var(--chart-grid); }
-.chart-axis text { fill: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
-.chart-axis text.chart-axis-text { fill: var(--text-dim); font-variant-numeric: normal; }
-.chart-axis text.chart-value { fill: var(--text-dim); }
-.chart-end-label { fill: var(--text-dim); font-size: 11px; }
-.chart-crosshair { stroke: var(--text-faint); opacity: 0.6; }
-/* the 2px ring is the surface showing through, so a dot stays legible where it
-   crosses its own line or another series */
-.chart-dot { stroke: var(--bg-elev); }
-.chart-bar { cursor: default; }
-
-.chart-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 10px; font-size: 12px;
-  color: var(--text-dim); }
-.chart-key { display: inline-flex; align-items: center; gap: 6px; }
-.chart-key-line { width: 12px; height: 2px; border-radius: 1px; flex: none; }
-.chart-key-box { width: 10px; height: 10px; border-radius: 3px; flex: none; }
-
-.chart-tip {
-  position: absolute; z-index: 4; pointer-events: none; min-width: 120px; max-width: 240px;
-  background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 8px;
-  padding: 7px 9px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45); font-size: 12px;
-  transition: opacity 0.12s ease;
+.chip.ok, .chip.collected, .chip.healthy, .chip.admitted, .chip.bound, .chip.succeeded,
+.chip.updated, .chip.valid, .chip.active, .chip.atlatestknown, .chip.enabled {
+  color: var(--odl-healthy);
 }
-.chart-tip-head { color: var(--text-dim); font-size: 11.5px; margin-bottom: 5px; }
-.chart-tip-row { display: flex; align-items: center; gap: 7px; line-height: 1.7; }
-.chart-tip-name { color: var(--text-dim); flex: 1; min-width: 0; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; }
-.chart-tip-value { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-.chart-note { color: var(--text-faint); font-size: 11.5px; margin-top: 8px; }
-
-@media (prefers-reduced-motion: reduce) {
-  .chart-tip { transition: none; }
+.chip.warning, .chip.updating, .chip.expiring, .chip.pending, .chip.progressing, .chip.paused,
+.chip.unavailable, .chip.suspended, .chip.upgrade-pending, .chip.inactive {
+  color: var(--odl-warning);
 }
-
-/* the control row: one row, above the chart it scopes, in ordinary form
-   controls styled to match the chart chrome rather than as chart marks */
-.chart-panel { padding: 2px 18px 16px; border-bottom: 1px solid var(--border-soft); }
-.chart-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
-  margin-bottom: 12px; }
-.chart-ctl { display: flex; align-items: center; gap: 6px; font-size: 11.5px;
-  color: var(--text-dim); }
-.chart-ctl select { font-size: 12px; padding: 3px 6px; border-radius: 6px; max-width: 220px; }
-.chart-ctl-check { font-size: 12px; color: var(--text-dim); }
-.chart-ys { display: flex; flex-wrap: wrap; gap: 4px; }
-.q-mini.active { border-color: var(--accent); color: var(--text); background: var(--bg-elev-2); }
-.chart-none { color: var(--text-faint); font-size: 12.5px; padding: 2px 0 4px; }
-
-/* ----- dashboards ---------------------------------------------------------
-   A dashboard is a twelve-column grid of cards over fixed rows, so a panel's
-   size is two small integers and its height is known before anything is
-   measured - which is what lets a chart inside one be sized without a layout
-   pass. Below the grid's breakpoint the columns collapse to one and each panel
-   keeps the height it asked for, so charts do not flatten on a phone. */
-.db-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
-.db-card { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
-.db-card-main {
-  background: none; border: 0; color: inherit; font: inherit; text-align: left;
-  padding: 16px 18px 12px; cursor: pointer; flex: 1; display: block;
-}
-.db-card-main:hover .db-card-title { color: var(--accent); }
-.db-card-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.db-card-title { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
-.db-card-desc { color: var(--text-dim); font-size: 12.5px; margin-top: 6px; }
-.db-card-foot {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 10px 18px; border-top: 1px solid var(--border-soft);
-  background: var(--bg-elev-2); font-size: 12px;
-}
-.db-card-vars { display: flex; gap: 4px; flex-wrap: wrap; }
-.db-card-foot .tag { font-size: 10.5px; padding: 0 5px; }
-.db-tag { margin-left: 8px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; }
-
-.db-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.db-snap { font-size: 12.5px; white-space: nowrap; }
-.db-title-input, .db-desc-input {
-  display: block; background: var(--bg); border: 1px solid var(--border);
-  color: var(--text); border-radius: 7px; padding: 6px 10px; width: min(560px, 100%);
-}
-.db-title-input { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
-.db-desc-input { font-size: 12.5px; }
-
-/* ----- the variables bar ----- */
-.db-vars { display: flex; align-items: flex-end; gap: 8px 18px; flex-wrap: wrap; padding: 12px 16px; }
-.db-var { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.db-var-label { color: var(--text-dim); font-size: 11.5px; text-transform: uppercase;
-  letter-spacing: 0.05em; font-weight: 600; }
-.db-vars select, .db-vars input {
-  background: var(--bg); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font-size: 13px; min-width: 180px; max-width: 280px;
-}
-.db-vars select[multiple] { padding: 4px; }
-.db-vars select:focus, .db-vars input:focus { border-color: var(--accent); outline: none; }
-.db-var.missing select, .db-var.missing input { border-color: var(--warning); }
-.db-req { color: var(--warning); margin-left: 3px; }
-.db-vars-spacer { flex: 1; }
-
-/* ----- the grid ----- */
-.db-grid {
-  display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-auto-rows: 150px; gap: 16px;
-}
-.db-panel {
-  grid-column: span var(--w, 6); grid-row: span var(--h, 2);
-  display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  padding: 0; overflow: hidden;
-}
-.db-panel-head {
-  display: flex; align-items: center; gap: 8px;
-  padding: 9px 8px 9px 14px; border-bottom: 1px solid var(--border-soft); flex: none;
-}
-.db-panel-title {
-  margin: 0; font-size: 13px; font-weight: 600; color: var(--text);
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
-}
-.db-info {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 14px; height: 14px; margin-left: 6px; border-radius: 50%;
-  border: 1px solid var(--border); color: var(--text-faint);
-  font-size: 9.5px; font-weight: 700; font-style: italic; cursor: help; vertical-align: 1px;
-}
-.db-panel-tools { display: flex; align-items: center; gap: 6px; flex: none; }
-.db-panel-meta { color: var(--text-faint); font-size: 11.5px; white-space: nowrap;
-  font-variant-numeric: tabular-nums; }
-.db-move { display: flex; gap: 2px; }
-.db-move .q-mini { padding: 1px 6px; line-height: 1.4; }
-
-.db-panel-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 4px 4px; }
-.db-panel.is-chart .db-panel-body { overflow: hidden; padding: 10px 14px 6px; }
-/* A panel the agent is in the middle of rewriting: the rows below are still the
-   old answer, so the card steps back rather than pretending to be current. */
-.db-panel.is-busy { opacity: 0.5; transition: opacity 120ms ease-out; }
-.db-panel .dt-wrap { --dt-top: 0px; }
-.db-panel .dt-bar { padding: 0 10px 8px; }
-.db-panel .dt .dt-head th { top: 0; }
-.db-panel-msg {
-  display: flex; align-items: center; justify-content: center; height: 100%;
-  color: var(--text-dim); font-size: 13px; padding: 16px; text-align: center;
-}
-.db-panel-error { padding: 12px 14px; color: var(--critical); font-size: 12.5px; }
-.db-panel-error .q-sql { margin-top: 8px; max-height: 140px; overflow: auto; color: var(--text-dim); }
-
-@media (max-width: 900px) {
-  .db-grid { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; }
-  .db-panel {
-    grid-column: 1 / -1; grid-row: auto;
-    height: calc(var(--h, 2) * 150px + (var(--h, 2) - 1) * 16px);
-  }
-}
-
-/* ----- menus, modals, drawers ----- */
-.db-menu { position: relative; }
-.db-menu-btn {
-  background: none; border: 1px solid transparent; color: var(--text-faint);
-  border-radius: 6px; padding: 1px 7px; cursor: pointer; font-size: 15px; line-height: 1.3;
-}
-.db-menu-btn:hover, .db-menu-btn[aria-expanded="true"] { border-color: var(--border); color: var(--text); }
-.db-menu-pop {
-  position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 160px;
-  background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 8px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); padding: 4px; display: flex; flex-direction: column;
-}
-.db-menu-pop button {
-  background: none; border: 0; color: var(--text); text-align: left; font: inherit;
-  font-size: 12.5px; padding: 6px 10px; border-radius: 6px; cursor: pointer;
-}
-.db-menu-pop button:hover { background: var(--accent-dim); color: #fff; }
-.db-menu-pop button.danger { color: var(--critical); }
-.db-menu-pop button.danger:hover { background: var(--critical); color: #fff; }
-
-.db-scrim {
-  position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, 0.5);
-  display: flex; align-items: center; justify-content: center; padding: 24px;
-}
-.db-scrim-right { align-items: stretch; justify-content: flex-end; padding: 0; }
-.db-modal { max-width: 100%; max-height: 90vh; overflow: auto; }
-.db-modal-foot, .db-drawer-foot {
-  display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;
-  padding-top: 14px; border-top: 1px solid var(--border-soft);
-}
-.db-drawer {
-  background: var(--bg-elev); border-left: 1px solid var(--border);
-  width: min(620px, 100%); display: flex; flex-direction: column; box-shadow: var(--shadow);
-}
-.db-drawer-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 14px 18px; border-bottom: 1px solid var(--border); flex: none;
-}
-.db-drawer-head h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--text-dim); font-weight: 600; }
-.db-drawer-body { flex: 1; overflow: auto; padding: 16px 18px; }
-.db-drawer-foot { margin: 0; padding: 12px 18px; border-top: 1px solid var(--border);
-  background: var(--bg-elev-2); flex: none; }
-.db-drawer-row { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
-.db-drawer-sec { border-top: 1px solid var(--border-soft); padding-top: 14px; margin-top: 4px; }
-.db-var-edit { border-left: 2px solid var(--border); padding-left: 12px; margin: 14px 0; }
-
-.db-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; min-width: 150px; }
-.db-field.wide { width: 100%; }
-.db-field-label { color: var(--text-dim); font-size: 11.5px; text-transform: uppercase;
-  letter-spacing: 0.05em; font-weight: 600; }
-.db-field input, .db-field select, .db-field textarea {
-  background: var(--bg); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font-size: 13px; width: 100%;
-}
-.db-field textarea.q-sql { padding: 10px 12px; }
-.db-field input:focus, .db-field select:focus, .db-field textarea:focus {
-  border-color: var(--accent); outline: none;
-}
-.db-field-hint { color: var(--text-faint); font-size: 11.5px; }
-.db-field-error { color: var(--critical); font-size: 11.5px; }
-.db-field-error ~ input, .db-field:has(.db-field-error) input { border-color: var(--critical); }
-
-.db-stepper { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
-.db-stepper-row { display: flex; align-items: center; gap: 6px; }
-.db-stepper-value { min-width: 54px; text-align: center; color: var(--text-dim); }
-.db-slot { color: var(--text-faint); font-style: italic; }
-/* A control with no label of its own sits level with the inputs beside it, not
-   with their labels. */
-.db-drawer-row > .q-x, .db-drawer-row > .q-check { margin-top: 20px; }
-.db-var-error { color: var(--critical); font-size: 11.5px; max-width: 280px; }
-/* A multi-select's chosen rows get the browser's own highlight, which on this
-   surface is a washed-out grey - the accent says "chosen" the way the rest of
-   the app does. */
-.db-vars select[multiple] option { padding: 2px 6px; border-radius: 4px; }
-.db-vars select[multiple] option:checked {
-  background: var(--accent-dim) linear-gradient(0deg, var(--accent-dim), var(--accent-dim));
-  color: #fff;
-}
-
-/* ----- generate (the agent's dashboard) ----------------------------------
-   A conversation that stays put on the left and the dashboard it is building
-   filling the rest, which below the breakpoint becomes the conversation first
-   and the grid under it. Everything on the right is the dashboards page's own
-   CSS - .db-grid, .db-panel, .db-vars - because a generated dashboard and a
-   saved one are the same thing; only the pieces that are particular to a run in
-   progress are named here. */
-.gen-layout { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 16px; align-items: start; }
-.gen-board { display: grid; gap: 16px; min-width: 0; }
-.gen-board-head { min-width: 0; }
-
-.gen-chat {
-  padding: 0; display: flex; flex-direction: column; overflow: hidden;
-  position: sticky; top: calc(var(--topbar-h) + 24px);
-  height: calc(100vh - var(--topbar-h) - 48px); min-height: 420px;
-}
-.gen-thread {
-  flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain;
-  padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
-}
-
-@media (max-width: 1080px) {
-  .gen-layout { grid-template-columns: minmax(0, 1fr); }
-  .gen-chat { position: static; height: auto; max-height: none; }
-  .gen-thread { max-height: 460px; }
-}
-
-/* ----- what was said ----- */
-.gen-said {
-  align-self: flex-end; max-width: 92%; margin: 2px 0;
-  background: var(--accent-dim); color: #fff; border-radius: 10px 10px 3px 10px;
-  padding: 7px 11px; font-size: 13px;
-}
-.gen-text { margin: 2px 0; font-size: 13px; color: var(--text); white-space: pre-wrap; }
-.gen-note { margin: 2px 0; font-size: 12.5px; color: var(--text-faint); }
-.gen-note.is-error { color: var(--critical); }
-.gen-cost {
-  margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border-soft);
-  color: var(--text-faint); font-size: 11.5px; font-variant-numeric: tabular-nums;
-}
-.gen-working { color: var(--text-dim); font-size: 12.5px; animation: gen-pulse 1.4s ease-in-out infinite; }
-
-/* ----- what was done -----
-   One tool call. The arguments are not shown: the SQL is on the panel it made,
-   and this line is meant to read as an action rather than as a function call. */
-.gen-act { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
-.gen-act-mark {
-  flex: none; width: 15px; height: 15px; margin-top: 1px; border-radius: 50%;
-  border: 1px solid var(--border); background: var(--bg-elev-2); color: var(--text-faint);
-  font-size: 9.5px; font-weight: 700; line-height: 13px; text-align: center;
-}
-.gen-act.is-streaming .gen-act-mark, .gen-act.is-running .gen-act-mark {
-  border-color: var(--accent); animation: gen-pulse 1.2s ease-in-out infinite;
-}
-.gen-act.is-done .gen-act-mark { border-color: var(--healthy); color: var(--healthy); }
-.gen-act.is-error .gen-act-mark { border-color: var(--critical); color: var(--critical); }
-.gen-act-body { min-width: 0; flex: 1; }
-.gen-act-label { font-size: 12.5px; color: var(--text-dim); }
-.gen-act.is-done .gen-act-label { color: var(--text); }
-.gen-act-meta {
-  color: var(--text-faint); font-size: 11.5px; margin-top: 1px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-/* The guard's refusals name every table it knows, which is three lines the user
-   does not need until they do: clamped here, whole in the tooltip. */
-.gen-act-error {
-  color: var(--critical); font-size: 11.5px; margin-top: 2px;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
-}
-
-/* ----- the empty state ----- */
-.gen-intro { color: var(--text-dim); font-size: 13px; }
-.gen-intro p { margin: 0 0 12px; }
-.gen-intro .q-title { margin-bottom: 8px; }
-.gen-example {
-  display: block; width: 100%; text-align: left; margin-bottom: 6px;
-  background: none; border: 1px dashed var(--border); color: var(--text-dim);
-  border-radius: 7px; padding: 7px 10px; font: inherit; font-size: 12.5px; cursor: pointer;
-}
-.gen-example:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
-.gen-example:disabled { opacity: 0.45; cursor: default; }
-
-/* ----- the composer ----- */
-.gen-composer {
-  flex: none; display: flex; align-items: flex-end; gap: 8px;
-  padding: 10px 12px; border-top: 1px solid var(--border); background: var(--bg-elev-2);
-}
-.gen-composer textarea {
-  flex: 1; min-width: 0; resize: none; overflow-y: auto; max-height: 160px;
-  padding: 8px 10px; line-height: 1.45; font-size: 13px;
-  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
-}
-.gen-composer .btn { flex: none; }
-
-/* ----- a panel that is still being written ----- */
-.db-panel.gen-pending { border: 1px dashed var(--border); background: var(--bg-elev); }
-.gen-pending .db-panel-head { border-bottom-style: dashed; }
-.gen-pending .db-panel-title { color: var(--text-dim); font-style: italic; }
-.gen-pending .db-panel-meta { animation: gen-pulse 1.4s ease-in-out infinite; }
-
-/* ----- a fact about the server, said calmly ----- */
-.gen-banner {
-  padding: 12px 15px; border-radius: 8px; background: var(--bg-elev);
-  border: 1px solid var(--border); color: var(--text-dim); font-size: 13px;
-}
-.gen-banner strong { color: var(--text); }
-.gen-banner .q-desc { margin-top: 8px; }
-
-@keyframes gen-pulse { 50% { opacity: 0.45; } }
-@media (prefers-reduced-motion: reduce) {
-  .gen-working, .gen-act-mark, .gen-pending .db-panel-meta { animation: none; }
+.chip.critical, .chip.degraded, .chip.expired, .chip.exhausted, .chip.failed, .chip.rejected,
+.chip.forbidden, .chip.error, .chip.lost {
+  color: var(--odl-critical);
 }

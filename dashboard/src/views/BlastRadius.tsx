@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import { Box, Button, Checkbox, FormControlLabel, Stack, TextField, Tooltip } from "@mui/material";
 import { api } from "../api";
 import type { ApiError } from "../api";
 import type { BlastRadiusResponse } from "../api/types";
 import { useFetch } from "../hooks";
 import type { Nav, RouteApi } from "../router";
-import { Pill, Stat, ErrorBanner, Tier, DataTable, SkeletonStats, SkeletonTable } from "../components";
+import {
+  Card, Empty, KeyLabel, Mono, Stat, StatGrid, Tag,
+  Pill, ErrorBanner, Tier, DataTable, SkeletonStats, SkeletonTable,
+} from "../components";
 import type { Column } from "../components";
 
 type ClusterRow = BlastRadiusResponse["clusters"][number];
@@ -36,7 +40,7 @@ interface BlastRadiusProps {
 const CLUSTER_COLUMNS: Column<ClusterRow>[] = [
   { key: "name", label: "Cluster", className: "mono", filter: "text" },
   { key: "hub", label: "Hub", className: "mono", filter: "select" },
-  { key: "environment", label: "Env", filter: "select", render: (c) => <span className="tag">{c.environment}</span> },
+  { key: "environment", label: "Env", filter: "select", render: (c) => <Tag>{c.environment}</Tag> },
   { key: "reason", label: "Match", className: "muted wrap", filter: "text" },
   { key: "status", label: "Status", filter: "select", render: (c) => <Pill status={c.status} /> },
 ];
@@ -48,7 +52,11 @@ const APP_COLUMNS: Column<AppRow>[] = [
   {
     key: "cluster_count", label: "Clusters",
     filterValue: (a) => a.clusters.map((c) => c.cluster).join(", "),
-    render: (a) => <span title={a.clusters.map((c) => c.cluster).join(", ")}>{a.cluster_count}</span>,
+    render: (a) => (
+      <Tooltip title={a.clusters.map((c) => c.cluster).join(", ")}>
+        <span>{a.cluster_count}</span>
+      </Tooltip>
+    ),
   },
 ];
 
@@ -81,6 +89,33 @@ function fromRoute(route: RouteApi): BlastQuery {
     olm_version: route.query.olm_version || "",
     image: route.query.image || "",
   };
+}
+
+interface PickerProps {
+  label: string;
+  value: string;
+  options: readonly string[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}
+
+/** One dropdown of the impact form. Native, like the filter bars: a short list
+ * of versions, six controls on one row. */
+function Picker({ label, value, options, onChange, disabled }: PickerProps) {
+  return (
+    <TextField
+      select
+      label={label}
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      slotProps={{ select: { native: true }, inputLabel: { shrink: true } }}
+      sx={{ minWidth: 150 }}
+    >
+      <option value="">Any</option>
+      {options.map((o) => <option key={o} value={o}>{o}</option>)}
+    </TextField>
+  );
 }
 
 export default function BlastRadius({ route, nav }: BlastRadiusProps) {
@@ -140,88 +175,87 @@ export default function BlastRadius({ route, nav }: BlastRadiusProps) {
     : [];
 
   return (
-    <div>
-      <div className="card" style={{ marginBottom: 20 }}>
-        <h3>Impact query</h3>
-        <p className="dim" style={{ marginTop: -6 }}>
-          Pick a bad OCP version, cluster operator, OLM operator, or container image. The data layer maps it to the
-          clusters carrying it, the applications (namespaces + teams) riding on top, and for images the exact workloads.
-        </p>
-        <div className="filters" style={{ alignItems: "flex-end", marginBottom: 0 }}>
-          <label className="fld">OCP version
-            <select value={q.ocp_version} onChange={(e) => set("ocp_version", e.target.value)}>
-              <option value="">Any</option>
-              {ocpVersionOpts.map((v) => <option key={v} value={v}>{v}</option>)}
-            </select>
-          </label>
-          <label className="fld">Cluster operator
-            <select value={q.operator} onChange={(e) => { set("operator", e.target.value); set("operator_version", ""); }}>
-              <option value="">Any</option>
-              {operatorNames.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-          </label>
-          <label className="fld">Operator version
-            <select value={q.operator_version} onChange={(e) => set("operator_version", e.target.value)} disabled={!q.operator}>
-              <option value="">Any</option>
-              {operatorVersionOpts.map((v) => <option key={v} value={v}>{v}</option>)}
-            </select>
-          </label>
-          <label className="fld" style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-            <input type="checkbox" checked={q.degraded_only} onChange={(e) => set("degraded_only", e.target.checked)} />
-            degraded only
-          </label>
-          <label className="fld">OLM operator
-            <select value={q.olm_operator} onChange={(e) => { set("olm_operator", e.target.value); set("olm_version", ""); }}>
-              <option value="">Any</option>
-              {olmPackages.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-          </label>
-          <label className="fld">OLM version
-            <select value={q.olm_version} onChange={(e) => set("olm_version", e.target.value)} disabled={!q.olm_operator}>
-              <option value="">Any</option>
-              {olmVersionOpts.map((v) => <option key={v} value={v}>{v}</option>)}
-            </select>
-          </label>
-          <label className="fld">Image (substring)
-            <input type="text" className="search" placeholder="e.g. pause:3.9 or quay.io/acme" value={q.image}
-              onChange={(e) => set("image", e.target.value)} />
-          </label>
-          <button className="btn primary" onClick={run} disabled={busy || !canRun}>
+    <Box>
+      <Card
+        title="Impact query"
+        description={"Pick a bad OCP version, cluster operator, OLM operator, or container image. The data layer maps it to the"
+          + " clusters carrying it, the applications (namespaces + teams) riding on top, and for images the exact workloads."}
+        sx={{ mb: 2.5 }}
+      >
+        <Stack direction="row" spacing={1.25} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+          <Picker label="OCP version" value={q.ocp_version} options={ocpVersionOpts}
+            onChange={(v) => set("ocp_version", v)} />
+          <Picker label="Cluster operator" value={q.operator} options={operatorNames}
+            onChange={(v) => { set("operator", v); set("operator_version", ""); }} />
+          <Picker label="Operator version" value={q.operator_version} options={operatorVersionOpts}
+            onChange={(v) => set("operator_version", v)} disabled={!q.operator} />
+          <FormControlLabel
+            control={(
+              <Checkbox
+                checked={q.degraded_only}
+                onChange={(e) => set("degraded_only", e.target.checked)}
+              />
+            )}
+            label="degraded only"
+          />
+          <Picker label="OLM operator" value={q.olm_operator} options={olmPackages}
+            onChange={(v) => { set("olm_operator", v); set("olm_version", ""); }} />
+          <Picker label="OLM version" value={q.olm_version} options={olmVersionOpts}
+            onChange={(v) => set("olm_version", v)} disabled={!q.olm_operator} />
+          <TextField
+            label="Image (substring)"
+            placeholder="e.g. pause:3.9 or quay.io/acme"
+            value={q.image}
+            onChange={(e) => set("image", e.target.value)}
+            slotProps={{ inputLabel: { shrink: true } }}
+            sx={{ minWidth: 240 }}
+          />
+          <Button variant="contained" onClick={run} disabled={busy || !canRun}>
             {busy ? "Querying…" : "Compute blast radius"}
-          </button>
-        </div>
-      </div>
+          </Button>
+        </Stack>
+      </Card>
 
       <ErrorBanner error={error} />
       {result ? (
         <Result result={result} nav={nav} />
       ) : busy ? (
-        <div className="grid" style={{ gap: 20 }}>
+        <Stack spacing={2.5}>
           <SkeletonStats count={4} />
-          <div className="card flush"><SkeletonTable columns={5} rows={6} /></div>
-        </div>
+          <Card flush><SkeletonTable columns={5} rows={6} /></Card>
+        </Stack>
       ) : (
-        <div className="empty">Run a query to see the impact.</div>
+        <Empty>Run a query to see the impact.</Empty>
       )}
-    </div>
+    </Box>
+  );
+}
+
+/** One column of the spread: a caption and the tallies under it. A list, so a
+ * screen reader announces how many entries there are before reading them. */
+function SpreadList({ label, children }: { label: string; children?: React.ReactNode }) {
+  return (
+    <Box>
+      <KeyLabel sx={{ display: "block", mb: 0.75 }}>{label}</KeyLabel>
+      <Box component="ul" aria-label={label} sx={{ listStyle: "none", m: 0, p: 0 }}>{children}</Box>
+    </Box>
   );
 }
 
 function Result({ result, nav }: { result: BlastRadiusResponse; nav: Nav }) {
   const s = result.summary;
   return (
-    <div className="grid" style={{ gap: 20 }}>
-      <div className="stats">
+    <Stack spacing={2.5}>
+      <StatGrid>
         <Stat label="Clusters impacted" value={s.clusters_impacted} kind="critical" />
         <Stat label="Applications" value={s.applications_impacted} kind="warning" />
         <Stat label="Critical apps" value={s.critical_applications} kind="critical" />
         <Stat label="Teams" value={s.teams_impacted} kind="accent" />
         {s.workloads_impacted > 0 && <Stat label="Workloads" value={s.workloads_impacted} kind="warning" />}
-      </div>
+      </StatGrid>
 
-      <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <div className="card flush">
-          <div className="card-head"><h3>Impacted clusters</h3></div>
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 2 }}>
+        <Card flush title="Impacted clusters">
           <DataTable
             id="blast.clusters"
             columns={CLUSTER_COLUMNS}
@@ -231,10 +265,9 @@ function Result({ result, nav }: { result: BlastRadiusResponse; nav: Nav }) {
             initialSort={{ key: "name", dir: "asc" }}
             empty="No clusters matched."
           />
-        </div>
+        </Card>
 
-        <div className="card flush">
-          <div className="card-head"><h3>Impacted applications</h3></div>
+        <Card flush title="Impacted applications">
           <DataTable
             id="blast.applications"
             columns={APP_COLUMNS}
@@ -244,12 +277,11 @@ function Result({ result, nav }: { result: BlastRadiusResponse; nav: Nav }) {
             initialSort={{ key: "app", dir: "asc" }}
             empty="No applications on matched clusters."
           />
-        </div>
-      </div>
+        </Card>
+      </Box>
 
       {result.workloads.length > 0 && (
-        <div className="card flush">
-          <div className="card-head"><h3>Impacted workloads</h3></div>
+        <Card flush title="Impacted workloads">
           <DataTable
             id="blast.workloads"
             columns={WORKLOAD_COLUMNS}
@@ -259,32 +291,30 @@ function Result({ result, nav }: { result: BlastRadiusResponse; nav: Nav }) {
             initialSort={{ key: "cluster", dir: "asc" }}
             empty="No workloads matched."
           />
-        </div>
+        </Card>
       )}
 
-      <div className="card">
-        <h3>Spread</h3>
-        <div className="row">
-          <div>
-            <div className="dim" style={{ marginBottom: 6 }}>By environment</div>
+      <Card title="Spread">
+        <Box sx={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          <SpreadList label="By environment">
             {Object.entries(s.by_environment).map(([k, v]) => (
-              <div key={k}><span className="tag">{k}</span> {v}</div>
+              <Box component="li" key={k}><Tag>{k}</Tag> {v}</Box>
             ))}
-          </div>
-          <div>
-            <div className="dim" style={{ marginBottom: 6 }}>By hub</div>
+          </SpreadList>
+          <SpreadList label="By hub">
             {Object.entries(s.by_hub || s.by_region).map(([k, v]) => (
-              <div key={k}><span className="tag">{k}</span> {v}</div>
+              <Box component="li" key={k}><Tag>{k}</Tag> {v}</Box>
             ))}
-          </div>
+          </SpreadList>
           {s.platform_namespaces_impacted.length > 0 && (
-            <div>
-              <div className="dim" style={{ marginBottom: 6 }}>Platform namespaces</div>
-              {s.platform_namespaces_impacted.map((n) => <div key={n} className="mono">{n}</div>)}
-            </div>
+            <SpreadList label="Platform namespaces">
+              {s.platform_namespaces_impacted.map((n) => (
+                <Box component="li" key={n}><Mono>{n}</Mono></Box>
+              ))}
+            </SpreadList>
           )}
-        </div>
-      </div>
-    </div>
+        </Box>
+      </Card>
+    </Stack>
   );
 }

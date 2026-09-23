@@ -11,6 +11,10 @@ import {
   TOP_NODES,
 } from "../test/fixtures/platform";
 
+/** A data row of a table. The grid draws divs, so a row is what carries the
+ * role rather than a `<tr>`. */
+const GRID_ROW = '[role="row"]';
+
 vi.mock("../api", async () => {
   const { createApiMock } = await import("../test/apiMock");
   return { api: createApiMock(), BASE: "" };
@@ -112,7 +116,7 @@ describe("the top lists", () => {
 describe("capacity headroom", () => {
   it("shows used against allocatable, and the headroom left, per cluster", async () => {
     open();
-    const row = closestElement(await screen.findByText("ocp-prod-iad-02"), "tr");
+    const row = closestElement(await screen.findByText("ocp-prod-iad-02"), GRID_ROW);
     expect(within(row).getByText("80.9")).toBeInTheDocument();
     expect(within(row).getByText(/\/ 91.5 · 88.4%/)).toBeInTheDocument();
     expect(within(row).getByText("10.6")).toBeInTheDocument();
@@ -124,25 +128,25 @@ describe("capacity headroom", () => {
     open();
     await user.click(await screen.findByRole("button", { name: "Hub" }));
     expect(currentUrl()).toBe("/utilization?group=hub");
-    expect(await screen.findByRole("cell", { name: "hub-east" })).toBeInTheDocument();
+    expect(await screen.findByRole("gridcell", { name: "hub-east" })).toBeInTheDocument();
     expect(screen.getByText("(3 w/ metrics)")).toBeInTheDocument();
   });
 
   it("opens a cluster from the capacity table, but a hub is not a page", async () => {
     const user = userEvent.setup();
     const { onOpen } = open();
-    await user.click(await screen.findByRole("cell", { name: "ocp-prod-sjc-01" }));
+    await user.click(await screen.findByRole("gridcell", { name: "ocp-prod-sjc-01" }));
     expect(onOpen).toHaveBeenCalledWith("ocp-prod-sjc-01");
 
     onOpen.mockClear();
     await user.click(screen.getByRole("button", { name: "Hub" }));
-    await user.click(await screen.findByRole("cell", { name: "hub-west" }));
+    await user.click(await screen.findByRole("gridcell", { name: "hub-west" }));
     expect(onOpen).not.toHaveBeenCalled();
   });
 
   it("opens on the grouping the link carried, falling back for one it does not know", async () => {
     open("/utilization?group=galaxy");
-    await screen.findByRole("cell", { name: "ocp-prod-iad-02" });
+    await screen.findByRole("gridcell", { name: "ocp-prod-iad-02" });
     await waitFor(() => expect(api.capacity).toHaveBeenCalledWith("cluster"));
   });
 

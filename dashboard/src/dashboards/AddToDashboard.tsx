@@ -9,8 +9,10 @@
 // A built-in cannot be written to, so choosing one clones it first: the panel
 // lands on the copy, which is then the user's.
 import { useMemo, useState } from "react";
+import { Alert, Box, Button, TextField, Typography } from "@mui/material";
 import { api } from "../api";
 import { invalidate } from "../cache";
+import { MONO_FONT } from "../components";
 import { useFetch } from "../hooks";
 import { Field, Modal, Stepper } from "./ui";
 import {
@@ -95,29 +97,35 @@ export default function AddToDashboard({
       width={520}
       onClose={onClose}
       footer={list.error ? (
-        <button type="button" className="btn" onClick={onClose}>Close</button>
+        <Button variant="outlined" color="inherit" onClick={onClose}>Close</Button>
       ) : (
         <>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn primary" disabled={!ready || busy} onClick={add}>
+          <Button variant="outlined" color="inherit" onClick={onClose}>Cancel</Button>
+          <Button variant="contained" disabled={!ready || busy} onClick={add}>
             {busy ? "Adding…" : cloning ? "Clone and add" : "Add panel"}
-          </button>
+          </Button>
         </>
       )}
     >
       {list.error ? (
-        <p className="desc" style={{ marginTop: 0 }}>
+        <Typography variant="body1" color="text.secondary">
           {list.error.status === 404
             ? "This data layer does not serve dashboards yet, so there is nowhere to add this panel. The dashboard plane arrives with the next API build."
             : String(list.error.message || list.error)}
-        </p>
+        </Typography>
       ) : !list.data ? (
-        <p className="q-desc" style={{ marginTop: 0 }}>Loading dashboards…</p>
+        <Typography variant="caption" color="text.disabled">Loading dashboards…</Typography>
       ) : (
         <>
           <Field label="Dashboard" wide
             hint={cloning ? "Built-in dashboards cannot be changed, so this one is cloned first." : undefined}>
-            <select value={target} onChange={(e) => { setTarget(e.target.value); setCloneId(""); }}>
+            <TextField
+              select
+              fullWidth
+              value={target}
+              onChange={(e) => { setTarget(e.target.value); setCloneId(""); }}
+              slotProps={{ select: { native: true } }}
+            >
               <option value="">choose a dashboard…</option>
               {saved.length > 0 && (
                 <optgroup label="Saved">
@@ -131,44 +139,59 @@ export default function AddToDashboard({
                   ))}
                 </optgroup>
               )}
-            </select>
+            </TextField>
           </Field>
 
           {cloning && (
             <Field label="New id" wide hint={`The copy will live at /dashboards/${newId || "…"}`}>
-              <input type="text" className="mono" value={cloneId || `${chosen.id}-copy`}
-                onChange={(e) => setCloneId(e.target.value)} />
+              <TextField
+                fullWidth
+                value={cloneId || `${chosen.id}-copy`}
+                onChange={(e) => setCloneId(e.target.value)}
+                slotProps={{ htmlInput: { style: { fontFamily: MONO_FONT } } }}
+              />
             </Field>
           )}
 
           <Field label="Panel title" wide>
-            <input type="text" value={title} autoFocus placeholder="What this panel answers"
-              onChange={(e) => setTitle(e.target.value)} />
+            <TextField
+              fullWidth
+              value={title}
+              autoFocus
+              placeholder="What this panel answers"
+              onChange={(e) => setTitle(e.target.value)}
+            />
           </Field>
 
-          <div className="db-drawer-row">
+          <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.5, flexWrap: "wrap", mb: 1.75 }}>
             <Stepper label="Width" value={size.w} min={1} max={MAX_W}
               onChange={(w) => setSize((s) => ({ ...s, w }))} suffix="/ 12" />
             <Stepper label="Height" value={size.h} min={1} max={MAX_H}
               onChange={(h) => setSize((s) => ({ ...s, h }))} suffix={size.h === 1 ? "row" : "rows"} />
-          </div>
+          </Box>
 
           {needs.length > 0 && (
-            <p className="q-desc">
+            <Typography variant="caption" color="text.disabled" sx={{ display: "block", mb: 1.75 }}>
               This query uses {needs.map((n) => `{{${n}}}`).join(", ")}. The dashboard has to
               declare {needs.length === 1 ? "that variable" : "those variables"} or the panel will
               ask for {needs.length === 1 ? "it" : "them"} on every run.
-            </p>
+            </Typography>
           )}
 
-          <details className="q-ran">
+          <Box component="details" sx={{ "& summary": { cursor: "pointer", color: "text.secondary" } }}>
             <summary>The SQL this panel will store</summary>
-            <pre className="q-sql mono">{sql}</pre>
-          </details>
+            <Box component="pre" sx={{
+              mt: 1, p: "12px 14px", bgcolor: "background.default",
+              border: 1, borderColor: "border.soft", borderRadius: "8px",
+              fontFamily: MONO_FONT, fontSize: 12.5, whiteSpace: "pre-wrap", wordBreak: "break-word",
+            }}>
+              {sql}
+            </Box>
+          </Box>
         </>
       )}
 
-      {problem && <div className="banner" style={{ marginBottom: 0 }}>{problem}</div>}
+      {problem && <Alert severity="error" sx={{ mt: 1.5, mb: 0 }}>{problem}</Alert>}
     </Modal>
   );
 }

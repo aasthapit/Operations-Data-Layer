@@ -1,3 +1,4 @@
+export { toCsv } from "../files";
 // Builder state -> DuckDB SQL, plus the small state helpers the Query page needs.
 //
 // Everything here is pure and schema-driven: nothing hard-codes a table or a
@@ -877,15 +878,6 @@ export function storeSaved(list: SavedQuery[]): boolean {
 // --------------------------------------------------------------------------- //
 // A cell can be an object: DuckDB's JSON columns come back as one, and the CSV
 // carries the JSON text rather than "[object Object]".
-export function toCsv(columns: string[], rows: unknown[][]): string {
-  const cell = (v: unknown) => {
-    if (v == null) return "";
-    const s = typeof v === "object" ? JSON.stringify(v) : String(v);
-    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  return [columns, ...rows].map((row) => row.map(cell).join(",")).join("\r\n");
-}
-
 export function toObjects(columns: string[], rows: unknown[][]): Array<Record<string, unknown>> {
   return rows.map((row) => {
     const out: Record<string, unknown> = {};

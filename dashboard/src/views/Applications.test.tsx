@@ -8,6 +8,10 @@ import type { ApiMock } from "../test/apiMock";
 import { closestElement, currentUrl, parentOf, renderView } from "../test/harness";
 import { APPLICATIONS, APPLICATION_DETAIL } from "../test/fixtures/insights";
 
+/** A data row of a table. The grid draws divs, so a row is what carries the
+ * role rather than a `<tr>`. */
+const GRID_ROW = '[role="row"]';
+
 vi.mock("../api", async () => {
   const { createApiMock } = await import("../test/apiMock");
   return { api: createApiMock(), BASE: "" };
@@ -28,7 +32,7 @@ const open = (at = "/applications", app?: string) => renderView(
 describe("the list", () => {
   it("draws a row per application with its ownership and its health", async () => {
     open();
-    const row = closestElement(await screen.findByText("checkout"), "tr");
+    const row = closestElement(await screen.findByText("checkout"), GRID_ROW);
     expect(within(row).getByText("payments")).toBeInTheDocument();
     expect(within(row).getByText("critical")).toBeInTheDocument();
     expect(within(row).getByText("warning")).toBeInTheDocument();
@@ -39,7 +43,7 @@ describe("the list", () => {
 
   it("names the first few clusters an application runs on, and how many more", async () => {
     open();
-    const row = closestElement(await screen.findByText("checkout"), "tr");
+    const row = closestElement(await screen.findByText("checkout"), GRID_ROW);
     expect(within(row).getByText(/ocp-prod-iad-02, ocp-stage-iad-01/)).toBeInTheDocument();
   });
 
@@ -50,7 +54,7 @@ describe("the list", () => {
 
   it("says usage is not available rather than showing a zero", async () => {
     open();
-    const row = closestElement(await screen.findByText("(unassigned)"), "tr");
+    const row = closestElement(await screen.findByText("(unassigned)"), GRID_ROW);
     expect(within(row).getAllByText("n/a")).toHaveLength(2);
   });
 
@@ -114,14 +118,15 @@ describe("one application", () => {
     const { container } = open("/applications/checkout", "checkout");
     const head = parentOf(await screen.findByRole("heading", { name: "checkout" }));
     expect(within(head).getByText("warning")).toHaveClass("pill");
-    expect(within(head).getByText("critical")).toHaveClass("tag");
+    expect(within(head).getByText("critical").closest("[data-tier]"))
+      .toHaveAttribute("data-tier", "critical");
     expect(within(head).getByText("LOB payments")).toBeInTheDocument();
-    expect(container.querySelector(".back")).toHaveTextContent("All applications");
+    expect(screen.getByRole("button", { name: /All applications/ })).toBeInTheDocument();
   });
 
   it("lists every placement with the cluster it is on", async () => {
     open("/applications/checkout", "checkout");
-    const row = closestElement(await screen.findByText("checkout-prod"), "tr");
+    const row = closestElement(await screen.findByText("checkout-prod"), GRID_ROW);
     expect(within(row).getByText("ocp-prod-iad-02")).toBeInTheDocument();
     expect(within(row).getByText("4.16.7")).toBeInTheDocument();
     expect(within(row).getByText("12/14")).toBeInTheDocument();
@@ -146,7 +151,7 @@ describe("one application", () => {
   it("goes back to the list", async () => {
     const user = userEvent.setup();
     const { back } = open("/applications/checkout", "checkout");
-    await user.click(await screen.findByText("← All applications"));
+    await user.click(await screen.findByRole("button", { name: /All applications/ }));
     expect(back).toHaveBeenCalledWith("/applications");
   });
 

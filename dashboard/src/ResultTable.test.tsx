@@ -1,8 +1,14 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ResultTable, { Cell, linkKindFor } from "./ResultTable";
 import type { CellProps } from "./ResultTable";
+import { cellTexts, columnHeader, filterColumn, gridRows, rowCells, sortBy } from "./test/grid";
+
+/** How a cell is lined up, as the browser resolves it: the grid says it in a
+ * class of its own, and what the column asked for is the text alignment that
+ * comes out of it. */
+const alignmentOf = (cell: HTMLElement) => window.getComputedStyle(cell).textAlign;
 
 const nav = () => ({ openCluster: vi.fn(), openApp: vi.fn() });
 
@@ -97,29 +103,28 @@ describe("Cell", () => {
 describe("ResultTable", () => {
   it("draws a column per result column and a row per result row", () => {
     render(<ResultTable result={result()} id="query.results" />);
-    expect(screen.getByRole("columnheader", { name: /cluster_name/ })).toBeInTheDocument();
-    expect(screen.getAllByRole("row").slice(2)).toHaveLength(2);
+    expect(columnHeader("cluster_name")).toBeInTheDocument();
+    expect(gridRows()).toHaveLength(2);
   });
 
   it("right-aligns a column whose every present value is a number", () => {
-    const { container } = render(<ResultTable result={result()} id="query.results" />);
-    const headers = container.querySelectorAll("thead .dt-head th");
-    expect(headers[2]).toHaveClass("dt-right");
-    expect(headers[0]).not.toHaveClass("dt-right");
+    render(<ResultTable result={result()} id="query.results" />);
+    const cells = rowCells(gridRows()[0]);
+    expect(alignmentOf(cells[2])).toBe("right");
+    expect(alignmentOf(cells[0])).not.toBe("right");
   });
 
   it("does not call a column of mixed types numeric", () => {
     const mixed = result({ rows: [["a", "healthy", 97], ["b", "warning", "n/a"]] });
-    const { container } = render(<ResultTable result={mixed} id="query.results" />);
-    expect(container.querySelectorAll("thead .dt-head th")[2]).not.toHaveClass("dt-right");
+    render(<ResultTable result={mixed} id="query.results" />);
+    expect(alignmentOf(rowCells(gridRows()[0])[2])).not.toBe("right");
   });
 
   it("sorts on the value rather than on what the cell drew", async () => {
     const user = userEvent.setup();
     render(<ResultTable result={result()} id="query.results" />);
-    await user.click(screen.getByRole("button", { name: "health_score" }));
-    const first = screen.getAllByRole("row").slice(2)[0];
-    expect(within(first).getAllByRole("cell")[0]).toHaveTextContent("ocp-prod-iad-02");
+    await sortBy("health_score", { user });
+    expect(cellTexts("cluster_name")[0]).toBe("ocp-prod-iad-02");
   });
 
   it("links a cluster column through to the cluster the row is about", async () => {
@@ -147,8 +152,8 @@ describe("ResultTable", () => {
     };
     const user = userEvent.setup();
     render(<ResultTable result={withJson} id="query.results" />);
-    await user.type(screen.getByLabelText("Filter by labels"), "payments");
-    await waitFor(() => expect(screen.getAllByRole("row").slice(2)).toHaveLength(1));
+    await filterColumn("labels", "payments", { user });
+    await waitFor(() => expect(gridRows()).toHaveLength(1));
     expect(screen.getByText('{"team":"payments"}')).toBeInTheDocument();
   });
 });

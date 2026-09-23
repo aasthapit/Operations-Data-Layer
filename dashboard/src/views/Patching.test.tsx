@@ -8,6 +8,10 @@ import type { ApiMock } from "../test/apiMock";
 import { closestElement, currentUrl, parentOf, renderView } from "../test/harness";
 import { PATCH_JOB, PATCH_JOBS, PATCH_REPORT } from "../test/fixtures/platform";
 
+/** A data row of a table. The grid draws divs, so a row is what carries the
+ * role rather than a `<tr>`. */
+const GRID_ROW = '[role="row"]';
+
 vi.mock("../api", async () => {
   const { createApiMock } = await import("../test/apiMock");
   return { api: createApiMock(), BASE: "" };
@@ -28,12 +32,13 @@ const open = (at = "/patching", id?: string) => renderView(
 describe("the report", () => {
   it("counts the jobs, the ones that finished and the ones that need a person", async () => {
     open();
-    const stats = closestElement(await screen.findByText("Jobs", { selector: ".label" }), ".stats");
-    expect(within(stats).getByText("Jobs", { selector: ".label" }).nextSibling)
-      .toHaveTextContent("5");
-    expect(within(stats).getByText("Completed").nextSibling).toHaveTextContent("2");
-    expect(within(stats).getByText("Need attention").nextSibling).toHaveTextContent("2");
-    expect(within(stats).getByText("86%")).toBeInTheDocument();
+    // the card below carries a heading of the same name, so the tile is the
+    // one whose label is followed by the number it counts
+    const tile = await screen.findByText("Jobs", { selector: "span" });
+    expect(tile.nextSibling).toHaveTextContent("5");
+    expect(screen.getByText("Completed").nextSibling).toHaveTextContent("2");
+    expect(screen.getByText("Need attention").nextSibling).toHaveTextContent("2");
+    expect(screen.getByText("86%")).toBeInTheDocument();
   });
 
   it("counts the clusters across every job", async () => {
@@ -60,7 +65,7 @@ describe("the report", () => {
 describe("the job list", () => {
   it("draws a row per job with its change record, approval and progress", async () => {
     open();
-    const row = closestElement(await screen.findByText("patch-2026-09-20-a"), "tr");
+    const row = closestElement(await screen.findByText("patch-2026-09-20-a"), GRID_ROW);
     expect(within(row).getByText("CHG0041233")).toBeInTheDocument();
     expect(within(row).getByText("m.okafor")).toBeInTheDocument();
     expect(within(row).getByText("4.16.9")).toBeInTheDocument();
@@ -70,7 +75,7 @@ describe("the job list", () => {
 
   it("says an unapproved job is pending rather than leaving the cell blank", async () => {
     open();
-    const row = closestElement(await screen.findByText("patch-2026-09-18-b"), "tr");
+    const row = closestElement(await screen.findByText("patch-2026-09-18-b"), GRID_ROW);
     expect(within(row).getByText("pending")).toBeInTheDocument();
   });
 
@@ -105,20 +110,19 @@ describe("one job", () => {
   });
 
   it("shows who asked, who approved and what it was aiming at", async () => {
-    const { container } = openJob();
-    await screen.findByText("Change record");
-    // the change record is a list of plain spans: it has no role or name of
-    // its own, so the DOM shape is what scopes these lookups
-    const facts = container.querySelector(".kv") as HTMLElement;
-    expect(within(facts).getByText("CHG0041233")).toBeInTheDocument();
-    expect(within(facts).getByText("a.sthapit")).toBeInTheDocument();
-    expect(within(facts).getByText("m.okafor (approved)")).toBeInTheDocument();
-    expect(within(facts).getByText("4.16.9")).toBeInTheDocument();
+    openJob();
+    // the job's facts are a label followed by its value, so each one is read
+    // off its own label rather than out of the block they share
+    expect((await screen.findByText("Change record")).nextSibling)
+      .toHaveTextContent("CHG0041233");
+    expect(screen.getByText("Requested by").nextSibling).toHaveTextContent("a.sthapit");
+    expect(screen.getByText("Approved by").nextSibling).toHaveTextContent("m.okafor (approved)");
+    expect(screen.getByText("Target version").nextSibling).toHaveTextContent("4.16.9");
   });
 
   it("lists the per-cluster outcome, with a dash where there is no number", async () => {
     openJob();
-    const row = closestElement(await screen.findByText("ocp-dev-iad-01"), "tr");
+    const row = closestElement(await screen.findByText("ocp-dev-iad-01"), GRID_ROW);
     expect(within(row).getByText("skipped")).toBeInTheDocument();
     expect(within(row).getByText("? → —")).toBeInTheDocument();
     expect(within(row).getByText("— → —")).toBeInTheDocument();
@@ -126,7 +130,7 @@ describe("one job", () => {
 
   it("shows a cluster that was patched, from and to", async () => {
     openJob();
-    const row = closestElement(await screen.findByText("ocp-prod-iad-01"), "tr");
+    const row = closestElement(await screen.findByText("ocp-prod-iad-01"), GRID_ROW);
     expect(within(row).getByText("passed")).toBeInTheDocument();
     expect(within(row).getByText("4.16.7 → 4.16.9")).toBeInTheDocument();
     expect(within(row).getByText("97 → 96")).toBeInTheDocument();
@@ -143,7 +147,7 @@ describe("one job", () => {
   it("goes back to the list", async () => {
     const user = userEvent.setup();
     const { back } = openJob();
-    await user.click(await screen.findByText("← All jobs"));
+    await user.click(await screen.findByRole("button", { name: /All jobs/ }));
     expect(back).toHaveBeenCalledWith("/patching");
   });
 
@@ -156,6 +160,6 @@ describe("one job", () => {
   it("stands the job in while it is on the wire", () => {
     answer(api, { patchJob: () => new Promise(() => {}) });
     const { container } = openJob();
-    expect(container.querySelector(".skeleton-lines")).toBeInTheDocument();
+    expect(container.querySelector("[data-placeholder]")).toBeInTheDocument();
   });
 });

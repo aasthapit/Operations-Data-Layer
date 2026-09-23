@@ -6,13 +6,19 @@
 // of its life.
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import {
+  Alert, Box, Button, ButtonBase, Link, Paper, Stack, TextField, Typography,
+} from "@mui/material";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import { api } from "../api";
 import type { ApiError } from "../api";
 import type { DashboardDefinition, DashboardListEntry } from "../api/types";
 import { invalidate } from "../cache";
 import { useFetch } from "../hooks";
 import type { RouteApi } from "../router";
-import { SkeletonLines, fmtAge } from "../components";
+import {
+  Card as Panel, Empty, MONO_FONT, Muted, SectionHead, Tag, SkeletonLines, fmtAge,
+} from "../components";
 import { Modal } from "../dashboards/ui";
 import { listDescriptor } from "../dashboards/runtime";
 import { forSave, isSlug, normalizeDefinition, slugify } from "../dashboards/model";
@@ -86,41 +92,34 @@ export default function Dashboards({ route }: DashboardsProps) {
   };
 
   return (
-    <div className="grid" style={{ gap: 16 }}>
-      <div className="section-head">
-        <div>
-          <div className="section-title" style={{ margin: 0 }}>
-            Dashboards
-            {fixture && <span className="tag db-tag">fixture</span>}
-          </div>
-          <div className="desc">
-            Several queries on one page, with the variables they share at the top. Every panel is
-            a guarded SELECT over the same snapshot, so a dashboard is a link.
-          </div>
-        </div>
-        <div className="db-head-actions">
-          <button type="button" className="btn" disabled={loading} onClick={reload}>↻ Refresh</button>
+    <Stack spacing={2}>
+      <SectionHead
+        title={<>Dashboards{fixture && <Tag sx={{ ml: 1, textTransform: "uppercase" }}>fixture</Tag>}</>}
+        description={"Several queries on one page, with the variables they share at the top. Every panel is"
+          + " a guarded SELECT over the same snapshot, so a dashboard is a link."}
+      >
+        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+          <Button variant="outlined" color="inherit" startIcon={<RefreshIcon />}
+            disabled={loading} onClick={reload}>
+            Refresh
+          </Button>
           {/* The other way to make one: describe it and let the agent compose it
               from these same panels. It lands here once it is saved. */}
-          <button type="button" className="btn"
+          <Button variant="outlined" color="inherit"
             onClick={() => route.navigate("/generate", fixture ? { fixture: "1" } : {})}>
             Generate from a question
-          </button>
-          <button type="button" className="btn primary" onClick={() => setDialog("new")}>
-            New dashboard
-          </button>
-        </div>
-      </div>
+          </Button>
+          <Button variant="contained" onClick={() => setDialog("new")}>New dashboard</Button>
+        </Stack>
+      </SectionHead>
 
-      {problem && <div className="banner">{problem}</div>}
+      {problem && <Alert severity="error">{problem}</Alert>}
       {error ? <Unavailable error={error} route={route} fixture={fixture} />
         : !data ? <SkeletonLines rows={6} />
           : all.length === 0 ? (
-            <div className="card">
-              <div className="empty">
-                No dashboards yet. "New dashboard" starts an empty one.
-              </div>
-            </div>
+            <Panel>
+              <Empty>No dashboards yet. &quot;New dashboard&quot; starts an empty one.</Empty>
+            </Panel>
           ) : (
             <>
               {builtin.length > 0 && (
@@ -163,21 +162,23 @@ export default function Dashboards({ route }: DashboardsProps) {
           onSubmit={(newId) => clone(dialog.clone, newId)}
         />
       )}
-    </div>
+    </Stack>
   );
 }
 
 function Group({ title, desc, children }: { title: string; desc: string; children?: ReactNode }) {
   return (
-    <div>
-      <div className="section-head" style={{ marginBottom: 10 }}>
-        <div>
-          <h3 style={{ margin: 0 }}>{title}</h3>
-          <div className="desc">{desc}</div>
-        </div>
-      </div>
-      <div className="db-cards">{children}</div>
-    </div>
+    <Box>
+      <Box sx={{ mb: 1.25 }}>
+        <Typography variant="h4" color="text.secondary">{title}</Typography>
+        <Muted sx={{ display: "block", fontSize: 12.5 }}>{desc}</Muted>
+      </Box>
+      <Box sx={{
+        display: "grid", gap: 2, gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+      }}>
+        {children}
+      </Box>
+    </Box>
   );
 }
 
@@ -191,30 +192,50 @@ interface CardProps {
 function Card({ dashboard, onOpen, onClone }: CardProps) {
   const d = dashboard;
   return (
-    <div className="db-card card">
-      <button type="button" className="db-card-main" onClick={onOpen}>
-        <div className="db-card-title">
+    <Paper data-dashboard={d.id} sx={{ display: "flex", flexDirection: "column", p: 0, overflow: "hidden" }}>
+      <ButtonBase
+        onClick={onOpen}
+        sx={{
+          display: "block", textAlign: "left", p: "16px 18px 12px", flex: 1,
+          // the whole card is the button, so hovering it lights the name
+          "&:hover [data-card-title]": { color: "primary.main" },
+        }}
+      >
+        <Typography variant="h3" component="span" data-card-title=""
+          sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <Template text={d.title} />
-          {d.builtin && <span className="tag db-tag">built in</span>}
-        </div>
-        <div className="db-card-desc">
+          {d.builtin && <Tag sx={{ textTransform: "uppercase" }}>built in</Tag>}
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ display: "block", mt: 0.75 }}>
           {d.description ? <Template text={d.description} /> : "No description."}
-        </div>
-      </button>
-      <div className="db-card-foot">
-        <span className="muted">{d.panels} {d.panels === 1 ? "panel" : "panels"}</span>
+        </Typography>
+      </ButtonBase>
+      <Box sx={{
+        display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", fontSize: 12,
+        p: "10px 18px", borderTop: 1, borderColor: "border.soft", bgcolor: "background.subtle",
+      }}>
+        <Muted>{d.panels} {d.panels === 1 ? "panel" : "panels"}</Muted>
         {d.variables.length > 0 && (
-          <span className="db-card-vars">
-            {d.variables.map((v) => <span key={v} className="tag mono">{v}</span>)}
-          </span>
+          <Box data-variables="" sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+            {d.variables.map((v) => (
+              <Tag key={v} sx={{ fontFamily: MONO_FONT }}>{v}</Tag>
+            ))}
+          </Box>
         )}
-        <span className="db-vars-spacer" />
-        {d.updated_at && <span className="muted">updated {fmtAge(d.updated_at)} ago</span>}
+        <Box sx={{ flex: 1 }} />
+        {d.updated_at && <Muted>updated {fmtAge(d.updated_at)} ago</Muted>}
         {onClone && (
-          <button type="button" className="q-mini" onClick={onClone}>Clone</button>
+          <Button
+            variant="outlined"
+            color="inherit"
+            onClick={onClone}
+            sx={{ minWidth: 0, px: 0.875, py: 0.125, fontSize: 11, lineHeight: 1.5 }}
+          >
+            Clone
+          </Button>
         )}
-      </div>
-    </div>
+      </Box>
+    </Paper>
   );
 }
 
@@ -227,7 +248,7 @@ function Template({ text }: { text: string }) {
   return (
     <>
       {parts.map((part, i) => (i % 2
-        ? <span key={i} className="db-slot">{part}</span>
+        ? <Muted key={i} data-slot="" sx={{ fontStyle: "italic" }}>{part}</Muted>
         : <span key={i}>{part}</span>))}
     </>
   );
@@ -253,22 +274,27 @@ function NameDialog({ title, intro, initial = "", placeholder, busy, onCancel, o
       onClose={onCancel}
       footer={(
         <>
-          <button type="button" className="btn" onClick={onCancel}>Cancel</button>
-          <button type="button" className="btn primary" disabled={!ok || busy}
-            onClick={() => onSubmit(id)}>
+          <Button variant="outlined" color="inherit" onClick={onCancel}>Cancel</Button>
+          <Button variant="contained" disabled={!ok || busy} onClick={() => onSubmit(id)}>
             {busy ? "Working…" : "Create"}
-          </button>
+          </Button>
         </>
       )}
     >
-      <p className="q-desc" style={{ marginTop: 0 }}>{intro}</p>
-      <label className="db-field wide">
-        <span className="db-field-label">Name</span>
-        <input type="text" value={value} autoFocus placeholder={placeholder}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && ok) onSubmit(id); }} />
-        <span className="db-field-hint">The URL will be /dashboards/{id || "…"}</span>
-      </label>
+      <Typography variant="caption" color="text.disabled" sx={{ display: "block", mb: 1.75 }}>
+        {intro}
+      </Typography>
+      <TextField
+        fullWidth
+        label="Name"
+        value={value}
+        autoFocus
+        placeholder={placeholder}
+        helperText={<>The URL will be /dashboards/{id || "…"}</>}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && ok) onSubmit(id); }}
+        slotProps={{ inputLabel: { shrink: true } }}
+      />
     </Modal>
   );
 }
@@ -285,23 +311,24 @@ interface UnavailableProps {
 function Unavailable({ error, route, fixture }: UnavailableProps) {
   const missing = error?.status === 404;
   return (
-    <div className="card">
-      <h3 style={{ marginTop: 0 }}>
-        {missing ? "This data layer does not serve dashboards yet" : "Dashboards could not be loaded"}
-      </h3>
-      <p className="desc" style={{ marginTop: 0, fontSize: 13 }}>
+    <Panel title={missing
+      ? "This data layer does not serve dashboards yet"
+      : "Dashboards could not be loaded"}
+    >
+      <Typography variant="body1" color="text.secondary">
         {missing
           ? "GET /api/dashboards answered 404. The dashboard plane arrives with the next API build; everything else on this page works without it."
           : String(error?.message || error)}
-      </p>
+      </Typography>
       {!fixture && (
-        <p className="q-desc">
-          <span className="link" onClick={() => route.navigate("/dashboards", { fixture: "1" })}>
+        <Muted sx={{ display: "block", fontSize: 11.5, mt: 1.5 }}>
+          <Link component="button" type="button"
+            onClick={() => route.navigate("/dashboards", { fixture: "1" })}>
             Load the sample dashboards
-          </span>
+          </Link>
           {" "}to see the page working against the query plane alone.
-        </p>
+        </Muted>
       )}
-    </div>
+    </Panel>
   );
 }

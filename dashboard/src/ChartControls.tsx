@@ -7,6 +7,24 @@
 // It is driven entirely by the fields of a result: an option that the data
 // cannot carry is never offered, and `spec` is what resolveSpec made of the
 // user's choice - null when nothing can be drawn, which leaves only the type.
+//
+// MUI primitives throughout, sized small to match the Query page and the
+// dashboards editor: styles.css is being retired, so nothing here reaches for
+// a class name, and any colour this file needed would come from `useTheme()`
+// rather than a hex literal - it turns out to need none, since a `Select`, a
+// `ToggleButton` and a `Checkbox` already carry the theme's own control
+// styling (see `theme.ts`'s `MuiSelect` / `MuiToggleButton` / `MuiCheckbox`
+// overrides) without this file repeating any of it.
+import Box from "@mui/material/Box";
+import Checkbox from "@mui/material/Checkbox";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import MenuItem from "@mui/material/MenuItem";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
+import Tooltip from "@mui/material/Tooltip";
+import Typography from "@mui/material/Typography";
 import { CHART_TYPES, categoryFields, emptyChart, normalizeChart } from "./Chart";
 import type { ChartChoice, ChartType, Field, Spec } from "./Chart";
 
@@ -46,67 +64,59 @@ export default function ChartControls({ fields, spec, chart, onChange }: ChartCo
   };
 
   return (
-    <div className="chart-controls">
-      <label className="chart-ctl">
-        <span>Chart</span>
+    <Stack direction="row" spacing={2} useFlexGap sx={{ flexWrap: "wrap", alignItems: "flex-end" }}>
+      <TextField select label="Chart" size="small" value={choice.type}
+        onChange={(e) => setType(e.target.value as ChartType)} sx={{ minWidth: 108 }}>
         {/* the options are exactly CHART_TYPES, so the value is one of them */}
-        <select value={choice.type} onChange={(e) => setType(e.target.value as ChartType)}>
-          {CHART_TYPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-        </select>
-      </label>
+        {CHART_TYPES.map(([id, label]) => <MenuItem key={id} value={id}>{label}</MenuItem>)}
+      </TextField>
 
       {spec && (
         <>
-          <label className="chart-ctl">
-            <span>{line ? "Time" : "Category"}</span>
-            <select value={spec.x} onChange={(e) => set({ x: e.target.value })}>
-              {xOptions.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
-            </select>
-          </label>
+          <TextField select label={line ? "Time" : "Category"} size="small" value={spec.x}
+            onChange={(e) => set({ x: e.target.value })} sx={{ minWidth: 140 }}>
+            {xOptions.map((f) => <MenuItem key={f.name} value={f.name}>{f.name}</MenuItem>)}
+          </TextField>
 
           {line && (
-            <label className="chart-ctl">
-              <span>Series</span>
-              <select
-                value={spec.series}
-                onChange={(e) => set({ series: e.target.value, y: spec.y.slice(0, 1) })}
-              >
-                <option value="">none</option>
-                {seriesOptions.map((f) => (
-                  <option key={f.name} value={f.name}>{f.name} ({f.distinct})</option>
-                ))}
-              </select>
-            </label>
+            <TextField select label="Series" size="small" value={spec.series}
+              onChange={(e) => set({ series: e.target.value, y: spec.y.slice(0, 1) })}
+              sx={{ minWidth: 160 }}>
+              <MenuItem value="">none</MenuItem>
+              {seriesOptions.map((f) => (
+                <MenuItem key={f.name} value={f.name}>{f.name} ({f.distinct})</MenuItem>
+              ))}
+            </TextField>
           )}
 
-          <div className="chart-ctl">
-            <span>{line && spec.series ? "Measure" : "Measures"}</span>
-            <div className="chart-ys">
+          <Box>
+            <Typography variant="subtitle2" component="div" sx={{ mb: 0.5 }}>
+              {line && spec.series ? "Measure" : "Measures"}
+            </Typography>
+            {/* Each button carries its own selected / onChange rather than the
+                group its own `value`: a measure toggles on or off on its own,
+                it is never exclusive with its neighbours, and `toggleY` is the
+                one place that already knows the series-column and
+                last-measure-standing rules. */}
+            <ToggleButtonGroup size="small">
               {yOptions.map((f) => (
-                <button
-                  key={f.name}
-                  type="button"
-                  className={`q-mini${spec.y.includes(f.name) ? " active" : ""}`}
-                  aria-pressed={spec.y.includes(f.name)}
-                  onClick={() => toggleY(f.name)}
-                >
+                <ToggleButton key={f.name} value={f.name} selected={spec.y.includes(f.name)}
+                  onChange={() => toggleY(f.name)}>
                   {f.name}
-                </button>
+                </ToggleButton>
               ))}
-            </div>
-          </div>
+            </ToggleButtonGroup>
+          </Box>
 
           {line && (
-            <label className="q-check chart-ctl-check"
-              title="Stack the series into a running total - for counts, not for scores">
-              <input type="checkbox" checked={spec.stack}
-                onChange={(e) => set({ stack: e.target.checked })} />
-              <span>Stack</span>
-            </label>
+            <Tooltip title="Stack the series into a running total - for counts, not for scores">
+              <FormControlLabel label="Stack" control={<Checkbox size="small" checked={spec.stack}
+                onChange={(e) => set({ stack: e.target.checked })} />} />
+            </Tooltip>
           )}
         </>
       )}
-    </div>
+    </Stack>
   );
 }
 

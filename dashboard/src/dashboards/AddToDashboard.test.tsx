@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
@@ -6,6 +6,7 @@ import AddToDashboard from "./AddToDashboard";
 import * as cache from "../cache";
 import { CAPACITY_WATCH, DASHBOARD_LIST, HUB_REVIEW } from "../test/fixtures/dashboards";
 import type { DashboardDefinition } from "../api/types";
+import { renderThemed } from "../test/harness";
 
 vi.mock("../api", () => ({
   api: {
@@ -42,7 +43,7 @@ function open(props = {}) {
   const onAdded = vi.fn();
   const onClose = vi.fn();
   const user = userEvent.setup();
-  render(<AddToDashboard sql={SQL} chart={{ type: "bars" }} defaultTitle="clusters"
+  renderThemed(<AddToDashboard sql={SQL} chart={{ type: "bars" }} defaultTitle="clusters"
     onAdded={onAdded} onClose={onClose} {...props} />);
   return { onAdded, onClose, user };
 }
@@ -74,12 +75,11 @@ describe("choosing where the panel goes", () => {
   });
 
   it("warns that a query with a variable in it needs the dashboard to declare one", async () => {
-    const { container } = { container: document.body,
-      ...open({ sql: "SELECT name FROM clusters WHERE hub_name = {{hub}} AND region = {{region}}" }) };
+    open({ sql: "SELECT name FROM clusters WHERE hub_name = {{hub}} AND region = {{region}}" });
     await screen.findByRole("combobox");
-    // the warning line has no role or name of its own; its class is how the
-    // dialog marks it, so the DOM shape is the point here
-    const desc = container.querySelector(".q-desc") as HTMLElement;
+    // the warning line has no role or name of its own, so it is found by what
+    // it says
+    const desc = screen.getByText(/This query uses/);
     expect(desc.textContent).toContain("This query uses {{hub}}, {{region}}.");
     expect(desc.textContent).toContain("declare those variables");
   });

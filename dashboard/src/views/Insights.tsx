@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ReactNode } from "react";
+import { Box, Checkbox, FormControlLabel, Link, Stack } from "@mui/material";
 import { api } from "../api";
 import type {
   CertificatesResponse, ClusterAdminsResponse, EventsResponse, ImageUsage, ImagesResponse,
@@ -10,6 +10,7 @@ import { useFetch } from "../hooks";
 import { useQueryFilters } from "../router";
 import type { Nav, RouteApi } from "../router";
 import {
+  Card, Mono, Muted, SectionHead, StatusChip, Tag, ToneText,
   ErrorBanner, SubTabs, Pill, FilterSelect, DataTable, SearchInput, SkeletonTable,
   fmtBytes, fmtTime, fmtAge, fmtDays,
 } from "../components";
@@ -83,13 +84,11 @@ export default function Insights({ section, nav, route }: InsightsProps) {
   // steps between sections rather than out of Insights.
   const props: SectionProps = { nav, route, clusterNames: names };
   return (
-    <div className="grid" style={{ gap: 16 }}>
-      <div className="section-head">
-        <div>
-          <div className="section-title" style={{ margin: 0 }}>Insights</div>
-          <div className="desc">Fleet-wide views computed over what every cluster's API server reported on the last sweep.</div>
-        </div>
-      </div>
+    <Stack spacing={2}>
+      <SectionHead
+        title="Insights"
+        description="Fleet-wide views computed over what every cluster's API server reported on the last sweep."
+      />
       <SubTabs tabs={SECTIONS} value={section} onChange={(s) => nav.goInsights(s)} />
       {section === "certificates" && <Certificates {...props} />}
       {section === "pods" && <PodIssues {...props} />}
@@ -102,26 +101,23 @@ export default function Insights({ section, nav, route }: InsightsProps) {
       {section === "images" && <Images {...props} />}
       {section === "references" && <References {...props} />}
       {section === "access" && <Access {...props} />}
-    </div>
+    </Stack>
   );
 }
 
-interface CardProps {
-  title: ReactNode;
-  desc?: ReactNode;
-  children?: ReactNode;
-  right?: ReactNode;
+/** A column of small facts inside one table cell. */
+function StackedList({ children }: { children?: React.ReactNode }) {
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.375, fontSize: 12 }}>{children}</Box>
+  );
 }
 
-function Card({ title, desc, children, right }: CardProps) {
+/** A row of controls belonging to one card, sitting on its title's line. */
+function Filters({ children }: { children?: React.ReactNode }) {
   return (
-    <div className="card flush">
-      <div className="card-head">
-        <div className="section-head" style={{ marginBottom: 4 }}><h3 style={{ margin: 0 }}>{title}</h3>{right}</div>
-        {desc && <div className="desc">{desc}</div>}
-      </div>
+    <Stack direction="row" spacing={1.25} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
       {children}
-    </div>
+    </Stack>
   );
 }
 
@@ -136,7 +132,9 @@ function clusterColumn<Row extends { cluster: string }>(nav: Nav,
     key: "cluster",
     label: "Cluster",
     className: "mono",
-    render: (r: Row) => <span className="link" onClick={() => nav.openCluster(r.cluster)}>{r.cluster}</span>,
+    render: (r: Row) => (
+      <Link component="button" type="button" onClick={() => nav.openCluster(r.cluster)}>{r.cluster}</Link>
+    ),
     ...opts,
   };
 }
@@ -162,22 +160,22 @@ function Certificates({ nav, route, clusterNames }: SectionProps) {
     {
       key: "status", label: "Status", filter: "select",
       sortValue: (r) => statusRank(r.status),
-      render: (r) => <span className={`chip ${r.status}`}>{r.status}</span>,
+      render: (r) => <StatusChip status={r.status} />,
     },
     {
       key: "days_left", label: "Expires in", className: "nowrap",
       filterValue: (r) => fmtDays(r.days_left),
       render: (r) => (
-        <span style={{ color: r.days_left < 0 ? "var(--critical)" : r.days_left < 30 ? "var(--warning)" : undefined }}>
+        <ToneText tone={r.days_left < 0 ? "critical" : r.days_left < 30 ? "warning" : undefined}>
           {fmtDays(r.days_left)}
-        </span>
+        </ToneText>
       ),
     },
     clusterColumn(nav),
-    { key: "environment", label: "Env", filter: "select", render: (r) => <span className="tag">{r.environment}</span> },
+    { key: "environment", label: "Env", filter: "select", render: (r) => <Tag>{r.environment}</Tag> },
     {
       key: "namespace", label: "Namespace", className: "mono", filter: "text",
-      render: (r) => <>{r.namespace} {r.class === "platform" && <span className="muted">(platform)</span>}</>,
+      render: (r) => <>{r.namespace} {r.class === "platform" && <Muted>(platform)</Muted>}</>,
     },
     {
       key: "kind", label: "Kind", className: "muted", filter: "select",
@@ -199,15 +197,18 @@ function Certificates({ nav, route, clusterNames }: SectionProps) {
   ];
 
   return (
-    <Card title={`Certificates${data ? ` (${data.count})` : ""}`}
-      desc={`Parsed from TLS Secrets and PEM keys in ConfigMaps. Only subject / issuer / validity are kept - the certificate material is never collected. Window: ${data?.within_days ?? "…"} days.`}
-      right={<div className="filters" style={{ margin: 0 }}>
+    <Card flush title={`Certificates${data ? ` (${data.count})` : ""}`}
+      description={`Parsed from TLS Secrets and PEM keys in ConfigMaps. Only subject / issuer / validity are kept - the certificate material is never collected. Window: ${data?.within_days ?? "…"} days.`}
+      action={<Filters>
         <FilterSelect label="Cluster" value={f.cluster} options={clusterNames} onChange={(v) => set("cluster", v)} />
         <FilterSelect label="Class" value={f.class} options={["application", "platform"]} onChange={(v) => set("class", v)} />
-        <label className="fld" style={{ flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-end" }}>
-          <input type="checkbox" checked={includeValid} onChange={(e) => set("valid", e.target.checked ? "1" : "")} /> include valid
-        </label>
-      </div>}>
+        <FormControlLabel
+          control={(
+            <Checkbox checked={includeValid} onChange={(e) => set("valid", e.target.checked ? "1" : "")} />
+          )}
+          label="include valid"
+        />
+      </Filters>}>
       {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={9} rows={8} /> : (
         <DataTable
           id="insights.certificates"
@@ -228,11 +229,11 @@ function PodIssues({ nav, route, clusterNames }: SectionProps) {
   const { data, error } = useFetch(() => api.podIssues({ class: f.class, cluster: f.cluster }), [f.class, f.cluster]);
 
   const columns: Column<PodIssue>[] = [
-    { key: "class", label: "Class", render: (i) => <span className="tag">{i.class}</span> },
+    { key: "class", label: "Class", render: (i) => <Tag>{i.class}</Tag> },
     clusterColumn(nav, { sortValue: (i) => `${i.cluster}/${i.namespace}` }),
     { key: "namespace", label: "Namespace", className: "mono", filter: "text" },
     { key: "name", label: "Pod", filter: "text" },
-    { key: "reason", label: "Reason", filter: "select", render: (i) => <span className="chip critical">{i.reason}</span> },
+    { key: "reason", label: "Reason", filter: "select", render: (i) => <Tag tone="critical">{i.reason}</Tag> },
     { key: "owner", label: "Owner", className: "muted", filter: "text", render: (i) => i.owner || "—" },
     { key: "restarts", label: "Restarts" },
     { key: "containers_ready", label: "Ready" },
@@ -241,12 +242,12 @@ function PodIssues({ nav, route, clusterNames }: SectionProps) {
   ];
 
   return (
-    <Card title={`Pod issues${data ? ` (${data.count})` : ""}`}
-      desc={data ? Object.entries(data.by_reason).map(([k, v]) => `${v} ${k}`).join(" · ") || "Nothing wrong." : ""}
-      right={<div className="filters" style={{ margin: 0 }}>
+    <Card flush title={`Pod issues${data ? ` (${data.count})` : ""}`}
+      description={data ? Object.entries(data.by_reason).map(([k, v]) => `${v} ${k}`).join(" · ") || "Nothing wrong." : ""}
+      action={<Filters>
         <SubTabs tabs={[["", "All"], ["platform", "Platform"], ["application", "Apps"]]} value={f.class} onChange={(v) => set("class", v)} />
         <FilterSelect label="Cluster" value={f.cluster} options={clusterNames} onChange={(v) => set("cluster", v)} />
-      </div>}>
+      </Filters>}>
       {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={9} rows={8} /> : (
         <DataTable
           id="insights.podIssues"
@@ -269,7 +270,7 @@ function Quotas({ nav }: SectionProps) {
     {
       key: "status", label: "Status", filter: "select",
       sortValue: (q) => statusRank(q.status),
-      render: (q) => <span className={`chip ${q.status}`}>{q.status}</span>,
+      render: (q) => <StatusChip status={q.status} />,
     },
     { key: "max_percent", label: "Peak", render: (q) => `${q.max_percent?.toFixed(0)}%` },
     clusterColumn(nav, { filter: "text" }),
@@ -280,25 +281,25 @@ function Quotas({ nav }: SectionProps) {
       sortValue: (q) => q.resources.length,
       filterValue: (q) => q.resources.map((r) => r.resource).join(" "),
       render: (q) => (
-        <div className="env-list">
+        <StackedList>
           {q.resources.map((r) => (
             <span key={r.resource}>
-              <span className="mono">{r.resource}</span>{" "}
+              <Mono>{r.resource}</Mono>{" "}
               {/* a quota the collector could not read has no percentage, and
                   no percentage is not a breach */}
-              <span className={(r.percent ?? 0) >= 90 ? "" : "src"}
-                style={(r.percent ?? 0) >= 90 ? { color: "var(--warning)" } : {}}>
+              <ToneText tone={(r.percent ?? 0) >= 90 ? "warning" : undefined}
+                sx={(r.percent ?? 0) >= 90 ? undefined : { color: "text.disabled" }}>
                 {r.used} / {r.hard} ({r.percent}%)
-              </span>
+              </ToneText>
             </span>
           ))}
-        </div>
+        </StackedList>
       ),
     },
   ];
 
   return (
-    <Card title={`Resource quotas${data ? ` (${data.count})` : ""}`} desc="Hard vs used per resource, worst first.">
+    <Card flush title={`Resource quotas${data ? ` (${data.count})` : ""}`} description="Hard vs used per resource, worst first.">
       {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={6} rows={8} /> : (
         <DataTable
           id="insights.quotas"
@@ -328,19 +329,19 @@ function Olm({ nav }: SectionProps) {
       key: "phase", label: "Phase", filter: "select",
       filterValue: (i) => i.phase || "unknown",
       render: (i) => (
-        <span className={`chip ${(i.phase || "unknown").toLowerCase()}`}>
+        <StatusChip status={i.phase || "unknown"}>
           {i.phase}{i.reason && i.unhealthy ? ` · ${i.reason}` : ""}
-        </span>
+        </StatusChip>
       ),
     },
-    { key: "upgrade_to", label: "Upgrade to", className: "mono", render: (i) => i.upgrade_to || <span className="muted">—</span> },
+    { key: "upgrade_to", label: "Upgrade to", className: "mono", render: (i) => i.upgrade_to || <Muted>—</Muted> },
   ];
 
   const columns: Column<OlmRow>[] = [
     {
       key: "package", label: "Package", filter: "text",
       filterValue: (o) => `${o.display_name} ${o.package}`,
-      render: (o) => <>{o.display_name} <span className="muted mono">{o.package}</span></>,
+      render: (o) => <>{o.display_name} <Mono sx={{ color: "text.disabled" }}>{o.package}</Mono></>,
     },
     { key: "provider", label: "Provider", className: "muted", filter: "select" },
     { key: "clusters", label: "Clusters" },
@@ -356,23 +357,24 @@ function Olm({ nav }: SectionProps) {
     },
     {
       key: "unhealthy", label: "Unhealthy",
-      render: (o) => (o.unhealthy ? <span style={{ color: "var(--critical)" }}>{o.unhealthy}</span> : <span className="muted">0</span>),
+      render: (o) => (o.unhealthy ? <ToneText tone="critical">{o.unhealthy}</ToneText> : <Muted>0</Muted>),
     },
     {
       key: "upgrades_pending", label: "Upgrades pending",
-      render: (o) => (o.upgrades_pending ? <span style={{ color: "var(--warning)" }}>{o.upgrades_pending}</span> : <span className="muted">0</span>),
+      render: (o) => (o.upgrades_pending ? <ToneText tone="warning">{o.upgrades_pending}</ToneText> : <Muted>0</Muted>),
     },
     {
       key: "blast", label: "",
       render: (o) => (
-        <span className="link" onClick={(e) => { e.stopPropagation(); nav.goBlast({ olm_operator: o.package }); }}>blast radius →</span>
+        <Link component="button" type="button"
+          onClick={(e) => { e.stopPropagation(); nav.goBlast({ olm_operator: o.package }); }}>blast radius →</Link>
       ),
     },
   ];
 
   return (
-    <Card title={`OLM operators${data ? ` (${data.operators.length} packages)` : ""}`}
-      desc="ClusterServiceVersions across the fleet: version drift per package, install phase, pending upgrades from Subscriptions. Click a package for per-cluster detail.">
+    <Card flush title={`OLM operators${data ? ` (${data.operators.length} packages)` : ""}`}
+      description="ClusterServiceVersions across the fleet: version drift per package, install phase, pending upgrades from Subscriptions. Click a package for per-cluster detail.">
       {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={8} rows={8} /> : (
         <DataTable
           id="insights.olm"
@@ -407,10 +409,10 @@ function Mcp({ nav }: SectionProps) {
     {
       key: "status", label: "Status", filter: "select",
       sortValue: (p) => statusRank(p.status),
-      render: (p) => <span className={`chip ${p.status}`}>{p.status}</span>,
+      render: (p) => <StatusChip status={p.status} />,
     },
     clusterColumn(nav, { filter: "text", sortValue: (p) => `${p.cluster}/${p.pool}` }),
-    { key: "environment", label: "Env", filter: "select", render: (p) => <span className="tag">{p.environment}</span> },
+    { key: "environment", label: "Env", filter: "select", render: (p) => <Tag>{p.environment}</Tag> },
     { key: "pool", label: "Pool", filter: "select" },
     { key: "machine_count", label: "Machines" },
     { key: "updated", label: "Updated" },
@@ -422,8 +424,8 @@ function Mcp({ nav }: SectionProps) {
   ];
 
   return (
-    <Card title={`Machine config pools${data ? ` (${data.count})` : ""}`}
-      desc="Node-level config rollout state per pool, degraded and updating first. The patching signal for OS / kubelet changes.">
+    <Card flush title={`Machine config pools${data ? ` (${data.count})` : ""}`}
+      description="Node-level config rollout state per pool, degraded and updating first. The patching signal for OS / kubelet changes.">
       {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={10} rows={6} /> : (
         <DataTable
           id="insights.mcp"
@@ -446,7 +448,7 @@ function Storage({ nav }: SectionProps) {
   const classColumns: Column<StorageClassRow>[] = [
     {
       key: "name", label: "Class", className: "mono", filter: "text",
-      render: (s) => <>{s.name} {s.default && <span className="tag">default</span>}</>,
+      render: (s) => <>{s.name} {s.default && <Tag>default</Tag>}</>,
     },
     {
       key: "provisioners", label: "Provisioner", className: "mono muted", filter: "select",
@@ -456,7 +458,7 @@ function Storage({ nav }: SectionProps) {
     { key: "clusters", label: "Clusters", sortValue: (s) => s.clusters.length, filterValue: (s) => s.clusters.join(", "), render: (s) => s.clusters.length },
     { key: "pvcs", label: "PVCs" },
     { key: "bound", label: "Bound" },
-    { key: "pending", label: "Pending", render: (s) => (s.pending ? <span style={{ color: "var(--warning)" }}>{s.pending}</span> : 0) },
+    { key: "pending", label: "Pending", render: (s) => (s.pending ? <ToneText tone="warning">{s.pending}</ToneText> : 0) },
     { key: "requested_bytes", label: "Requested", render: (s) => fmtBytes(s.requested_bytes) },
   ];
 
@@ -464,7 +466,7 @@ function Storage({ nav }: SectionProps) {
     {
       key: "status", label: "Status", filter: "select",
       sortValue: (p) => statusRank(p.status),
-      render: (p) => <span className={`chip ${p.status}`}>{p.status}</span>,
+      render: (p) => <StatusChip status={p.status} />,
     },
     clusterColumn(nav, { filter: "text" }),
     { key: "namespace", label: "Namespace", className: "mono", filter: "text" },
@@ -482,8 +484,8 @@ function Storage({ nav }: SectionProps) {
   ];
 
   return (
-    <div className="grid" style={{ gap: 16 }}>
-      <Card title="Storage classes" desc="Provisioner per class, and the claims riding on it - the storage blast radius.">
+    <Stack spacing={2}>
+      <Card flush title="Storage classes" description="Provisioner per class, and the claims riding on it - the storage blast radius.">
         {!data ? <SkeletonTable columns={7} rows={5} /> : <DataTable
           id="insights.storageClasses"
           columns={classColumns}
@@ -493,7 +495,7 @@ function Storage({ nav }: SectionProps) {
           empty="No storage classes collected."
         />}
       </Card>
-      <Card title={`Persistent volume claims${data ? ` (${data.pvcs.length})` : ""}`} desc="Pending first. Mounted-by comes from pod volumes.">
+      <Card flush title={`Persistent volume claims${data ? ` (${data.pvcs.length})` : ""}`} description="Pending first. Mounted-by comes from pod volumes.">
         {!data ? <SkeletonTable columns={9} rows={8} /> : <DataTable
           id="insights.pvcs"
           columns={pvcColumns}
@@ -504,7 +506,7 @@ function Storage({ nav }: SectionProps) {
           scroll
         />}
       </Card>
-    </div>
+    </Stack>
   );
 }
 
@@ -531,7 +533,7 @@ function Routes({ nav, route }: SectionProps) {
     {
       key: "status", label: "Status", filter: "select",
       sortValue: (r) => statusRank(r.status),
-      render: (r) => <span className={`chip ${r.status}`}>{r.status}</span>,
+      render: (r) => <StatusChip status={r.status} />,
     },
     {
       key: "routers", label: "Router", className: "muted", filter: "select",
@@ -541,8 +543,8 @@ function Routes({ nav, route }: SectionProps) {
   ];
 
   return (
-    <Card title={`Routes${data ? ` (${data.count})` : ""}`} desc="Which cluster and namespace serves a hostname."
-      right={<SearchInput className="search" placeholder="filter by host…" value={f.host} onChange={(v) => set("host", v)} />}>
+    <Card flush title={`Routes${data ? ` (${data.count})` : ""}`} description="Which cluster and namespace serves a hostname."
+      action={<SearchInput placeholder="filter by host…" value={f.host} onChange={(v) => set("host", v)} />}>
       {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={8} rows={8} /> : (
         <DataTable
           id="insights.routes"
@@ -577,19 +579,19 @@ function Events({ nav, route, clusterNames }: SectionProps) {
       filterValue: (e) => `${e.involved.kind}/${e.involved.name}`,
       render: (e) => `${e.involved.kind}/${e.involved.name}`,
     },
-    { key: "reason", label: "Reason", filter: "select", render: (e) => <span className="chip warning">{e.reason}</span> },
+    { key: "reason", label: "Reason", filter: "select", render: (e) => <Tag tone="warning">{e.reason}</Tag> },
     { key: "count", label: "Count" },
     { key: "source", label: "Source", className: "muted", filter: "select" },
     { key: "message", label: "Message", className: "muted wrap", filter: "text" },
   ];
 
   return (
-    <Card title={`Warning events${data ? ` (${data.count})` : ""}`}
-      desc={data ? Object.entries(data.by_reason).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${v} ${k}`).join(" · ") : ""}
-      right={<div className="filters" style={{ margin: 0 }}>
+    <Card flush title={`Warning events${data ? ` (${data.count})` : ""}`}
+      description={data ? Object.entries(data.by_reason).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${v} ${k}`).join(" · ") : ""}
+      action={<Filters>
         <SubTabs tabs={[["", "All"], ["platform", "Platform"], ["application", "Apps"]]} value={f.class} onChange={(v) => set("class", v)} />
         <FilterSelect label="Cluster" value={f.cluster} options={clusterNames} onChange={(v) => set("cluster", v)} />
-      </div>}>
+      </Filters>}>
       {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={7} rows={9} /> : (
         <DataTable
           id="insights.events"
@@ -636,17 +638,20 @@ function Images({ nav, route }: SectionProps) {
     {
       key: "blast", label: "",
       render: (g) => (groupBy === "image"
-        ? <span className="link" onClick={(e) => { e.stopPropagation(); nav.goBlast({ image: nameOf(g) }); }}>blast radius →</span>
+        ? (
+          <Link component="button" type="button"
+            onClick={(e) => { e.stopPropagation(); nav.goBlast({ image: nameOf(g) }); }}>blast radius →</Link>
+        )
         : null),
     },
   ];
 
   return (
-    <Card title={`Images${data ? ` (${data.count})` : ""}`} desc="Which workloads run which images - the input to a CVE blast radius."
-      right={<div className="filters" style={{ margin: 0 }}>
+    <Card flush title={`Images${data ? ` (${data.count})` : ""}`} description="Which workloads run which images - the input to a CVE blast radius."
+      action={<Filters>
         <SubTabs tabs={[["image", "Image"], ["repository", "Repository"], ["registry", "Registry"]]} value={groupBy} onChange={(v) => set("group", v)} />
-        <SearchInput className="search" placeholder="filter images…" value={f.image} onChange={(v) => set("image", v)} />
-      </div>}>
+        <SearchInput placeholder="filter images…" value={f.image} onChange={(v) => set("image", v)} />
+      </Filters>}>
       {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={4} rows={8} /> : (
         <DataTable
           id={`insights.images.${groupBy}`}
@@ -689,20 +694,20 @@ function References({ nav, route }: SectionProps) {
       sortValue: (r) => r.workloads.length,
       filterValue: (r) => r.workloads.map((w) => `${w.kind}/${w.name}`).join(", "),
       render: (r) => (
-        <div className="env-list">
-          {r.workloads.map((w, k) => <span key={k}>{w.kind}/{w.name} <span className="src">via {w.via}</span></span>)}
-        </div>
+        <StackedList>
+          {r.workloads.map((w, k) => <span key={k}>{w.kind}/{w.name} <Muted>via {w.via}</Muted></span>)}
+        </StackedList>
       ),
     },
   ];
 
   return (
-    <Card title={`Config references${data ? ` (${data.count})` : ""}`}
-      desc="Which workloads reference a Secret / ConfigMap / PVC / ServiceAccount - the blast radius of rotating a secret or changing a config map."
-      right={<div className="filters" style={{ margin: 0 }}>
+    <Card flush title={`Config references${data ? ` (${data.count})` : ""}`}
+      description="Which workloads reference a Secret / ConfigMap / PVC / ServiceAccount - the blast radius of rotating a secret or changing a config map."
+      action={<Filters>
         <SubTabs tabs={[["Secret", "Secrets"], ["ConfigMap", "ConfigMaps"], ["PersistentVolumeClaim", "PVCs"], ["ServiceAccount", "Service accounts"]]} value={kind} onChange={(v) => set("kind", v)} />
-        <SearchInput className="search" placeholder="exact name (optional)" value={f.name} onChange={(v) => set("name", v)} />
-      </div>}>
+        <SearchInput placeholder="exact name (optional)" value={f.name} onChange={(v) => set("name", v)} />
+      </Filters>}>
       {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={4} rows={8} /> : (
         <DataTable
           id="insights.references"
@@ -726,7 +731,7 @@ function Access({ nav }: SectionProps) {
     { key: "kind", label: "Kind", className: "muted", filter: "select" },
     {
       key: "name", label: "Subject", className: "mono", filter: "text",
-      render: (s) => <>{s.name}{s.namespace ? <span className="muted"> ({s.namespace})</span> : ""}</>,
+      render: (s) => <>{s.name}{s.namespace ? <Muted> ({s.namespace})</Muted> : ""}</>,
     },
     { key: "role", label: "Role", className: "mono", filter: "select" },
     {
@@ -735,9 +740,10 @@ function Access({ nav }: SectionProps) {
       render: (s) => (
         <>
           {s.cluster_count}{" "}
-          <span className="muted">· {s.clusters.map((c) => (
-            <span key={c} className="link" style={{ marginRight: 6 }} onClick={() => nav.openCluster(c)}>{c}</span>
-          ))}</span>
+          <Muted>· {s.clusters.map((c) => (
+            <Link key={c} component="button" type="button" sx={{ mr: 0.75 }}
+              onClick={() => nav.openCluster(c)}>{c}</Link>
+          ))}</Muted>
         </>
       ),
     },
@@ -749,8 +755,8 @@ function Access({ nav }: SectionProps) {
   ];
 
   return (
-    <Card title={`Cluster admins${data ? ` (${data.count} subjects)` : ""}`}
-      desc="Subjects of ClusterRoleBindings to cluster-admin, with the clusters each holds it on.">
+    <Card flush title={`Cluster admins${data ? ` (${data.count} subjects)` : ""}`}
+      description="Subjects of ClusterRoleBindings to cluster-admin, with the clusters each holds it on.">
       {error && !data ? <ErrorBanner error={error} /> : !data ? <SkeletonTable columns={5} rows={6} /> : (
         <DataTable
           id="insights.access"

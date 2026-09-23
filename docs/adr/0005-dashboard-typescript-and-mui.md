@@ -206,3 +206,38 @@ The denominators grew by the guards; branches fall 0.8 points because a `|| []` 
 
 **Suite time**: 6.7 s (`vitest run`, warm), 14.8 s with `--coverage`.
 `tsc --noEmit` takes about 3.0 s under strict, up from 1.4 s with it off.
+
+### Phases 3, 4 and 5 - Material UI
+
+React stays at 18.3: `@mui/material` 9.4.0, `@mui/x-data-grid` 9.14.0 and `@mui/x-charts` 9.14.0 all accept it, so the React 19 question was answered by the peer dependencies and not by an upgrade.
+
+**Theme and shell (Phase 3).**
+`src/theme.ts` (589 lines) builds the palette from the 31 former stylesheet tokens, with a light mode the app never had; the mode follows the OS until the app-bar toggle is used and the choice persists under `odl.color-mode`.
+Navigation is `Tabs`, refresh outcomes are a `Snackbar`, overlays are MUI `Dialog`, `Drawer` and `Menu` (focus trap and scroll lock, which the hand-rolled dismiss hook lacked), clickable tiles are real buttons, `title` attributes became tooltips with accessible names.
+`styles.css` went from 790 lines to 95: the pre-mount paint and five classes `ResultTable` still emits, which is the last piece of the retirement.
+
+**DataGrid (Phase 4).**
+`DataTable` wraps the community `DataGrid` behind its existing props; `ResultTable` needed no API change.
+What the community tier could not express and how the wrapper does it: the per-column filter row (rows are filtered before the grid, controls live in each column's header), free-text search over rendered cell text, blanks-last sorting in both directions, the expandable detail row (a synthetic full-width row), content-sized columns (a `minWidth` estimated from the first 60 rows), and the 100-row page cap (clamped).
+The one functional loss is "show all N rows" in one scroll; an "Export CSV" of every filtered row in the table's sort order takes its place.
+Render of a 1,000-row table in a real browser: 56 ms and 8,000 cells before, 21 ms and 128 cells after (virtualised); first mount is dearer (239 ms against 64 ms).
+
+**Charts (Phase 5).**
+`Chart.tsx` went from 1,458 to 1,028 lines: scales, ticks, legend, tooltip and path drawing are MUI's now; field inference, spec resolution, time bucketing, unit formatting and label ellipsis stayed and their 30 tests are byte-identical.
+Series colours come from `theme.palette.chart`, the validated palette carried over.
+Bar value labels are kept for single-measure bars and dropped for grouped bars.
+`ChartControls` is `TextField select`, `ToggleButtonGroup` and `Checkbox`, with every label and `aria-pressed` unchanged.
+
+**Integration (Phase 6).**
+`download` and `toCsv` moved to `src/files.ts` (they existed twice), the test setup stubs `SVGElement.getBBox` and `getComputedTextLength` so MUI's tick text renders under jsdom, and the bundle is split into the app, `mui`, `mui-grid` and `mui-charts` chunks so the libraries cache across releases.
+
+| | before MUI (`e97f916`) | after |
+|---|---|---|
+| tests | 898 in 35 files | 916 in 36 files |
+| statements / lines | 88.9% / 90.9% | 93.5% / 95.5% |
+| JS gzip | 120.1 kB, one chunk | 472 kB in four chunks: app 80.7, mui 167.9, grid 127.4, charts 96.0 |
+| CSS gzip | 6.65 kB | 0.67 kB |
+| suite | 6.7 s (14.8 s with coverage) | about 16 s (22 s with coverage) |
+
+Tests changed for structure, never weakened: tabs are `role="tab"`, dialog and menu handles moved from class names to roles and `data-*` attributes, the grid renders `row` / `gridcell` / `grid`, the chart renders MUI bars and carries its accessible name on a wrapping element.
+Convention kept: the module-level column list annotation, and every remaining `any` with a reason.

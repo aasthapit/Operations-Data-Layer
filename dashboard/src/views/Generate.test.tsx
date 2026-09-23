@@ -297,7 +297,8 @@ describe("when generation is not available", () => {
   it("asks nothing of the API at all in fixture mode", async () => {
     script(FULL_RUN);
     open("/generate?fixture=1");
-    expect(await screen.findByText("fixture")).toHaveClass("db-tag");
+    // the page says out loud that this is the sample rather than the API's
+    expect(await screen.findByText("fixture")).toBeInTheDocument();
     expect(api.agent).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Ask for a dashboard")).toBeEnabled();
   });

@@ -1,40 +1,26 @@
 // The few pieces of chrome the dashboard pages need that the rest of the app
 // never has: a menu on a panel, a modal for the small decisions (name this
 // dashboard, add this query to one) and a drawer for the big ones (write a
-// panel). All three close on Escape and on a click outside, and all three are
-// built from the same tokens as every card in the app.
-import { useEffect, useRef, useState } from "react";
-import type { ReactNode, RefObject } from "react";
+// panel).
+//
+// All three are MUI's own overlays (ADR-0005, phase 3), which is what retired
+// the hand-rolled dismissal this file used to carry: Escape, the click outside,
+// the focus that moves in when one opens and back to where it was when it
+// leaves, and the scroll lock underneath are the library's, not ours.
+import { cloneElement, isValidElement, useId, useState } from "react";
+import type { ReactElement, ReactNode } from "react";
+import {
+  Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Drawer as MuiDrawer,
+  IconButton, Menu as MuiMenu, MenuItem as MuiMenuItem, TextField, Typography,
+} from "@mui/material";
+import CloseIcon from "@mui/icons-material/Close";
+import { MONO_FONT } from "../components";
 import { isSlug, slugify } from "./model";
 
-// Escape closes; a click outside closes; focus moves in when it opens and back
-// to where it was when it leaves.
-function useDismiss(ref: RefObject<HTMLElement | null>, onClose: () => void,
-  { restoreFocus = false }: { restoreFocus?: boolean } = {}) {
-  useEffect(() => {
-    // `activeElement` is an Element; only an HTMLElement can be focused back.
-    const previous = restoreFocus ? (document.activeElement as HTMLElement | null) : null;
-    // The press that opened this is still travelling when the listener goes on,
-    // and it landed outside - so outside-clicks only count from the next tick,
-    // or the thing would close itself the instant it opened.
-    let armed = false;
-    const arm = setTimeout(() => { armed = true; }, 0);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
-    };
-    const onDown = (e: MouseEvent) => {
-      if (armed && ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("keydown", onKey, true);
-    document.addEventListener("mousedown", onDown);
-    return () => {
-      clearTimeout(arm);
-      document.removeEventListener("keydown", onKey, true);
-      document.removeEventListener("mousedown", onDown);
-      if (previous && previous.focus) previous.focus();
-    };
-  }, [ref, onClose, restoreFocus]);
-}
+/** The id every overlay's backdrop carries. The backdrop is the overlay's own
+ * shape rather than a control, so it has no role and no name; this is the one
+ * handle anything outside has on it, and only one overlay is ever open. */
+export const BACKDROP_ID = "odl-overlay-backdrop";
 
 /** One entry of a panel menu. A menu with no live entries draws nothing. */
 export interface MenuItem {
@@ -53,44 +39,65 @@ export interface MenuProps {
 }
 
 export function Menu({ label = "⋯", title = "Panel menu", items }: MenuProps) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [open, setOpen] = useState(false);
-  const close = useRef(() => setOpen(false)).current;
-  useDismiss(ref, open ? close : noop);
+  // The anchor is the button itself, which is what the menu positions against.
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const live = (items || []).filter(Boolean) as MenuItem[];
   if (!live.length) return null;
+  const open = !!anchor;
   return (
-    <div className="db-menu" ref={ref}>
-      <button
-        type="button"
-        className="db-menu-btn"
+    <Box sx={{ position: "relative" }}>
+      <IconButton
         title={title}
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
+        onClick={(e) => setAnchor(e.currentTarget)}
+        sx={{
+          color: "text.disabled", border: 1, borderColor: "transparent", borderRadius: "6px",
+          px: 0.875, py: 0.125, fontSize: 15, lineHeight: 1.3,
+          "&:hover, &[aria-expanded='true']": { borderColor: "divider", color: "text.primary" },
+        }}
       >
         {label}
-      </button>
-      {open && (
-        <div className="db-menu-pop" role="menu">
-          {live.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              role="menuitem"
-              className={item.danger ? "danger" : undefined}
-              onClick={() => { setOpen(false); item.onSelect(); }}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+      </IconButton>
+      <MuiMenu
+        anchorEl={anchor}
+        open={open}
+        onClose={() => setAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        slotProps={{ list: { sx: { minWidth: 160, py: 0.5 } }, backdrop: { id: BACKDROP_ID } }}
+      >
+        {live.map((item) => (
+          <MuiMenuItem
+            key={item.label}
+            data-danger={item.danger || undefined}
+            onClick={() => { setAnchor(null); item.onSelect(); }}
+            sx={item.danger
+              ? { color: "error.main", "&:hover": { bgcolor: "error.main", color: "common.white" } }
+              : undefined}
+          >
+            {item.label}
+          </MuiMenuItem>
+        ))}
+      </MuiMenu>
+    </Box>
   );
 }
 
-const noop = () => {};
+/** The close button both overlays wear. Its name is the word plus what it
+ * closes - "×" is a shape a screen reader cannot read out, and a bare "Close"
+ * would be the same name as a dialog's own Close button in its footer. */
+function CloseButton({ title, onClose }: { title: string; onClose: () => void }) {
+  return (
+    <IconButton
+      aria-label={`Close ${title}`}
+      onClick={onClose}
+      sx={{ flex: "none", border: 1, borderColor: "divider", borderRadius: "6px", p: 0.25 }}
+    >
+      <CloseIcon sx={{ fontSize: 14 }} />
+    </IconButton>
+  );
+}
 
 export interface ModalProps {
   title: string;
@@ -101,20 +108,30 @@ export interface ModalProps {
 }
 
 export function Modal({ title, children, footer, onClose, width = 460 }: ModalProps) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  useDismiss(ref, onClose, { restoreFocus: true });
   return (
-    <div className="db-scrim">
-      <div className="db-modal card" style={{ width }} role="dialog" aria-modal="true"
-        aria-label={title} ref={ref}>
-        <div className="section-head" style={{ marginBottom: 12 }}>
-          <h3 style={{ margin: 0 }}>{title}</h3>
-          <button type="button" className="q-x" title="Close" onClick={onClose}>×</button>
-        </div>
-        {children}
-        {footer && <div className="db-modal-foot">{footer}</div>}
-      </div>
-    </div>
+    <Dialog
+      open
+      onClose={onClose}
+      aria-label={title}
+      slotProps={{
+        paper: { sx: { width, maxWidth: "100%" } },
+        backdrop: { id: BACKDROP_ID },
+      }}
+    >
+      <DialogTitle
+        component="div"
+        sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1.5, p: "18px 18px 12px" }}
+      >
+        <Typography variant="h4" color="text.secondary">{title}</Typography>
+        <CloseButton title={title} onClose={onClose} />
+      </DialogTitle>
+      <DialogContent sx={{ p: "0 18px 18px" }}>{children}</DialogContent>
+      {footer && (
+        <DialogActions sx={{ p: "14px 18px", borderTop: 1, borderColor: "border.soft" }}>
+          {footer}
+        </DialogActions>
+      )}
+    </Dialog>
   );
 }
 
@@ -126,19 +143,38 @@ export interface DrawerProps {
 }
 
 export function Drawer({ title, children, footer, onClose }: DrawerProps) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  useDismiss(ref, onClose, { restoreFocus: true });
   return (
-    <div className="db-scrim db-scrim-right">
-      <div className="db-drawer" role="dialog" aria-modal="true" aria-label={title} ref={ref}>
-        <div className="db-drawer-head">
-          <h3 style={{ margin: 0 }}>{title}</h3>
-          <button type="button" className="q-x" title="Close" onClick={onClose}>×</button>
-        </div>
-        <div className="db-drawer-body">{children}</div>
-        {footer && <div className="db-drawer-foot">{footer}</div>}
-      </div>
-    </div>
+    <MuiDrawer
+      open
+      anchor="right"
+      onClose={onClose}
+      slotProps={{
+        paper: {
+          role: "dialog",
+          "aria-modal": true,
+          "aria-label": title,
+          sx: { width: "min(620px, 100%)", display: "flex", flexDirection: "column" },
+        },
+        backdrop: { id: BACKDROP_ID },
+      }}
+    >
+      <Box sx={{
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1.5,
+        p: "14px 18px", borderBottom: 1, borderColor: "divider", flex: "none",
+      }}>
+        <Typography variant="h4" color="text.secondary">{title}</Typography>
+        <CloseButton title={title} onClose={onClose} />
+      </Box>
+      <Box sx={{ flex: 1, overflow: "auto", p: "16px 18px" }}>{children}</Box>
+      {footer && (
+        <Box sx={{
+          display: "flex", justifyContent: "flex-end", gap: 1, flex: "none",
+          p: "12px 18px", borderTop: 1, borderColor: "divider", bgcolor: "background.subtle",
+        }}>
+          {footer}
+        </Box>
+      )}
+    </MuiDrawer>
   );
 }
 
@@ -171,23 +207,27 @@ export function IdDialog({
       onClose={onCancel}
       footer={(
         <>
-          <button type="button" className="btn" onClick={onCancel}>Cancel</button>
-          <button type="button" className="btn primary" disabled={!ok || busy}
-            onClick={() => onSubmit(id)}>
+          <Button variant="outlined" color="inherit" onClick={onCancel}>Cancel</Button>
+          <Button variant="contained" disabled={!ok || busy} onClick={() => onSubmit(id)}>
             {busy ? "Saving…" : submitLabel}
-          </button>
+          </Button>
         </>
       )}
     >
-      <p className="q-desc" style={{ marginTop: 0 }}>{intro}</p>
-      <label className="db-field wide">
-        <span className="db-field-label">Id</span>
-        <input type="text" className="mono" value={value} autoFocus
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && ok) onSubmit(id); }} />
-        {error ? <span className="db-field-error">{error}</span>
-          : <span className="db-field-hint">The URL will be /dashboards/{id || "…"}</span>}
-      </label>
+      <Typography variant="caption" color="text.disabled" sx={{ display: "block", mb: 1.75 }}>
+        {intro}
+      </Typography>
+      <TextField
+        fullWidth
+        label="Id"
+        value={value}
+        autoFocus
+        error={!!error}
+        helperText={error || <>The URL will be /dashboards/{id || "…"}</>}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && ok) onSubmit(id); }}
+        slotProps={{ htmlInput: { style: { fontFamily: MONO_FONT } }, inputLabel: { shrink: true } }}
+      />
     </Modal>
   );
 }
@@ -203,13 +243,29 @@ export interface FieldProps {
 }
 
 export function Field({ label, hint, error, children, wide }: FieldProps) {
+  // The label names the control through `htmlFor` rather than by wrapping it.
+  // An outlined MUI field draws a <legend> inside its own border, and a label
+  // wrapped round one would take that legend's text into the name it gives the
+  // control - which is the field's own name plus an invisible character.
+  const id = useId();
+  const control = isValidElement(children)
+    ? cloneElement(children as ReactElement<{ id?: string }>, { id })
+    : children;
   return (
-    <label className={`db-field${wide ? " wide" : ""}`}>
-      <span className="db-field-label">{label}</span>
-      {children}
-      {error ? <span className="db-field-error">{error}</span>
-        : hint ? <span className="db-field-hint">{hint}</span> : null}
-    </label>
+    <Box
+      sx={{
+        display: "flex", flexDirection: "column", gap: 0.5, mb: 1.75, minWidth: 150,
+        ...(wide ? { width: "100%" } : {}),
+      }}
+    >
+      <Typography component="label" htmlFor={id} variant="subtitle2" color="text.secondary">
+        {label}
+      </Typography>
+      {control}
+      {error
+        ? <Typography variant="caption" color="error.main">{error}</Typography>
+        : hint ? <Typography variant="caption" color="text.disabled">{hint}</Typography> : null}
+    </Box>
   );
 }
 
@@ -225,16 +281,31 @@ export interface StepperProps {
 }
 
 export function Stepper({ label, value, min, max, onChange, suffix }: StepperProps) {
+  const step = (to: number, name: string, glyph: string, disabled: boolean) => (
+    <Button
+      variant="outlined"
+      color="inherit"
+      disabled={disabled}
+      onClick={() => onChange(to)}
+      aria-label={`${name} ${label}`}
+      sx={{ minWidth: 0, px: 0.875, py: 0.125, fontSize: 11, lineHeight: 1.5 }}
+    >
+      {glyph}
+    </Button>
+  );
   return (
-    <div className="db-stepper">
-      <span className="db-field-label">{label}</span>
-      <div className="db-stepper-row">
-        <button type="button" className="q-mini" disabled={value <= min}
-          onClick={() => onChange(value - 1)} aria-label={`Decrease ${label}`}>−</button>
-        <span className="db-stepper-value mono">{value}{suffix ? ` ${suffix}` : ""}</span>
-        <button type="button" className="q-mini" disabled={value >= max}
-          onClick={() => onChange(value + 1)} aria-label={`Increase ${label}`}>+</button>
-      </div>
-    </div>
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, mb: 1.75 }}>
+      <Typography variant="subtitle2" color="text.secondary">{label}</Typography>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+        {step(value - 1, "Decrease", "−", value <= min)}
+        <Box component="span" sx={{
+          minWidth: 54, textAlign: "center", color: "text.secondary", fontFamily: MONO_FONT,
+          fontSize: 12.5,
+        }}>
+          {value}{suffix ? ` ${suffix}` : ""}
+        </Box>
+        {step(value + 1, "Increase", "+", value >= max)}
+      </Box>
+    </Box>
   );
 }

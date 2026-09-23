@@ -244,7 +244,7 @@ pre.mermaid svg{ max-width: 100%; height: auto; }
   <div class="layout">
     <aside class="rail">
       <div class="glance">
-        <span class="pill" style="color: var(--warn)">In progress</span>
+        <span class="pill">Phases 1 to 5 landed</span>
         <dl class="meta">
           <dt>Branch</dt>
           <dd><span class="mono">feat/dashboard-typescript-mui</span>, cut from <span class="mono">feat/redis-store-nl-query</span> at <span class="mono">889fecc</span></dd>
@@ -383,6 +383,7 @@ flowchart LR
         <p>Filled in as each phase lands.</p>
         <p class="tnote">Phase 1 also typed the test fixtures against the response interfaces and found eleven places where a fixture misdescribed its endpoint (channel rows, blast-radius placements, manifest availability totals, storage classes); all eleven were fixed in the fixtures. The backend now marks the two free-form <span class="mono">params</span> bodies as open objects so the generated request types accept keys.</p>
         <p class="tnote">Phase 2 kept every component, prop and export name. Strict mode found 544 errors, 414 of them in the suite; 197 were one shape (a nullable DOM walk handed to <span class="mono">within</span>) and were replaced by two throwing helpers in the test harness. The tree ends with one non-null assertion, no <span class="mono">@ts-ignore</span>, and every <span class="mono">any</span> carrying a reason. The module-level column lists follow one convention, <span class="mono">const COLUMNS: Column&lt;Row&gt;[]</span>, recorded in the ADR.</p>
+        <p class="tnote">Phases 3 to 5 kept React 18 (every MUI 9 package accepts it), gained the light theme the app never had, and replaced the hand-rolled table and chart with the community DataGrid and Charts: a 1,000-row table renders 128 cells instead of 8,000, and the one loss, "show all rows" in one scroll, is answered by a CSV export of every filtered row. The libraries account for the bundle growth and sit in their own cached chunks.</p>
         <div class="scroll">
           <table>
             <caption>Per phase</caption>
@@ -391,7 +392,7 @@ flowchart LR
               <tr><td>start</td><td class="num">0</td><td class="num">-</td><td class="num">896</td><td class="num">89.1% / 90.9%</td><td class="num">119.7 KB</td><td class="num">9.2 s</td></tr>
               <tr><td>1 · tooling, API types, pure modules</td><td class="num">29 moved, 7 added</td><td class="num">~80 in per-file batches</td><td class="num">898</td><td class="num">89.1% / 91.0%</td><td class="num">119.8 KB</td><td class="num">9.1 s</td></tr>
               <tr><td>2 · components, shell, views; strict on</td><td class="num">41 moved, 1 merged</td><td class="num">544 under strict</td><td class="num">898</td><td class="num">88.9% / 90.9%</td><td class="num">120.1 KB</td><td class="num">6.7 s (14.8 s with coverage)</td></tr>
-              <tr><td>3, 4, 5</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td><td class="pending">pending</td></tr>
+              <tr><td>3, 4, 5 · Material UI, DataGrid, Charts</td><td class="num">theme + 33 components and views</td><td class="num">0 (strict kept)</td><td class="num">916</td><td class="num">93.5% / 95.5%</td><td class="num">472 KB in 4 chunks</td><td class="num">16 s</td></tr>
             </tbody>
           </table>
         </div>

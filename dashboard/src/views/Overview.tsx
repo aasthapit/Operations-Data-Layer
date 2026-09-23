@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
+import { Box, ButtonBase, LinearProgress, Paper, Stack, Typography } from "@mui/material";
 import { api } from "../api";
 import type { OverviewResponse } from "../api/types";
 import { useFetch } from "../hooks";
 import { useQueryFilters } from "../router";
 import type { Nav, RouteApi } from "../router";
 import {
-  HealthBar, Stat, ErrorBanner, Pill, DataTable, Skeleton, SkeletonStats, SkeletonTable, fmtTime,
+  Card, HealthBar, Muted, SectionHead, Stat, StatGrid, SubTabs, Tag, ToneText,
+  ErrorBanner, Pill, DataTable, Skeleton, SkeletonStats, SkeletonTable, fmtTime,
 } from "../components";
 import type { Column } from "../components";
 
@@ -30,7 +32,11 @@ const HUB_COLUMNS: Column<HubRow>[] = [
   { key: "last_synced", label: "Last synced", className: "muted", render: (h) => fmtTime(h.last_synced) },
   {
     key: "last_error", label: "Error", className: "muted", filter: "text",
-    render: (h) => <span style={{ fontSize: 12, maxWidth: 420, wordBreak: "break-word", display: "inline-block" }}>{h.last_error || ""}</span>,
+    render: (h) => (
+      <Box component="span" sx={{ fontSize: 12, maxWidth: 420, wordBreak: "break-word", display: "inline-block" }}>
+        {h.last_error || ""}
+      </Box>
+    ),
   },
 ];
 
@@ -71,42 +77,45 @@ export default function Overview({ nav, route }: OverviewProps) {
   const sw = d?.sweep;
 
   return (
-    <div className="grid" style={{ gap: 24 }}>
+    <Stack spacing={3}>
       {sw?.running && (
-        <div className="card" style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 12 }}>
-          <span className="tag">sweep in progress</span>
-          <span>{sw.done ?? 0} of {sw.total} clusters collected{sw.failed ? `, ${sw.failed} failed` : ""}</span>
-          <div style={{ flex: 1, height: 6, background: "var(--line, #333)", borderRadius: 3, overflow: "hidden" }}>
-            <div style={{ width: `${sw.total ? Math.round((100 * (sw.done ?? 0)) / sw.total) : 0}%`, height: "100%", background: "var(--accent, #4f8cff)" }} />
-          </div>
-          <span className="muted" style={{ fontSize: 12 }}>started {fmtTime(sw.started_at)}</span>
+        <Paper sx={{ p: "10px 14px", display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+          <Tag>sweep in progress</Tag>
+          <Typography variant="body1">
+            {sw.done ?? 0} of {sw.total} clusters collected{sw.failed ? `, ${sw.failed} failed` : ""}
+          </Typography>
+          <LinearProgress
+            variant="determinate"
+            value={sw.total ? Math.round((100 * (sw.done ?? 0)) / sw.total) : 0}
+            sx={{ flex: 1, minWidth: 120, height: 6, borderRadius: "3px" }}
+          />
+          <Muted sx={{ fontSize: 12 }}>started {fmtTime(sw.started_at)}</Muted>
           {(sw.collectors || []).length > 1 && (
-            <span className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+            <Muted sx={{ fontSize: 12, whiteSpace: "nowrap" }}>
               {(sw.collectors || []).map((c) => `${(c.hubs || []).join(",") || "all"}${c.shard ? " " + c.shard : ""} ${c.done}/${c.total}${c.running ? "" : " done"}`).join(" · ")}
-            </span>
+            </Muted>
           )}
-        </div>
+        </Paper>
       )}
-      <div>
-        {!d ? <SkeletonStats count={6} /> : (
-          <div className="stats">
-            <Stat label="Clusters" value={d.clusters_total} kind="accent" onClick={() => nav.goClusters()} />
-            <Stat label="Healthy" value={d.counts.healthy} kind="healthy" onClick={() => nav.goClusters("status", "healthy")} />
-            <Stat label="Warning" value={d.counts.warning} kind="warning" onClick={() => nav.goClusters("status", "warning")} />
-            <Stat label="Critical" value={d.counts.critical} kind="critical" onClick={() => nav.goClusters("status", "critical")} />
-            <Stat label="Upgrading" value={d.upgrading} kind="accent" onClick={() => nav.goClusters("upgrading", "true")} />
-            <Stat label="Applications" value={i ? i.applications : "…"} kind="accent" onClick={() => nav.openApp(null)} />
-          </div>
-        )}
-      </div>
 
-      <div>
-        <div className="section-head">
-          <div className="section-title" style={{ margin: 0 }}>Needs attention</div>
-          <div className="desc">Everything below is read from the clusters' own API servers - nothing external.</div>
-        </div>
+      {!d ? <SkeletonStats count={6} /> : (
+        <StatGrid>
+          <Stat label="Clusters" value={d.clusters_total} kind="accent" onClick={() => nav.goClusters()} />
+          <Stat label="Healthy" value={d.counts.healthy} kind="healthy" onClick={() => nav.goClusters("status", "healthy")} />
+          <Stat label="Warning" value={d.counts.warning} kind="warning" onClick={() => nav.goClusters("status", "warning")} />
+          <Stat label="Critical" value={d.counts.critical} kind="critical" onClick={() => nav.goClusters("status", "critical")} />
+          <Stat label="Upgrading" value={d.upgrading} kind="accent" onClick={() => nav.goClusters("upgrading", "true")} />
+          <Stat label="Applications" value={i ? i.applications : "…"} kind="accent" onClick={() => nav.openApp(null)} />
+        </StatGrid>
+      )}
+
+      <Box>
+        <SectionHead
+          title="Needs attention"
+          description="Everything below is read from the clusters' own API servers - nothing external."
+        />
         {ins.error && !i ? <ErrorBanner error={ins.error} /> : !i ? <SkeletonStats count={10} /> : (
-          <div className="stats">
+          <StatGrid>
             <Stat label="Expired certificates" value={i.certificates.expired}
               kind={i.certificates.expired ? "critical" : "healthy"} onClick={() => nav.goInsights("certificates")} />
             <Stat label="Certificates expiring" value={i.certificates.expiring}
@@ -126,12 +135,11 @@ export default function Overview({ nav, route }: OverviewProps) {
             <Stat label="Warning events" value={i.warning_events} kind="unknown" onClick={() => nav.goInsights("events")} />
             <Stat label="Clusters without metrics" value={i.clusters_without_metrics}
               kind={i.clusters_without_metrics ? "warning" : "healthy"} />
-          </div>
+          </StatGrid>
         )}
-      </div>
+      </Box>
 
-      <div className="card">
-        <h3>Hubs (ACM)</h3>
+      <Card title="Hubs (ACM)">
         {!d ? <SkeletonTable columns={7} rows={3} /> : (
           <DataTable
             id="overview.hubs"
@@ -143,59 +151,79 @@ export default function Overview({ nav, route }: OverviewProps) {
           />
         )}
         {d?.last_collection && (
-          <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+          <Muted sx={{ display: "block", fontSize: 12, mt: 1.25 }}>
             Last sweep: {d.last_collection.clusters_ok} ok / {d.last_collection.clusters_failed} failed in {d.last_collection.duration_ms} ms
-          </div>
+          </Muted>
         )}
-      </div>
+      </Card>
 
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <div className="section-title" style={{ margin: 0 }}>Fleet health</div>
-          <div className="toggle-group">
-            {GROUPS.map(([key, label]) => (
-              <button key={key} className={groupBy === key ? "active" : ""} onClick={() => setQ("group", key)}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
+      <Box>
+        <SectionHead title="Fleet health">
+          <SubTabs tabs={GROUPS} value={groupBy} onChange={(key) => setQ("group", key)} />
+        </SectionHead>
         {sum.error && !sum.data ? <ErrorBanner error={sum.error} /> : !sum.data ? <GroupSkeleton /> : (
-          <div className="group-grid">
+          <GroupGrid>
             {sum.data.groups.map((g) => (
-              <div key={g.key} className="group-card" style={{ cursor: "pointer" }}
-                onClick={() => nav.goClusters(groupBy, g.key)}>
-                <div className="gc-head">
-                  <span className="gc-name">{g.key}</span>
-                  <Pill status={g.rollup_status} />
-                </div>
-                <HealthBar counts={g.counts} />
-                <div className="gc-counts">
-                  <span><b>{g.total}</b> {g.total === 1 ? "cluster" : "clusters"}</span>
-                  {g.applications != null && <span><b>{g.applications}</b> {g.applications === 1 ? "application" : "applications"}{g.unassigned_namespaces ? <span className="muted"> (+{g.unassigned_namespaces} ns unassigned)</span> : null}</span>}
-                  {g.counts.healthy ? <span style={{ color: "var(--healthy)" }}>{g.counts.healthy} healthy</span> : null}
-                  {g.counts.warning ? <span style={{ color: "var(--warning)" }}>{g.counts.warning} warning</span> : null}
-                  {g.counts.critical ? <span style={{ color: "var(--critical)" }}>{g.counts.critical} critical</span> : null}
-                </div>
-              </div>
+              <Paper key={g.key} sx={{ "&:hover": { borderColor: "primary.main" } }}>
+                <ButtonBase
+                  onClick={() => nav.goClusters(groupBy, g.key)}
+                  sx={{ display: "block", width: "100%", textAlign: "left", p: 2, borderRadius: "inherit" }}
+                >
+                  <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1.5 }}>
+                    <Typography variant="h3" component="span">{g.key}</Typography>
+                    <Pill status={g.rollup_status} />
+                  </Box>
+                  <HealthBar counts={g.counts} />
+                  <Box sx={{ display: "flex", gap: 1.75, mt: 1.5, fontSize: 12.5, color: "text.secondary", flexWrap: "wrap" }}>
+                    <span><b>{g.total}</b> {g.total === 1 ? "cluster" : "clusters"}</span>
+                    {g.applications != null && (
+                      <span>
+                        <b>{g.applications}</b> {g.applications === 1 ? "application" : "applications"}
+                        {g.unassigned_namespaces ? <Muted> (+{g.unassigned_namespaces} ns unassigned)</Muted> : null}
+                      </span>
+                    )}
+                    {g.counts.healthy ? <ToneText tone="healthy">{g.counts.healthy} healthy</ToneText> : null}
+                    {g.counts.warning ? <ToneText tone="warning">{g.counts.warning} warning</ToneText> : null}
+                    {g.counts.critical ? <ToneText tone="critical">{g.counts.critical} critical</ToneText> : null}
+                  </Box>
+                </ButtonBase>
+              </Paper>
             ))}
-          </div>
+          </GroupGrid>
         )}
-      </div>
-    </div>
+      </Box>
+    </Stack>
+  );
+}
+
+/** The fleet-health cards: as many columns of at least 280px as fit. */
+function GroupGrid({ children, hidden }: { children?: React.ReactNode; hidden?: boolean }) {
+  return (
+    <Box
+      aria-hidden={hidden || undefined}
+      sx={{ display: "grid", gap: 2, gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}
+    >
+      {children}
+    </Box>
   );
 }
 
 function GroupSkeleton() {
   return (
-    <div className="group-grid" aria-hidden="true">
+    <GroupGrid hidden>
       {Array.from({ length: 4 }, (_, i) => (
-        <div key={i} className="group-card">
-          <div className="gc-head"><Skeleton width="45%" height={15} /><Skeleton width={62} height={18} /></div>
+        <Paper key={i} sx={{ p: 2 }}>
+          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1.5 }}>
+            <Skeleton width="45%" height={15} />
+            <Skeleton width={62} height={18} />
+          </Box>
           <Skeleton width="100%" height={10} />
-          <div className="gc-counts"><Skeleton width="30%" height={12} /><Skeleton width="38%" height={12} /></div>
-        </div>
+          <Box sx={{ display: "flex", gap: 1.75, mt: 1.5 }}>
+            <Skeleton width="30%" height={12} />
+            <Skeleton width="38%" height={12} />
+          </Box>
+        </Paper>
       ))}
-    </div>
+    </GroupGrid>
   );
 }

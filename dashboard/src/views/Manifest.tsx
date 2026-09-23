@@ -1,10 +1,14 @@
 import { Fragment } from "react";
+import { Box, Link, Paper } from "@mui/material";
 import { api } from "../api";
 import type {
   CollectorClusterTiming, CollectorTimingsResponse, ManifestAvailabilityResponse, ManifestResponse,
 } from "../api/types";
 import { useFetch } from "../hooks";
-import { ErrorBanner, DataTable, SkeletonLines, SkeletonTable, fmtBytes } from "../components";
+import {
+  Card, KeyLabel, KeyValues, Mono, Muted, SectionHead, StatGrid, StatusChip,
+  ErrorBanner, DataTable, SkeletonLines, SkeletonTable, fmtBytes,
+} from "../components";
 import type { Column } from "../components";
 
 /** One declared resource, as `/api/manifest` sends it. */
@@ -46,18 +50,18 @@ const RESOURCE_COLUMNS: Column<ResourceRow>[] = [
   {
     key: "enabled", label: "Enabled", filter: "select",
     filterValue: (r) => (r.enabled ? "enabled" : "disabled"),
-    render: (r) => (r.enabled ? <span className="chip ok">enabled</span> : <span className="chip disabled">disabled</span>),
+    render: (r) => <StatusChip status={r.enabled ? "enabled" : "disabled"} />,
   },
   {
     key: "description", label: "What it gives", className: "muted", filter: "text", width: "40%",
-    render: (r) => <span style={{ fontSize: 12 }}>{r.description}</span>,
+    render: (r) => <Box component="span" sx={{ fontSize: 12 }}>{r.description}</Box>,
   },
 ];
 
 const TIMING_COLUMNS = (onOpen: (name: string) => void): Column<CollectorClusterTiming>[] => [
   {
     key: "cluster", label: "Cluster", className: "mono nowrap", filter: "text",
-    render: (r) => <span className="link" onClick={() => onOpen(r.cluster)}>{r.cluster}</span>,
+    render: (r) => <Link component="button" type="button" onClick={() => onOpen(r.cluster)}>{r.cluster}</Link>,
   },
   { key: "hub", label: "Hub", className: "muted nowrap", filter: "select" },
   {
@@ -104,6 +108,28 @@ const TIMING_COLUMNS = (onOpen: (name: string) => void): Column<CollectorCluster
   },
 ];
 
+interface TimingStatProps {
+  label: string;
+  value: string;
+  sub: string;
+  /** "accent" for the figure this card exists to draw attention to. */
+  kind?: string;
+}
+
+/** A stat tile with a smaller number than the fleet counters: these are
+ * durations and percentages, which need more room than a two-digit count. */
+function TimingStat({ label, value, sub, kind }: TimingStatProps) {
+  return (
+    <Paper sx={{ p: "16px 18px" }}>
+      <Box sx={{ color: "text.secondary", fontSize: 12.5 }}>{label}</Box>
+      <Box sx={{ fontSize: 24, fontWeight: 700, mt: 0.5, color: kind === "accent" ? "primary.main" : undefined }}>
+        {value}
+      </Box>
+      <Muted sx={{ display: "block", fontSize: 11.5, mt: 0.25 }}>{sub}</Muted>
+    </Paper>
+  );
+}
+
 interface TimingsProps {
   data: CollectorTimingsResponse;
   onOpen: (name: string) => void;
@@ -126,44 +152,39 @@ function Timings({ data, onOpen }: TimingsProps) {
   return (
     <>
       {measured === 0 ? (
-        <div className="muted" style={{ padding: "0 18px 14px", fontSize: 12.5 }}>
+        <Muted sx={{ display: "block", p: "0 18px 14px", fontSize: 12.5 }}>
           No cluster has reported collection timings yet - they appear after the next sweep.
-        </div>
+        </Muted>
       ) : (
-        <div style={{ padding: "0 18px 14px" }}>
-          <div className="stats" style={{ gap: 12 }}>
-            <div className="stat">
-              <div className="label">Collection time</div>
-              <div className="value" style={{ fontSize: 24 }}>{fmtMs(totals.total_ms)}</div>
-              <div className="sub">{measured} of {fleet.clusters_total} clusters measured</div>
-            </div>
-            <div className="stat">
-              <div className="label">Network (fetch)</div>
-              <div className="value" style={{ fontSize: 24 }}>{fmtPercent(share.fetch_ms)}</div>
-              <div className="sub">
-                {fmtMs(totals.fetch_ms)}
-                {fleet.bytes_per_fetch_second ? ` · ${fmtBytes(fleet.bytes_per_fetch_second)}/s` : ""}
-              </div>
-            </div>
-            <div className="stat accent">
-              <div className="label">Python CPU</div>
-              <div className="value" style={{ fontSize: 24 }}>{fmtPercent(fleet.cpu_percent)}</div>
-              <div className="sub">
-                {fmtMs(totals.cpu_ms)}
-                {fleet.parse_percent_of_fetch != null
-                  ? ` · parsing is ${fleet.parse_percent_of_fetch}% of the fetch window` : ""}
-              </div>
-            </div>
-            <div className="stat">
-              <div className="label">Last sweep</div>
-              <div className="value" style={{ fontSize: 24 }}>{fmtMs(last && last.duration_ms)}</div>
-              <div className="sub">
-                {last ? `${last.trigger} · ${last.clusters_total ?? "?"} clusters · ${fmtBytes(totals.bytes)} pulled`
-                  : "no completed sweep yet"}
-              </div>
-            </div>
-          </div>
-          <div className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>
+        <Box sx={{ p: "0 18px 14px" }}>
+          <StatGrid sx={{ gap: 1.5 }}>
+            <TimingStat
+              label="Collection time"
+              value={fmtMs(totals.total_ms)}
+              sub={`${measured} of ${fleet.clusters_total} clusters measured`}
+            />
+            <TimingStat
+              label="Network (fetch)"
+              value={fmtPercent(share.fetch_ms)}
+              sub={fmtMs(totals.fetch_ms) + (fleet.bytes_per_fetch_second ? ` · ${fmtBytes(fleet.bytes_per_fetch_second)}/s` : "")}
+            />
+            <TimingStat
+              label="Python CPU"
+              kind="accent"
+              value={fmtPercent(fleet.cpu_percent)}
+              sub={fmtMs(totals.cpu_ms)
+                + (fleet.parse_percent_of_fetch != null
+                  ? ` · parsing is ${fleet.parse_percent_of_fetch}% of the fetch window` : "")}
+            />
+            <TimingStat
+              label="Last sweep"
+              value={fmtMs(last && last.duration_ms)}
+              sub={last
+                ? `${last.trigger} · ${last.clusters_total ?? "?"} clusters · ${fmtBytes(totals.bytes)} pulled`
+                : "no completed sweep yet"}
+            />
+          </StatGrid>
+          <Muted sx={{ display: "block", fontSize: 12.5, mt: 1.25 }}>
             Per cluster, p50 / p95:{" "}
             {stages.map((s, i) => (
               <Fragment key={s}>
@@ -172,8 +193,8 @@ function Timings({ data, onOpen }: TimingsProps) {
               </Fragment>
             ))}
             {" · "}<b>total</b> {fmtMs(p50.total_ms)} / {fmtMs(p95.total_ms)}
-          </div>
-        </div>
+          </Muted>
+        </Box>
       )}
       <DataTable
         id="collector.timings"
@@ -204,63 +225,65 @@ export default function Manifest({ onOpen }: ManifestProps) {
     // minimum is its content, so without this the widest table on the tab
     // stretches the column and the whole page scrolls sideways instead of the
     // table scrolling inside its own card.
-    <div className="grid" style={{ gap: 16, gridTemplateColumns: "minmax(0, 1fr)" }}>
-      <div className="section-head">
-        <div>
-          <div className="section-title" style={{ margin: 0 }}>What is collected</div>
-          <div className="desc">
+    <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: "minmax(0, 1fr)" }}>
+      <SectionHead
+        title="What is collected"
+        description={(
+          <>
             The OCP API manifest declares everything the collector reads from a cluster - {d ? enabled : "…"} of {d ? d.resources.length : "…"} resources
-            enabled from <span className="mono" style={{ overflowWrap: "anywhere" }}>{d ? d.source : "…"}</span>. Nothing outside
+            enabled from <Mono sx={{ overflowWrap: "anywhere" }}>{d ? d.source : "…"}</Mono>. Nothing outside
             it is ever requested, and the read-only RBAC is generated from it.
-          </div>
-        </div>
-      </div>
+          </>
+        )}
+      />
 
-      <div className="grid" style={{ gridTemplateColumns: "1fr 1fr 1fr", gap: 16, alignItems: "start" }}>
-        <div className="card">
-          <h3>Never collected (scrub policy)</h3>
-          <div className="env-list" style={{ fontSize: 12.5 }}>
-            {!d ? <SkeletonLines rows={4} /> : d.scrub_policy.map((p) => <span key={p.what}><b>{p.what}</b> <span className="src">kept: {p.kept}</span></span>)}
-          </div>
-          <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>Enforced in the collector, not configurable.</div>
-        </div>
-        <div className="card">
-          <h3>Namespace classification</h3>
+      <Box sx={{
+        display: "grid", gap: 2, alignItems: "start",
+        gridTemplateColumns: { xs: "1fr", md: "1fr 1fr 1fr" },
+      }}>
+        <Card title="Never collected (scrub policy)">
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 0.375, fontSize: 12.5 }}>
+            {!d ? <SkeletonLines rows={4} /> : d.scrub_policy.map((p) => (
+              <span key={p.what}><b>{p.what}</b> <Muted>kept: {p.kept}</Muted></span>
+            ))}
+          </Box>
+          <Muted sx={{ display: "block", fontSize: 12, mt: 1.25 }}>Enforced in the collector, not configurable.</Muted>
+        </Card>
+        <Card title="Namespace classification">
           {!d ? <SkeletonLines rows={6} /> : (
-          <div className="kv" style={{ fontSize: 12.5 }}>
-            <span className="k">Platform names</span><span className="mono wrap">{d.namespaces.platform_names.join(", ")}</span>
-            <span className="k">Platform prefixes</span><span className="mono wrap">{d.namespaces.platform_prefixes.join(", ")}</span>
-            <span className="k">Platform labels</span><span className="mono wrap">{d.namespaces.platform_label_keys.join(", ") || "—"}</span>
-            <span className="k">App label</span><span className="mono wrap">{d.namespaces.ownership.app.join(", ")}</span>
-            <span className="k">Team label</span><span className="mono wrap">{d.namespaces.ownership.team.join(", ")}</span>
-            <span className="k">Tier label</span><span className="mono wrap">{d.namespaces.ownership.tier.join(", ")}</span>
-          </div>
+            <KeyValues>
+              <KeyLabel>Platform names</KeyLabel><Mono sx={{ whiteSpace: "normal" }}>{d.namespaces.platform_names.join(", ")}</Mono>
+              <KeyLabel>Platform prefixes</KeyLabel><Mono sx={{ whiteSpace: "normal" }}>{d.namespaces.platform_prefixes.join(", ")}</Mono>
+              <KeyLabel>Platform labels</KeyLabel><Mono sx={{ whiteSpace: "normal" }}>{d.namespaces.platform_label_keys.join(", ") || "—"}</Mono>
+              <KeyLabel>App label</KeyLabel><Mono sx={{ whiteSpace: "normal" }}>{d.namespaces.ownership.app.join(", ")}</Mono>
+              <KeyLabel>Team label</KeyLabel><Mono sx={{ whiteSpace: "normal" }}>{d.namespaces.ownership.team.join(", ")}</Mono>
+              <KeyLabel>Tier label</KeyLabel><Mono sx={{ whiteSpace: "normal" }}>{d.namespaces.ownership.tier.join(", ")}</Mono>
+            </KeyValues>
           )}
-          <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>Everything else is an application.</div>
-        </div>
-        <div className="card">
-          <h3>Thresholds</h3>
+          <Muted sx={{ display: "block", fontSize: 12, mt: 1.25 }}>Everything else is an application.</Muted>
+        </Card>
+        <Card title="Thresholds">
           {!d ? <SkeletonLines rows={4} /> : (
-            <div className="kv" style={{ fontSize: 12.5 }}>
+            <KeyValues>
               {Object.entries(d.thresholds).map(([k, v]) => (
                 <Fragment key={k}>
-                  <span className="k mono">{k}</span>
+                  <Mono sx={{ color: "text.secondary" }}>{k}</Mono>
                   <span>{Array.isArray(v) ? v.join(", ") : String(v)}</span>
                 </Fragment>
               ))}
-            </div>
+            </KeyValues>
           )}
-        </div>
-      </div>
+        </Card>
+      </Box>
 
-      <div className="card flush">
-        <div className="card-head">
-          <h3>Resources</h3>
-          <div className="desc">{d ? `${d.resources.length} declared across ${domains.length} domains.` : "…"}</div>
-        </div>
+      <Card
+        flush
+        title="Resources"
+        description={d ? `${d.resources.length} declared across ${domains.length} domains.` : "…"}
+      >
         {/* Twelve columns of prose do not fit a narrow window; the table scrolls
             inside the card rather than making the whole page scroll sideways. */}
-        <div style={{ overflowX: "auto" }}>
+        <Box sx={{ overflowX: "auto" }}>
           {!d ? <SkeletonTable columns={7} rows={10} /> : (
             <DataTable
               id="manifest.resources"
@@ -271,32 +294,34 @@ export default function Manifest({ onOpen }: ManifestProps) {
               empty="The manifest declares no resources."
             />
           )}
-        </div>
-      </div>
+        </Box>
+      </Card>
 
-      <div className="card flush">
-        <div className="card-head">
-          <h3>Availability per cluster</h3>
-          <div className="desc">What each cluster actually served on the last sweep: object count when collected; n/a when the API is not served (e.g. no OLM); 403 when RBAC denies it.</div>
-        </div>
+      <Card
+        flush
+        title="Availability per cluster"
+        description="What each cluster actually served on the last sweep: object count when collected; n/a when the API is not served (e.g. no OLM); 403 when RBAC denies it."
+      >
         {av.error && !av.data ? <ErrorBanner error={av.error} /> : !av.data ? <SkeletonTable columns={8} rows={8} /> : <Matrix data={av.data} onOpen={onOpen} />}
-      </div>
+      </Card>
 
-      <div className="card flush">
-        <div className="card-head">
-          <h3>Collector timing</h3>
-          <div className="desc">
+      <Card
+        flush
+        title="Collector timing"
+        description={(
+          <>
             What collecting each cluster cost on its last collection. <b>Fetch</b> is the network and the
             cluster&apos;s API server - it shrinks by asking for less, less often (tiered intervals, watches,
             metadata-only lists), not by writing the collector in another language. <b>Parse</b>, <b>assemble</b>,
             <b> health</b> and <b>persist</b> are CPU in Python, and are what a Go collector would shrink; the CPU
             column adds them up. Parsing is measured inside the fetch window, so a cluster&apos;s total is
             fetch + assemble + health + persist.
-          </div>
-        </div>
+          </>
+        )}
+      >
         {tm.error && !tm.data ? <ErrorBanner error={tm.error} /> : !tm.data ? <SkeletonTable columns={11} rows={6} /> : <Timings data={tm.data} onOpen={onOpen} />}
-      </div>
-    </div>
+      </Card>
+    </Box>
   );
 }
 
@@ -304,6 +329,12 @@ interface MatrixProps {
   data: ManifestAvailabilityResponse;
   onOpen: (name: string) => void;
 }
+
+/** What one cluster did with one manifest key, as a tinted box: the count when
+ * it was collected, a word when it was not. */
+const CELL_TONE: Record<string, string> = {
+  collected: "healthy", forbidden: "critical", error: "critical",
+};
 
 function Matrix({ data, onOpen }: MatrixProps) {
   const label = (s: ManifestAvailabilityResponse["clusters"][number]["resources"][string] | undefined) => !s ? "—" : s.status === "collected" ? s.count : s.status === "unavailable" ? "n/a" : s.status === "forbidden" ? "403" : s.status === "error" ? "err" : "off";
@@ -315,23 +346,36 @@ function Matrix({ data, onOpen }: MatrixProps) {
     // callbacks below - inside a `map` there is nothing else to take it from.
     ...data.clusters.map((c): Column<MatrixRow> => ({
       key: `cluster:${c.name}`,
-      label: <span className="link" onClick={() => onOpen(c.name)}>{c.name}</span>,
+      label: <Link component="button" type="button" onClick={() => onOpen(c.name)}>{c.name}</Link>,
       sortable: false,
       headerClassName: "rot",
       className: "cell",
       filterValue: (row) => c.resources[row.resource]?.status || "disabled",
       render: (row) => {
         const s = c.resources[row.resource];
+        const status = s?.status || "disabled";
+        const tone = CELL_TONE[status];
         return (
-          <span className={`m ${s?.status || "disabled"}`} title={s?.error || (s ? `${s.status} · ${s.duration_ms} ms` : "")}>
+          <Box
+            component="span"
+            data-status={status}
+            title={s?.error || (s ? `${s.status} · ${s.duration_ms} ms` : "")}
+            sx={{
+              display: "inline-block", minWidth: 26, px: 0.5, borderRadius: "4px",
+              fontFamily: "inherit", fontSize: 11,
+              color: (t) => (tone ? t.palette.status[tone as "healthy"].main : t.palette.text.disabled),
+              bgcolor: (t) => (tone ? t.palette.status[tone as "healthy"].surface
+                : status === "unavailable" ? t.palette.status.unknown.surface : "transparent"),
+            }}
+          >
             {label(s)}
-          </span>
+          </Box>
         );
       },
     })),
   ];
   return (
-    <div className="matrix">
+    <Box sx={{ overflowX: "auto" }}>
       <DataTable
         id="manifest.availability"
         columns={columns}
@@ -340,6 +384,6 @@ function Matrix({ data, onOpen }: MatrixProps) {
         initialSort={{ key: "resource", dir: "asc" }}
         empty="Nothing collected on the last sweep."
       />
-    </div>
+    </Box>
   );
 }

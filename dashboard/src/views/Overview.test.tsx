@@ -10,6 +10,10 @@ import {
   INSIGHTS_SUMMARY, OVERVIEW, OVERVIEW_SWEEPING, SUMMARY_BY_HUB, SUMMARY_BY_REGION,
 } from "../test/fixtures/fleet";
 
+/** A data row of a table. The grid draws divs, so a row is what carries the
+ * role rather than a `<tr>`. */
+const GRID_ROW = '[role="row"]';
+
 vi.mock("../api", async () => {
   const { createApiMock } = await import("../test/apiMock");
   return { api: createApiMock(), BASE: "" };
@@ -34,13 +38,13 @@ const open = (at = "/") => renderView(({ route, nav }) => <Overview route={route
 describe("the fleet numbers", () => {
   it("shows what the overview counted, and the application count from insights", async () => {
     open();
-    const stats = await screen.findByText("Clusters");
-    const row = closestElement(stats, ".stats");
-    expect(within(row).getByText("5")).toBeInTheDocument();       // clusters_total
-    expect(within(row).getByText("Healthy").nextSibling).toHaveTextContent("2");
-    expect(within(row).getByText("Critical").nextSibling).toHaveTextContent("1");
-    expect(within(row).getByText("Upgrading").nextSibling).toHaveTextContent("1");
-    await waitFor(() => expect(within(row).getByText("Applications").nextSibling)
+    // each tile is a label followed by its number, so the number is read off
+    // the label rather than out of a container the layout happens to have
+    expect((await screen.findByText("Clusters")).nextSibling).toHaveTextContent("5");
+    expect(screen.getByText("Healthy").nextSibling).toHaveTextContent("2");
+    expect(screen.getByText("Critical").nextSibling).toHaveTextContent("1");
+    expect(screen.getByText("Upgrading").nextSibling).toHaveTextContent("1");
+    await waitFor(() => expect(screen.getByText("Applications").nextSibling)
       .toHaveTextContent("8"));
   });
 
@@ -54,7 +58,7 @@ describe("the fleet numbers", () => {
   it("stands the numbers in while they are on the wire", () => {
     answer(api, { overview: () => new Promise(() => {}) });
     const { container } = open();
-    expect(container.querySelectorAll(".skeleton").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll("[data-placeholder]").length).toBeGreaterThan(0);
   });
 
   it("shows nothing but the error when the overview itself cannot be read", async () => {
@@ -88,10 +92,10 @@ describe("needs attention", () => {
 describe("the hubs table", () => {
   it("draws a row per hub with its status and its last error", async () => {
     open();
-    const east = closestElement(await screen.findByRole("cell", { name: "hub-east" }), "tr");
+    const east = closestElement(await screen.findByRole("gridcell", { name: "hub-east" }), GRID_ROW);
     expect(within(east).getByText("healthy")).toBeInTheDocument();
     expect(within(east).getByText("4")).toBeInTheDocument();
-    const west = closestElement(screen.getByRole("cell", { name: "hub-west" }), "tr");
+    const west = closestElement(screen.getByRole("gridcell", { name: "hub-west" }), GRID_ROW);
     expect(within(west).getByText("critical")).toBeInTheDocument();
     expect(within(west).getByText(/i\/o timeout/)).toBeInTheDocument();
   });
@@ -105,8 +109,7 @@ describe("the hubs table", () => {
 describe("fleet health", () => {
   it("draws a card per group with its rollup and its counts", async () => {
     open();
-    const east = closestElement(
-      await screen.findByText("hub-east", { selector: ".gc-name" }), ".group-card");
+    const east = await screen.findByRole("button", { name: /^hub-east/ });
     expect(within(east).getByText("critical")).toBeInTheDocument();
     expect(within(east).getByText("4")).toBeInTheDocument();
     expect(within(east).getByText("clusters")).toBeInTheDocument();
@@ -115,8 +118,7 @@ describe("fleet health", () => {
 
   it("says cluster rather than clusters for a group of one", async () => {
     open();
-    const west = closestElement(
-      await screen.findByText("hub-west", { selector: ".gc-name" }), ".group-card");
+    const west = await screen.findByRole("button", { name: /^hub-west/ });
     expect(within(west).getByText("cluster")).toBeInTheDocument();
     expect(within(west).getByText("applications")).toBeInTheDocument();
     expect(within(west).queryByText(/ns unassigned/)).toBeNull();
@@ -127,25 +129,25 @@ describe("fleet health", () => {
     open();
     await user.click(await screen.findByRole("button", { name: "Region" }));
     expect(currentUrl()).toBe("/?group=region");
-    expect(await screen.findByText("us-east-1", { selector: ".gc-name" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^us-east-1/ })).toBeInTheDocument();
   });
 
   it("opens on the grouping the link carried", async () => {
     open("/?group=region");
-    expect(await screen.findByText("us-west-2", { selector: ".gc-name" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^us-west-2/ })).toBeInTheDocument();
     expect(api.summary).toHaveBeenCalledWith("region");
   });
 
   it("falls back to hubs for a grouping this build does not have", async () => {
     open("/?group=phase-of-the-moon");
-    await screen.findByText("hub-east", { selector: ".gc-name" });
+    await screen.findByRole("button", { name: /^hub-east/ });
     await waitFor(() => expect(api.summary).toHaveBeenCalledWith("hub"));
   });
 
   it("narrows the cluster list from a group card", async () => {
     const user = userEvent.setup();
     open();
-    await user.click(await screen.findByText("hub-west", { selector: ".gc-name" }));
+    await user.click(await screen.findByRole("button", { name: /^hub-west/ }));
     expect(currentUrl()).toBe("/clusters?hub=hub-west");
   });
 

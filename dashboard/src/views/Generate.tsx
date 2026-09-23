@@ -11,7 +11,10 @@
 // the rows on screen come from the query plane the moment the panel lands, so a
 // dashboard being written is already a dashboard being used.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { Box, Button, Link, Paper, Stack, TextField, Tooltip, Typography } from "@mui/material";
+import { keyframes } from "@mui/material/styles";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import { api } from "../api";
 import type { ApiError } from "../api";
 import type { AgentAvailabilityResponse, BatchEntry } from "../api/types";
@@ -19,7 +22,8 @@ import { invalidate } from "../cache";
 import { useFetch } from "../hooks";
 import type { Fetched } from "../hooks";
 import type { Nav, QueryValues, RouteApi } from "../router";
-import { SkeletonTable } from "../components";
+import { Card, Empty, MONO_FONT, Muted, Tag, SkeletonTable } from "../components";
+import { TOPBAR_HEIGHT } from "../theme";
 import Panel from "../dashboards/Panel";
 import VariablesBar from "../dashboards/VariablesBar";
 import { IdDialog } from "../dashboards/ui";
@@ -252,47 +256,64 @@ export default function Generate({ route, nav }: GenerateProps) {
   const started = transcript.length > 0;
 
   return (
-    <div className="grid" style={{ gap: 16 }}>
-      <div className="section-head">
-        <div>
-          <div className="section-title" style={{ margin: 0 }}>
+    <Stack spacing={2}>
+      <Box sx={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        gap: 1.5, flexWrap: "wrap",
+      }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="h2" component="h2"
+            sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
             Generate
-            {fixture && <span className="tag db-tag">fixture</span>}
-            {info.data?.model && <span className="tag db-tag mono">{info.data.model}</span>}
-          </div>
-          <div className="desc">
+            {fixture && <Tag sx={{ textTransform: "uppercase" }}>fixture</Tag>}
+            {info.data?.model && <Tag sx={{ fontFamily: MONO_FONT }}>{info.data.model}</Tag>}
+          </Typography>
+          <Muted sx={{ display: "block", fontSize: 12.5 }}>
             Ask for a view rather than a row. The agent writes each panel as a guarded SELECT,
             checks it against the snapshot, and builds the dashboard as it goes.
-          </div>
-        </div>
-        <div className="db-head-actions">
+          </Muted>
+        </Box>
+        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
           {started && (
-            <button type="button" className="btn" onClick={() => { reset(); setProblem(""); }}>
+            <Button variant="outlined" color="inherit" onClick={() => { reset(); setProblem(""); }}>
               Start over
-            </button>
+            </Button>
           )}
-          <button type="button" className="btn" disabled={!hasPanels || run.loading}
-            onClick={run.reload}>
-            {run.loading ? "Running…" : "↻ Refresh"}
-          </button>
-          <button type="button" className="btn primary" disabled={!hasPanels}
+          <Button variant="outlined" color="inherit" disabled={!hasPanels || run.loading}
+            startIcon={<RefreshIcon />} onClick={run.reload}>
+            {run.loading ? "Running…" : "Refresh"}
+          </Button>
+          <Button variant="contained" disabled={!hasPanels}
             onClick={() => { setProblem(""); setDialog(true); }}>
             Save as dashboard…
-          </button>
-        </div>
-      </div>
+          </Button>
+        </Stack>
+      </Box>
 
       <Availability info={info} fixture={fixture} route={route} />
 
-      <div className="gen-layout">
-        <div className="card gen-chat">
-          <div className="gen-thread">
+      <Box sx={{
+        display: "grid", gap: 2, alignItems: "start",
+        gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "380px minmax(0, 1fr)" },
+      }}>
+        <Paper sx={{
+          p: 0, display: "flex", flexDirection: "column", overflow: "hidden",
+          position: { xs: "static", lg: "sticky" },
+          top: { lg: `${TOPBAR_HEIGHT + 24}px` },
+          height: { xs: "auto", lg: `calc(100vh - ${TOPBAR_HEIGHT + 48}px)` },
+          minHeight: { lg: 420 },
+        }}>
+          <Box sx={{
+            flex: 1, minHeight: 0, maxHeight: { xs: 460, lg: "none" },
+            overflow: "auto", overscrollBehavior: "contain",
+            p: "14px 16px", display: "flex", flexDirection: "column", gap: 1.25,
+          }}>
             {started ? (
               <Transcript items={transcript} running={running} result={result} />
             ) : (
               <Intro onPick={send} disabled={!available && settled} />
             )}
-          </div>
+          </Box>
           <Composer
             prefill={prefill}
             running={running}
@@ -300,28 +321,29 @@ export default function Generate({ route, nav }: GenerateProps) {
             onSend={send}
             onStop={stop}
           />
-        </div>
+        </Paper>
 
-        <div className="gen-board">
+        <Box sx={{ display: "grid", gap: 2, minWidth: 0 }}>
           {(hasPanels || written.title) && (
-            <div className="gen-board-head">
-              <input
-                className="db-title-input"
-                type="text"
+            <Box sx={{ minWidth: 0 }}>
+              <TextField
                 value={written.title}
                 placeholder="Untitled dashboard"
-                aria-label="Dashboard title"
                 onChange={(e) => patchDashboard({ title: e.target.value })}
+                slotProps={{ htmlInput: { "aria-label": "Dashboard title" } }}
+                sx={{
+                  display: "block", width: "min(560px, 100%)", mb: 0.75,
+                  "& .MuiInputBase-input": { fontSize: 18, fontWeight: 600 },
+                }}
               />
-              <input
-                className="db-desc-input"
-                type="text"
+              <TextField
                 value={written.description}
                 placeholder="What this dashboard answers"
-                aria-label="Dashboard description"
                 onChange={(e) => patchDashboard({ description: e.target.value })}
+                slotProps={{ htmlInput: { "aria-label": "Dashboard description" } }}
+                sx={{ display: "block", width: "min(560px, 100%)" }}
               />
-            </div>
+            </Box>
           )}
 
           {definition.variables.length > 0 && (
@@ -330,27 +352,27 @@ export default function Generate({ route, nav }: GenerateProps) {
               params={params}
               variables={run.variables}
               onChange={setParam}
-              right={run.loading ? <span className="muted">running…</span> : null}
+              right={run.loading ? <Muted>running…</Muted> : null}
             />
           )}
 
           {run.error && (
-            <div className="gen-banner">
+            <Notice>
               <strong>The panels could not be run.</strong>{" "}
               {String(run.error.message || run.error)} The dashboard above is what the agent
               wrote; the rows come from the query plane, which did not answer.
-            </div>
+            </Notice>
           )}
 
           {!hasPanels && !pendingPanels.length ? (
-            <div className="card">
-              <div className="empty">
+            <Card>
+              <Empty>
                 {running ? "Writing the first panel…"
                   : "The dashboard appears here, one panel at a time, as the agent writes it."}
-              </div>
-            </div>
+              </Empty>
+            </Card>
           ) : (
-            <div className="db-grid">
+            <PanelGrid>
               {definition.panels.map((panel, i) => (
                 // The grid here is read-only: the agent writes the panels,
                 // the person edits them by asking for a change, and the only
@@ -371,10 +393,10 @@ export default function Generate({ route, nav }: GenerateProps) {
                 />
               ))}
               {pendingPanels.map((item) => <PendingPanel key={item.id} title={item.title} />)}
-            </div>
+            </PanelGrid>
           )}
-        </div>
-      </div>
+        </Box>
+      </Box>
 
       {dialog && (
         <IdDialog
@@ -388,7 +410,39 @@ export default function Generate({ route, nav }: GenerateProps) {
           onSubmit={save}
         />
       )}
-    </div>
+    </Stack>
+  );
+}
+
+/** A fact about the server, said calmly: not an error, not a warning, just the
+ * thing that is true. */
+function Notice({ children }: { children?: ReactNode }) {
+  return (
+    <Paper sx={{ p: "12px 15px", color: "text.secondary", fontSize: 13,
+      borderColor: "divider", "& strong": { color: "text.primary" } }}>
+      {children}
+    </Paper>
+  );
+}
+
+/**
+ * The same twelve-column grid a saved dashboard uses, because a generated
+ * dashboard and a saved one are the same thing.
+ */
+function PanelGrid({ children }: { children?: ReactNode }) {
+  return (
+    <Box sx={{
+      display: "grid", gap: 2,
+      gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "repeat(12, minmax(0, 1fr))" },
+      gridAutoRows: { xs: "auto", md: "150px" },
+      "& > section": {
+        gridColumn: { xs: "1 / -1", md: "span var(--w, 6)" },
+        gridRow: { xs: "auto", md: "span var(--h, 2)" },
+        height: { xs: "calc(var(--h, 2) * 150px + (var(--h, 2) - 1) * 16px)", md: "auto" },
+      },
+    }}>
+      {children}
+    </Box>
   );
 }
 
@@ -416,18 +470,47 @@ function Transcript({ items, running, result }: TranscriptProps) {
   return (
     <>
       {items.map((item) => {
-        if (item.kind === "user") return <p key={item.id} className="gen-said">{item.text}</p>;
-        if (item.kind === "text") return <p key={item.id} className="gen-text">{item.text}</p>;
+        if (item.kind === "user") {
+          return (
+            <Box
+              component="p"
+              key={item.id}
+              sx={{
+                alignSelf: "flex-end", maxWidth: "92%", my: 0.25, p: "7px 11px", fontSize: 13,
+                bgcolor: "primary.dark", color: "primary.contrastText",
+                borderRadius: "10px 10px 3px 10px",
+              }}
+            >
+              {item.text}
+            </Box>
+          );
+        }
+        if (item.kind === "text") {
+          return (
+            <Box component="p" key={item.id}
+              sx={{ my: 0.25, fontSize: 13, whiteSpace: "pre-wrap" }}>
+              {item.text}
+            </Box>
+          );
+        }
         if (item.kind === "note") {
           return (
-            <p key={item.id} className={`gen-note${item.tone === "error" ? " is-error" : ""}`}>
+            <Box
+              component="p"
+              key={item.id}
+              sx={{ my: 0.25, fontSize: 12.5, color: item.tone === "error" ? "error.main" : "text.disabled" }}
+            >
               {item.text}
-            </p>
+            </Box>
           );
         }
         return <Activity key={item.id} item={item} />;
       })}
-      {running && <div className="gen-working">Working…</div>}
+      {running && (
+        <Box sx={{ color: "text.secondary", fontSize: 12.5, animation: `${PULSE} 1.4s ease-in-out infinite` }}>
+          Working…
+        </Box>
+      )}
       {!running && result && <Cost result={result} />}
       <div ref={end} />
     </>
@@ -442,28 +525,62 @@ function Activity({ item }: { item: ActivityItem }) {
   // when it did not. It is the agent's own JSON, so it is read as a record.
   const result = (item.result || {}) as { row_count?: number; columns?: string[]; error?: unknown };
   const rows = result.row_count;
+  const running = item.status === "streaming" || item.status === "running";
   return (
-    <div className={`gen-act is-${item.status}`}>
-      <span className="gen-act-mark" aria-hidden="true">
+    <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, minWidth: 0 }}>
+      <Box
+        component="span"
+        aria-hidden="true"
+        sx={{
+          flex: "none", width: 15, height: 15, mt: "1px", borderRadius: "50%",
+          bgcolor: "background.subtle", fontSize: 9.5, fontWeight: 700,
+          lineHeight: "13px", textAlign: "center", border: 1,
+          borderColor: item.status === "done" ? "success.main"
+            : item.status === "error" ? "error.main"
+              : running ? "primary.main" : "divider",
+          color: item.status === "done" ? "success.main"
+            : item.status === "error" ? "error.main" : "text.disabled",
+          ...(running ? { animation: `${PULSE} 1.2s ease-in-out infinite` } : {}),
+        }}
+      >
         {item.status === "done" ? "✓" : item.status === "error" ? "!" : ""}
-      </span>
-      <div className="gen-act-body">
-        <div className="gen-act-label">{item.label}</div>
+      </Box>
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Box sx={{ fontSize: 12.5, color: item.status === "done" ? "text.primary" : "text.secondary" }}>
+          {item.label}
+        </Box>
         {/* `error` is the agent's own JSON, so it is coerced rather than
-            trusted to be a string */}
+            trusted to be a string. The guard names every table it knows, which
+            is three lines nobody needs until they do: clamped here, whole in
+            the tooltip. */}
         {item.status === "error" && !!result.error && (
-          <div className="gen-act-error" title={String(result.error)}>{String(result.error)}</div>
+          <Tooltip title={String(result.error)}>
+            <Box sx={{
+              color: "error.main", fontSize: 11.5, mt: "2px",
+              display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}>
+              {String(result.error)}
+            </Box>
+          </Tooltip>
         )}
         {item.status === "done" && rows != null && (
-          <div className="gen-act-meta">
+          <Muted sx={{
+            display: "block", fontSize: 11.5, mt: "1px",
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
             {rows.toLocaleString()} {rows === 1 ? "row" : "rows"}
             {result.columns?.length ? ` · ${result.columns.join(", ")}` : ""}
-          </div>
+          </Muted>
         )}
-      </div>
-    </div>
+      </Box>
+    </Box>
   );
 }
+
+/** The one animation on this page: something is still happening. MUI's keyframes
+ * helper is what makes it a real @keyframes rule rather than an inline style. */
+const PULSE = keyframes({ "50%": { opacity: 0.45 } });
 
 function Cost({ result }: { result: NonNullable<RunResult> }) {
   const parts: string[] = [];
@@ -475,26 +592,44 @@ function Cost({ result }: { result: NonNullable<RunResult> }) {
   if (toolCalls != null) parts.push(`${toolCalls} tool calls`);
   if (elapsedMs != null) parts.push(`${(elapsedMs / 1000).toFixed(1)} s`);
   if (!parts.length) return null;
-  return <div className="gen-cost">{parts.join(" · ")}</div>;
+  return (
+    <Muted sx={{
+      mt: 0.5, pt: 1, borderTop: 1, borderColor: "border.soft",
+      fontSize: 11.5, fontVariantNumeric: "tabular-nums",
+    }}>
+      {parts.join(" · ")}
+    </Muted>
+  );
 }
 
 function Intro({ onPick, disabled }: { onPick: (question: string) => void; disabled: boolean }) {
   return (
-    <div className="gen-intro">
-      <p>
+    <Box sx={{ color: "text.secondary", fontSize: 13 }}>
+      <Box component="p" sx={{ m: "0 0 12px" }}>
         Describe the view you want. The agent picks the tables, writes one guarded SELECT per
         panel, runs each one against the current snapshot and keeps the ones that answer - so
         what arrives is a dashboard you can save, share and edit like any other.
-      </p>
-      <p>Then say what to change: a follow-up edits this dashboard rather than starting again.</p>
-      <div className="q-title">Try one</div>
+      </Box>
+      <Box component="p" sx={{ m: "0 0 12px" }}>
+        Then say what to change: a follow-up edits this dashboard rather than starting again.
+      </Box>
+      <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>Try one</Typography>
       {EXAMPLES.map((q) => (
-        <button key={q} type="button" className="gen-example" disabled={disabled}
-          onClick={() => onPick(q)}>
+        <Button
+          key={q}
+          fullWidth
+          disabled={disabled}
+          onClick={() => onPick(q)}
+          sx={{
+            display: "block", textAlign: "left", mb: 0.75, p: "7px 10px", fontSize: 12.5,
+            color: "text.secondary", border: 1, borderStyle: "dashed", borderColor: "divider",
+            "&:hover": { borderStyle: "dashed", borderColor: "primary.main", color: "text.primary" },
+          }}
+        >
           {q}
-        </button>
+        </Button>
       ))}
-    </div>
+    </Box>
   );
 }
 
@@ -528,27 +663,42 @@ function Composer({ prefill, running, disabled, onSend, onStop }: ComposerProps)
   };
 
   return (
-    <form className="gen-composer" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-      <textarea
-        ref={box}
+    <Box
+      component="form"
+      onSubmit={(e: React.FormEvent) => { e.preventDefault(); submit(); }}
+      sx={{
+        flex: "none", display: "flex", alignItems: "flex-end", gap: 1,
+        p: "10px 12px", borderTop: 1, borderColor: "divider", bgcolor: "background.subtle",
+      }}
+    >
+      <TextField
+        multiline
+        inputRef={box}
         rows={1}
         value={text}
         disabled={running || disabled}
         placeholder={disabled ? "Not available on this build" : "Ask for a dashboard…"}
-        aria-label="Ask for a dashboard"
         onChange={(e) => setText(e.target.value)}
-        // Enter sends, because this is a question and not a document; a newline
-        // is still there for someone pasting a list of things they want.
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+        slotProps={{
+          htmlInput: {
+            "aria-label": "Ask for a dashboard",
+            // Enter sends, because this is a question and not a document; a
+            // newline is still there for someone pasting a list of things.
+            onKeyDown: (e: React.KeyboardEvent) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+            },
+          },
         }}
+        sx={{ flex: 1, minWidth: 0, "& .MuiInputBase-root": { p: "8px 10px", fontSize: 13 } }}
       />
       {running ? (
-        <button type="button" className="btn" onClick={onStop}>Stop</button>
+        <Button variant="outlined" color="inherit" onClick={onStop} sx={{ flex: "none" }}>Stop</Button>
       ) : (
-        <button type="submit" className="btn primary" disabled={disabled || !text.trim()}>Ask</button>
+        <Button type="submit" variant="contained" disabled={disabled || !text.trim()} sx={{ flex: "none" }}>
+          Ask
+        </Button>
       )}
-    </form>
+    </Box>
   );
 }
 
@@ -562,16 +712,28 @@ function PendingPanel({ title }: { title?: string }) {
   return (
     // The grid reads a panel's size off two custom properties, which are not
     // part of the CSSProperties vocabulary - hence the one assertion.
-    <section className="db-panel card gen-pending" style={{ "--w": 6, "--h": 2 } as CSSProperties}
-      aria-label={title ? `Writing ${title}` : "Writing a panel"}>
-      <header className="db-panel-head">
-        <h4 className="db-panel-title">{title || "New panel"}</h4>
-        <span className="db-panel-meta">writing…</span>
-      </header>
-      <div className="db-panel-body">
+    <Paper
+      component="section"
+      style={{ "--w": 6, "--h": 2 } as CSSProperties}
+      aria-label={title ? `Writing ${title}` : "Writing a panel"}
+      sx={{
+        display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, p: 0,
+        overflow: "hidden", borderStyle: "dashed",
+      }}
+    >
+      <Box component="header" sx={{
+        display: "flex", alignItems: "center", gap: 1, flex: "none",
+        p: "9px 8px 9px 14px", borderBottom: 1, borderBottomStyle: "dashed", borderColor: "border.soft",
+      }}>
+        <Typography variant="h5" component="h4" color="text.secondary" sx={{ flex: 1, fontStyle: "italic" }}>
+          {title || "New panel"}
+        </Typography>
+        <Muted sx={{ fontSize: 11.5, animation: `${PULSE} 1.4s ease-in-out infinite` }}>writing…</Muted>
+      </Box>
+      <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", p: "8px 4px 4px" }}>
         <SkeletonTable columns={4} rows={4} dense />
-      </div>
-    </section>
+      </Box>
+    </Paper>
   );
 }
 
@@ -601,15 +763,16 @@ function Availability({ info, fixture, route }: AvailabilityProps) {
       : info.data?.reason || "The API did not say why.";
 
   return (
-    <div className="gen-banner">
+    <Notice>
       <strong>{headline}</strong>
       <div>{detail}</div>
-      <div className="q-desc">
-        <span className="link" onClick={() => route.navigate("/generate", { fixture: "1" })}>
+      <Muted sx={{ display: "block", fontSize: 11.5, mt: 1 }}>
+        <Link component="button" type="button"
+          onClick={() => route.navigate("/generate", { fixture: "1" })}>
           Play the sample generation
-        </span>
+        </Link>
         {" "}to see the page working against the query plane alone.
-      </div>
-    </div>
+      </Muted>
+    </Notice>
   );
 }

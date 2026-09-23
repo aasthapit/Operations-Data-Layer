@@ -1,11 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import * as cache from "./cache";
 import { answer, fails } from "./test/apiMock";
 import type { ApiMock } from "./test/apiMock";
-import { currentUrl } from "./test/harness";
+import { currentUrl, renderThemed } from "./test/harness";
 import {
   INSIGHTS_SUMMARY, OPERATOR_VERSIONS, OVERVIEW, SUMMARY_BY_HUB, VERSIONS, clustersResponse,
 } from "./test/fixtures/fleet";
@@ -62,7 +62,7 @@ beforeEach(() => {
 
 const open = (at = "/") => {
   window.history.replaceState({ odl: 0 }, "", at);
-  return { user: userEvent.setup(), ...render(<App />) };
+  return { user: userEvent.setup(), ...renderThemed(<App />) };
 };
 
 describe("the tab strip", () => {
@@ -70,40 +70,40 @@ describe("the tab strip", () => {
     const { user } = open();
     await screen.findByText("Hubs (ACM)");
 
-    await user.click(screen.getByRole("button", { name: "Clusters" }));
+    await user.click(screen.getByRole("tab", { name: "Clusters" }));
     expect(currentUrl()).toBe("/clusters");
     expect(await screen.findByText("ocp-prod-iad-01")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Versions" }));
+    await user.click(screen.getByRole("tab", { name: "Versions" }));
     expect(await screen.findByText("OCP version distribution")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Utilization" }));
+    await user.click(screen.getByRole("tab", { name: "Utilization" }));
     expect(await screen.findByRole("heading", { name: /Top nodes by cpu/ }))
       .toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Insights" }));
+    await user.click(screen.getByRole("tab", { name: "Insights" }));
     expect(currentUrl()).toBe("/insights/certificates");
     expect(await screen.findByText(/Certificates \(2\)/)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Patching" }));
-    expect(await screen.findByText("Jobs", { selector: ".label" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Patching" }));
+    expect(await screen.findByRole("heading", { name: "Jobs" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Collected" }));
+    await user.click(screen.getByRole("tab", { name: "Collected" }));
     expect(await screen.findByText("What is collected")).toBeInTheDocument();
   });
 
   it("marks the tab the page belongs to", async () => {
     const { user } = open();
-    expect(screen.getByRole("button", { name: "Overview" })).toHaveClass("active");
-    await user.click(screen.getByRole("button", { name: "Applications" }));
-    expect(screen.getByRole("button", { name: "Applications" })).toHaveClass("active");
-    expect(screen.getByRole("button", { name: "Overview" })).not.toHaveClass("active");
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("tab", { name: "Applications" }));
+    expect(screen.getByRole("tab", { name: "Applications" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "false");
   });
 
   it("falls back to the overview for a path nothing serves", async () => {
     open("/nowhere");
     expect(await screen.findByText("Hubs (ACM)")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Overview" })).toHaveClass("active");
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
   });
 });
 
@@ -111,7 +111,7 @@ describe("the document title", () => {
   it("names the page, so a bookmark says where it goes", async () => {
     const { user } = open();
     await waitFor(() => expect(document.title).toBe("Overview · Operations Data Layer"));
-    await user.click(screen.getByRole("button", { name: "Blast radius" }));
+    await user.click(screen.getByRole("tab", { name: "Blast radius" }));
     await waitFor(() => expect(document.title).toBe("Blast radius · Operations Data Layer"));
   });
 
@@ -147,10 +147,10 @@ describe("routing to a view", () => {
     await user.click(await screen.findByText("catalog"));
     expect(await screen.findByText(/Placements/)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Query" }));
+    await user.click(screen.getByRole("tab", { name: "Query" }));
     expect(await screen.findByLabelText("Data set")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Generate" }));
+    await user.click(screen.getByRole("tab", { name: "Generate" }));
     expect(await screen.findByLabelText("Ask for a dashboard")).toBeInTheDocument();
   });
 
@@ -166,7 +166,7 @@ describe("refreshing the fleet", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     window.history.replaceState({ odl: 0 }, "", "/");
-    render(<App />);
+    renderThemed(<App />);
     await vi.waitFor(() => expect(screen.getByText("Hubs (ACM)")).toBeInTheDocument());
 
     const reads = vi.fn(() => OVERVIEW);
@@ -199,6 +199,40 @@ describe("refreshing the fleet", () => {
   });
 });
 
+describe("the colour theme", () => {
+  // The two palettes, read back off the page rather than off the theme object:
+  // what matters is that a component ends up painted in the mode's own colour.
+  const barColour = () => getComputedStyle(screen.getByRole("banner")).backgroundColor;
+
+  it("opens in the mode the document was already in", async () => {
+    // index.html resolves the mode before React mounts and writes it here, so
+    // this is what the app finds when it starts.
+    document.documentElement.setAttribute("data-theme", "light");
+    open();
+    await screen.findByText("Hubs (ACM)");
+    expect(barColour()).toBe("rgb(255, 255, 255)");      // the light card surface
+  });
+
+  it("switches to the other palette, and says so in the document", async () => {
+    document.documentElement.setAttribute("data-theme", "dark");
+    const { user } = open();
+    await screen.findByText("Hubs (ACM)");
+    expect(barColour()).toBe("rgb(22, 27, 34)");         // the dark card surface
+
+    await user.click(screen.getByRole("button", { name: "Switch to the light theme" }));
+    expect(barColour()).toBe("rgb(255, 255, 255)");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+  });
+
+  it("remembers the choice, so a reload opens on it", async () => {
+    document.documentElement.setAttribute("data-theme", "dark");
+    const { user } = open();
+    await screen.findByText("Hubs (ACM)");
+    await user.click(screen.getByRole("button", { name: "Switch to the light theme" }));
+    expect(window.localStorage.getItem("odl.color-mode")).toBe("light");
+  });
+});
+
 describe("a view that crashes", () => {
   it("shows what broke instead of blanking the app", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -209,7 +243,7 @@ describe("a view that crashes", () => {
     open();
     expect(await screen.findByText("This view failed to render")).toBeInTheDocument();
     // The chrome is still there, so there is a way out.
-    expect(screen.getByRole("button", { name: "Clusters" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Clusters" })).toBeInTheDocument();
     window.removeEventListener("error", swallow);
     error.mockRestore();
   });

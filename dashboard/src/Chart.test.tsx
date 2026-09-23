@@ -1,9 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import Chart, {
   CHART_TYPES, categoryFields, emptyChart, inferFields, normalizeChart, resolveSpec,
 } from "./Chart";
 import type { Row, Spec } from "./Chart";
+import { renderThemed } from "./test/harness";
 
 /** A result as these tests write one: the three things a chart is drawn from,
  * in the wire shape /api/query/sql answers with. */
@@ -11,15 +12,6 @@ interface Result {
   columns: string[];
   types: string[];
   rows: Row[];
-}
-
-/** The chart's own <svg>. The drawing is the subject here, so it is found by
- * tag rather than by role - and a chart that drew nothing is reported here
- * rather than at the first read of an attribute. */
-function svgOf(container: HTMLElement): SVGSVGElement {
-  const svg = container.querySelector("svg");
-  if (!svg) throw new Error("the chart drew no <svg>");
-  return svg;
 }
 
 const HOURS = ["2026-09-20T18:00:00+00:00", "2026-09-20T19:00:00+00:00",
@@ -263,45 +255,65 @@ describe("resolveSpec: what the user asked for", () => {
   });
 });
 
+// --------------------------------------------------------------------------- //
+// rendering
+// --------------------------------------------------------------------------- //
+// MUI X Charts renders the plot itself (an <svg>, hidden from assistive tech -
+// see the note in Chart.tsx about the accessible `role="img"` wrapper this file
+// adds around it), so these assertions read the chart the way the library
+// exposes it: the legend's own text, the rendered mark elements MUI gives a
+// stable class name, and the aria-label this file composes by hand. Axis tick
+// text does not render under jsdom (MUI's tick measuring needs `getBBox`, which
+// jsdom does not implement, and `src/test/setup.ts` is not this phase's file to
+// patch), so nothing here depends on it - see the report for what a future
+// phase would need to add to get it back.
 describe("rendering a line chart", () => {
   const r = timeSeries();
   const spec: Spec = { type: "line", x: "hour", series: "cluster", y: ["health_score"], stack: false };
 
-  it("draws one path per series inside a labelled figure", () => {
-    const { container } = render(
+  it("draws one line per series inside a labelled image", () => {
+    const { container } = renderThemed(
       <Chart columns={r.columns} columnTypes={r.types} rows={r.rows} spec={spec} />);
-    const svg = svgOf(container);
-    expect(svg).toHaveAttribute("role", "img");
-    expect(svg.getAttribute("aria-label")).toContain("Line chart of health_score over hour");
-    expect(svg.getAttribute("aria-label")).toContain("The table below has every value.");
-    expect(container.querySelectorAll('path[fill="none"][stroke-width="2"]')).toHaveLength(2);
+    const img = screen.getByRole("img", { name: /Line chart of health_score over hour/ });
+    expect(img).toHaveAccessibleName(/The table below has every value\.$/);
+    expect(container.querySelectorAll(".MuiLineChart-line")).toHaveLength(2);
   });
 
   it("names each series in the legend", () => {
-    render(<Chart columns={r.columns} columnTypes={r.types} rows={r.rows} spec={spec} />);
-    // The name is on the key and again on the end label that rides the line.
-    expect(screen.getAllByText("ocp-prod-iad-01").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("ocp-prod-iad-02").length).toBeGreaterThan(0);
+    renderThemed(<Chart columns={r.columns} columnTypes={r.types} rows={r.rows} spec={spec} />);
+    expect(screen.getByText("ocp-prod-iad-01")).toBeInTheDocument();
+    expect(screen.getByText("ocp-prod-iad-02")).toBeInTheDocument();
+  });
+
+  it("draws no legend for a single series - there is nothing for it to tell apart", () => {
+    const lone: Spec = { type: "line", x: "hour", series: "", y: ["health_score"], stack: false };
+    const single = { columns: ["hour", "health_score"], types: ["TIMESTAMP", "INTEGER"],
+      rows: [[HOURS[0], 97], [HOURS[1], 96]] };
+    renderThemed(<Chart columns={single.columns} columnTypes={single.types} rows={single.rows}
+      spec={lone} />);
+    expect(screen.queryByText("health_score")).toBeNull();
   });
 
   it("does not promise a table when the caller has none under it", () => {
-    const { container } = render(
+    renderThemed(
       <Chart columns={r.columns} columnTypes={r.types} rows={r.rows} spec={spec}
         tableBelow={false} />);
-    expect(svgOf(container).getAttribute("aria-label"))
-      .not.toContain("The table below");
+    const img = screen.getByRole("img", { name: /Line chart of health_score over hour/ });
+    expect(img).not.toHaveAccessibleName(/The table below/);
   });
 
   it("stacks into filled areas when the spec says to", () => {
-    const { container } = render(
+    const { container } = renderThemed(
       <Chart columns={r.columns} columnTypes={r.types} rows={r.rows}
         spec={{ ...spec, stack: true }} />);
-    expect(container.querySelectorAll('path[fill-opacity="0.62"]')).toHaveLength(2);
-    expect(container.querySelectorAll('path[fill="none"][stroke-width="2"]')).toHaveLength(0);
+    expect(container.querySelectorAll(".MuiLineChart-area")).toHaveLength(2);
+    // The note is a caption beside the image, not part of its label - same
+    // split as the old chart, where it was a sibling <div> outside the <svg>.
+    expect(screen.getByText("stacked on a shared time grid")).toBeInTheDocument();
   });
 
   it("draws nothing at all when there is no spec to draw", () => {
-    const { container } = render(
+    const { container } = renderThemed(
       <Chart columns={r.columns} columnTypes={r.types} rows={r.rows} spec={null} />);
     expect(container).toBeEmptyDOMElement();
   });
@@ -311,20 +323,12 @@ describe("rendering a bar chart", () => {
   const r = byStatus();
   const spec: Spec = { type: "bars", x: "overall_status", series: "", y: ["clusters"], stack: false };
 
-  it("draws one bar per category with the category names on the axis", () => {
-    const { container } = render(
+  it("draws one bar per category and names the range in the image's label", () => {
+    const { container } = renderThemed(
       <Chart columns={r.columns} columnTypes={r.types} rows={r.rows} spec={spec} />);
-    expect(container.querySelectorAll("path.chart-bar")).toHaveLength(3);
-    ["healthy", "warning", "critical"].forEach(
-      (status) => expect(screen.getAllByText(status).length).toBeGreaterThan(0));
-  });
-
-  it("says in the label what is on each axis and where the values are", () => {
-    const { container } = render(
-      <Chart columns={r.columns} columnTypes={r.types} rows={r.rows} spec={spec} />);
-    const label = svgOf(container).getAttribute("aria-label");
-    expect(label).toContain("Bar chart of clusters by overall_status");
-    expect(label).toContain("3 categories, healthy to critical");
+    expect(container.querySelectorAll("rect.MuiBarChart-element")).toHaveLength(3);
+    const img = screen.getByRole("img", { name: /Bar chart of clusters by overall_status/ });
+    expect(img).toHaveAccessibleName(/3 categories, healthy to critical/);
   });
 
   it("draws a group of bars per category when several measures are picked", () => {
@@ -333,18 +337,31 @@ describe("rendering a bar chart", () => {
       types: ["VARCHAR", "BIGINT", "BIGINT"],
       rows: [["hub-east", 4, 84], ["hub-west", 1, 22]],
     };
-    const { container } = render(
+    const { container } = renderThemed(
       <Chart columns={grouped.columns} columnTypes={grouped.types} rows={grouped.rows}
         spec={{ type: "bars", x: "hub", series: "", y: ["clusters", "namespaces"],
           stack: false }} />);
-    expect(container.querySelectorAll("path.chart-bar")).toHaveLength(4);
+    expect(container.querySelectorAll("rect.MuiBarChart-element")).toHaveLength(4);
     expect(screen.getByText("clusters")).toBeInTheDocument();
     expect(screen.getByText("namespaces")).toBeInTheDocument();
   });
 
+  it("goes horizontal once there are more categories than fit under a column", () => {
+    const many = {
+      columns: ["name", "clusters"],
+      types: ["VARCHAR", "BIGINT"],
+      rows: Array.from({ length: 13 }, (_, i) => [`ocp-prod-iad-${i}`, i + 1]),
+    };
+    const { container } = renderThemed(
+      <Chart columns={many.columns} columnTypes={many.types} rows={many.rows}
+        spec={{ type: "bars", x: "name", series: "", y: ["clusters"], stack: false }} />);
+    const bar = container.querySelector("rect.MuiBarChart-element");
+    expect(bar).toHaveAttribute("layout", "horizontal");
+  });
+
   it("accepts fields worked out once by the caller instead of the raw columns", () => {
-    const { container } = render(
+    const { container } = renderThemed(
       <Chart fields={fieldsOf(r)} rows={r.rows} spec={spec} height={180} />);
-    expect(container.querySelectorAll("path.chart-bar")).toHaveLength(3);
+    expect(container.querySelectorAll("rect.MuiBarChart-element")).toHaveLength(3);
   });
 });

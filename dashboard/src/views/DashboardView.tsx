@@ -10,12 +10,15 @@
 // coming back to a dashboard paints from the last answer at once and refreshes
 // behind it.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Box, Button, Link, Stack, TextField, Typography } from "@mui/material";
+import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import { api } from "../api";
 import type { ApiError } from "../api";
 import { invalidate } from "../cache";
 import { useFetch } from "../hooks";
 import type { Nav, RouteApi } from "../router";
-import { ErrorBanner, SkeletonLines, fmtAge } from "../components";
+import { Card, Empty, Muted, Tag, ErrorBanner, SkeletonLines, fmtAge } from "../components";
 import Panel from "../dashboards/Panel";
 import VariablesBar from "../dashboards/VariablesBar";
 import { PanelDrawer, VariablesDrawer } from "../dashboards/editor";
@@ -255,86 +258,94 @@ export default function DashboardView({ id, route, nav }: DashboardViewProps) {
   const dialogError = dialog ? errorAt(errors, "id") || unkeyed : "";
 
   return (
-    <div className="grid" style={{ gap: 16 }}>
-      <div className="section-head">
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <span className="back" onClick={() => route.back("/dashboards")}>← All dashboards</span>
+    <Stack spacing={2}>
+      <Box sx={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        gap: 1.5, flexWrap: "wrap",
+      }}>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <BackLink onClick={() => route.back("/dashboards")} />
           {editMode ? (
             <>
-              <input
-                className="db-title-input"
-                type="text"
+              <TextField
                 value={definition.title}
                 placeholder="Dashboard title"
-                aria-label="Dashboard title"
                 onChange={(e) => patchDraft({ title: e.target.value })}
+                slotProps={{ htmlInput: { "aria-label": "Dashboard title" } }}
+                sx={{
+                  display: "block", width: "min(560px, 100%)", mb: 0.75,
+                  "& .MuiInputBase-input": { fontSize: 18, fontWeight: 600 },
+                }}
               />
-              <input
-                className="db-desc-input"
-                type="text"
+              <TextField
                 value={definition.description}
                 placeholder="What this dashboard answers"
-                aria-label="Dashboard description"
                 onChange={(e) => patchDraft({ description: e.target.value })}
+                slotProps={{ htmlInput: { "aria-label": "Dashboard description" } }}
+                sx={{ display: "block", width: "min(560px, 100%)" }}
               />
             </>
           ) : (
             <>
-              <div className="section-title" style={{ margin: 0 }}>
+              <Typography variant="h2" component="h2"
+                sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
                 {title}
-                {definition.builtin && <span className="tag db-tag">built in</span>}
-                {fixture && <span className="tag db-tag">fixture</span>}
-              </div>
-              {definition.description && <div className="desc">{definition.description}</div>}
+                {definition.builtin && <Tag sx={{ textTransform: "uppercase" }}>built in</Tag>}
+                {fixture && <Tag sx={{ textTransform: "uppercase" }}>fixture</Tag>}
+              </Typography>
+              {definition.description && (
+                <Muted sx={{ display: "block", fontSize: 12.5 }}>{definition.description}</Muted>
+              )}
             </>
           )}
-        </div>
-        <div className="db-head-actions">
+        </Box>
+        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
           {generation != null && (
-            <span className="muted db-snap">
+            <Muted sx={{ fontSize: 12.5, whiteSpace: "nowrap" }}>
               snapshot {generation}
               {snapshot?.built_at ? ` · built ${fmtAge(snapshot.built_at)} ago` : ""}
               {answer?.local ? " · run locally" : ""}
-            </span>
+            </Muted>
           )}
-          {note && <span className="tag">{note}</span>}
+          {note && <Tag>{note}</Tag>}
           {editMode ? (
             <>
-              <button type="button" className="btn" onClick={() => setVarsOpen(true)}>Variables</button>
-              <button type="button" className="btn"
+              <Button variant="outlined" color="inherit" onClick={() => setVarsOpen(true)}>Variables</Button>
+              <Button variant="outlined" color="inherit"
                 onClick={() => setEditing({ index: -1, panel: emptyPanel("") })}>
                 Add panel
-              </button>
-              <button type="button" className="btn" onClick={() => setDialog("save-as")}>Save as…</button>
+              </Button>
+              <Button variant="outlined" color="inherit" onClick={() => setDialog("save-as")}>Save as…</Button>
               {!isNew && !definition.builtin && (
-                <button type="button" className="btn" onClick={() => setDialog("delete")}>Delete</button>
+                <Button variant="outlined" color="inherit" onClick={() => setDialog("delete")}>Delete</Button>
               )}
-              <button type="button" className="btn" onClick={cancelEdit}>Cancel</button>
-              <button type="button" className="btn primary" disabled={saving} onClick={() => save()}>
+              <Button variant="outlined" color="inherit" onClick={cancelEdit}>Cancel</Button>
+              <Button variant="contained" disabled={saving} onClick={() => save()}>
                 {saving ? "Saving…" : "Save"}
-              </button>
+              </Button>
             </>
           ) : (
             <>
-              <button type="button" className="btn" disabled={run.loading}
+              <Button variant="outlined" color="inherit" disabled={run.loading}
+                startIcon={<RefreshIcon />}
                 onClick={() => { stored.reload(); run.reload(); }}>
-                {run.loading ? "Running…" : "↻ Refresh"}
-              </button>
+                {run.loading ? "Running…" : "Refresh"}
+              </Button>
               {definition.builtin ? (
-                <button type="button" className="btn" onClick={() => setDialog("clone")}>Clone to edit</button>
+                <Button variant="outlined" color="inherit" onClick={() => setDialog("clone")}>Clone to edit</Button>
               ) : (
-                <button type="button" className="btn" onClick={startEdit}>Edit</button>
+                <Button variant="outlined" color="inherit" onClick={startEdit}>Edit</Button>
               )}
             </>
           )}
-        </div>
-      </div>
+        </Stack>
+      </Box>
 
-      {!dialog && unkeyed && <div className="banner">{unkeyed}</div>}
+      {!dialog && unkeyed && <Alert severity="error">{unkeyed}</Alert>}
       {!dialog && errors.length > 0 && !unkeyed && (
-        <div className="banner">
+        <Alert severity="error">
           {errors.length === 1 ? errors[0].message : `${errors.length} problems - see the fields below.`}
-        </div>
+        </Alert>
       )}
       {run.error && !answer && <ErrorBanner error={run.error} />}
 
@@ -343,18 +354,18 @@ export default function DashboardView({ id, route, nav }: DashboardViewProps) {
         params={params}
         variables={variables}
         onChange={setVariable}
-        right={run.stale ? <span className="muted">refreshing…</span> : null}
+        right={run.stale ? <Muted>refreshing…</Muted> : null}
       />
 
       {definition.panels.length === 0 ? (
-        <div className="card">
-          <div className="empty">
+        <Card>
+          <Empty>
             {editMode ? "No panels yet. \"Add panel\" writes the first one."
               : "This dashboard has no panels."}
-          </div>
-        </div>
+          </Empty>
+        </Card>
       ) : (
-        <div className="db-grid">
+        <PanelGrid>
           {definition.panels.map((panel, i) => (
             <Panel
               key={panel.id}
@@ -373,7 +384,7 @@ export default function DashboardView({ id, route, nav }: DashboardViewProps) {
               onMove={(delta) => movePanel(i, delta)}
             />
           ))}
-        </div>
+        </PanelGrid>
       )}
 
       {editing && (
@@ -429,20 +440,59 @@ export default function DashboardView({ id, route, nav }: DashboardViewProps) {
           onClose={() => setDialog(null)}
           footer={(
             <>
-              <button type="button" className="btn" onClick={() => setDialog(null)}>Cancel</button>
-              <button type="button" className="btn primary" disabled={saving} onClick={remove}>
+              <Button variant="outlined" color="inherit" onClick={() => setDialog(null)}>Cancel</Button>
+              <Button variant="contained" disabled={saving} onClick={remove}>
                 {saving ? "Deleting…" : "Delete"}
-              </button>
+              </Button>
             </>
           )}
         >
-          <p style={{ marginTop: 0 }}>
-            "{definition.title}" and its {definition.panels.length} panels are removed for
+          <Typography variant="body1">
+            &quot;{definition.title}&quot; and its {definition.panels.length} panels are removed for
             everyone. This cannot be undone.
-          </p>
+          </Typography>
         </Modal>
       )}
-    </div>
+    </Stack>
+  );
+}
+
+/** The way back to the list, at the top of every dashboard page. */
+function BackLink({ onClick }: { onClick: () => void }) {
+  return (
+    <Link
+      component="button"
+      type="button"
+      color="text.secondary"
+      onClick={onClick}
+      sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, mb: 1.25, fontSize: 13 }}
+    >
+      <ArrowBackIcon fontSize="inherit" /> All dashboards
+    </Link>
+  );
+}
+
+/**
+ * A twelve-column grid of cards over fixed rows, so a panel's size is two small
+ * integers and its height is known before anything is measured - which is what
+ * lets a chart inside one be sized without a layout pass. Below the breakpoint
+ * the columns collapse to one and each panel keeps the height it asked for, so
+ * charts do not flatten on a phone.
+ */
+function PanelGrid({ children }: { children?: React.ReactNode }) {
+  return (
+    <Box sx={{
+      display: "grid", gap: 2,
+      gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "repeat(12, minmax(0, 1fr))" },
+      gridAutoRows: { xs: "auto", md: "150px" },
+      "& > section": {
+        gridColumn: { xs: "1 / -1", md: "span var(--w, 6)" },
+        gridRow: { xs: "auto", md: "span var(--h, 2)" },
+        height: { xs: "calc(var(--h, 2) * 150px + (var(--h, 2) - 1) * 16px)", md: "auto" },
+      },
+    }}>
+      {children}
+    </Box>
   );
 }
 
@@ -468,24 +518,21 @@ interface MissingDashboardProps {
 function MissingDashboard({ id, error, route, fixture }: MissingDashboardProps) {
   const missing = error?.status === 404;
   return (
-    <div className="grid" style={{ gap: 16 }}>
-      <span className="back" onClick={() => route.back("/dashboards")}>← All dashboards</span>
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>
-          {missing ? "No dashboard called that" : "This dashboard could not be loaded"}
-        </h3>
-        <p className="desc" style={{ marginTop: 0 }}>
+    <Stack spacing={2}>
+      <Box><BackLink onClick={() => route.back("/dashboards")} /></Box>
+      <Card title={missing ? "No dashboard called that" : "This dashboard could not be loaded"}>
+        <Typography variant="body1" color="text.secondary">
           {missing
             ? `The data layer has no dashboard with the id "${id}". It may have been deleted, or this build of the API may not serve dashboards yet.`
             : String(error?.message || error)}
-        </p>
+        </Typography>
         {!fixture && (
-          <p className="q-desc">
+          <Muted sx={{ display: "block", fontSize: 11.5, mt: 1.5 }}>
             Developing against an API without the dashboard plane? Add <code>?fixture=1</code> to
             the URL to load a sample dashboard that runs on the query plane alone.
-          </p>
+          </Muted>
         )}
-      </div>
-    </div>
+      </Card>
+    </Stack>
   );
 }

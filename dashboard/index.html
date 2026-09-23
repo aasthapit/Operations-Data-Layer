@@ -1,12 +1,32 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Operations Data Layer</title>
+    <script>
+      // Resolve the colour mode before the first paint, so a reload does not
+      // flash the dark theme at someone who chose light (or the other way
+      // round). React reads this attribute back in src/theme.ts when nothing is
+      // stored, which is what keeps the two in step.
+      (function () {
+        try {
+          var stored = localStorage.getItem("odl.color-mode");
+          var mode =
+            stored === "light" || stored === "dark"
+              ? stored
+              : window.matchMedia("(prefers-color-scheme: light)").matches
+                ? "light"
+                : "dark";
+          document.documentElement.setAttribute("data-theme", mode);
+        } catch (e) {
+          // Storage can be blocked. The markup's own data-theme stands.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

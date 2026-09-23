@@ -4,8 +4,14 @@
 // leave the dashboard as it was - and the grid behind the drawer is not
 // re-running a query on every keystroke in the SQL box.
 import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import {
+  Alert, Box, Button, Checkbox, FormControlLabel, IconButton, TextField, Tooltip,
+} from "@mui/material";
+import CloseIcon from "@mui/icons-material/Close";
 import Chart, { inferFields, normalizeChart, resolveSpec } from "../Chart";
 import ChartControls, { chartNoneText } from "../ChartControls";
+import { MONO_FONT, Muted } from "../components";
 import { Drawer, Field, Stepper } from "./ui";
 import { runQueries } from "./runtime";
 import {
@@ -96,21 +102,23 @@ export function PanelDrawer({
       onClose={onClose}
       footer={(
         <>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn primary"
+          <Button variant="outlined" color="inherit" onClick={onClose}>Cancel</Button>
+          <Button
+            variant="contained"
             disabled={!draft.title.trim() || !draft.sql.trim()}
-            onClick={() => onApply(draft)}>
+            onClick={() => onApply(draft)}
+          >
             Apply
-          </button>
+          </Button>
         </>
       )}
     >
       <Field label="Title" hint="Variables can appear as {{name}}." error={errorAt(errors, "title")} wide>
-        <input type="text" value={draft.title} onChange={(e) => set({ title: e.target.value })} />
+        <TextField fullWidth value={draft.title} onChange={(e) => set({ title: e.target.value })} />
       </Field>
 
       <Field label="Description" hint="Shown on the panel as a tooltip." wide>
-        <input type="text" value={draft.description}
+        <TextField fullWidth value={draft.description}
           onChange={(e) => set({ description: e.target.value })} />
       </Field>
 
@@ -122,34 +130,32 @@ export function PanelDrawer({
           : "A single SELECT. Variables are substituted as escaped literals."}
         wide
       >
-        <textarea
-          className="q-sql q-sql-edit mono"
-          spellCheck="false"
+        <SqlBox
           rows={Math.min(18, Math.max(7, draft.sql.split("\n").length + 1))}
           value={draft.sql}
-          onChange={(e) => set({ sql: e.target.value })}
+          onChange={(sql) => set({ sql })}
         />
       </Field>
 
-      <div className="db-drawer-row">
-        <button type="button" className="btn" disabled={busy || !draft.sql.trim()} onClick={runPreview}>
+      <DrawerRow>
+        <Button variant="outlined" color="inherit" disabled={busy || !draft.sql.trim()} onClick={runPreview}>
           {busy ? "Running…" : stale || !preview ? "Run preview" : "Run again"}
-        </button>
+        </Button>
         {preview && !stale && (
-          <span className="muted">
+          <Muted>
             {/* a preview that ran has both; a batch entry that did not never
                 gets here, because `preview` is only set on success */}
             {(preview.row_count ?? 0).toLocaleString()} rows
             {" · "}{(preview.columns || []).length} columns
             {preview.elapsed_ms != null ? ` · ${preview.elapsed_ms} ms` : ""}
-          </span>
+          </Muted>
         )}
-        {stale && <span className="muted">The SQL changed - run the preview again.</span>}
-      </div>
-      {previewError && <div className="banner">{previewError}</div>}
+        {stale && <Muted>The SQL changed - run the preview again.</Muted>}
+      </DrawerRow>
+      {previewError && <Alert severity="error" sx={{ mb: 2 }}>{previewError}</Alert>}
 
-      <div className="db-drawer-sec">
-        <div className="q-subhead">Chart</div>
+      <Section>
+        <Subhead>Chart</Subhead>
         {preview ? (
           <>
             <ChartControls fields={fields} spec={spec} chart={draft.chart}
@@ -157,25 +163,79 @@ export function PanelDrawer({
             {spec ? (
               <Chart fields={fields} rows={preview.rows} spec={spec} height={200} tableBelow={false} />
             ) : (
-              <div className="chart-none">{chartNoneText(draft.chart) || "This panel shows the table only."}</div>
+              <Muted sx={{ display: "block", fontSize: 12.5 }}>
+                {chartNoneText(draft.chart) || "This panel shows the table only."}
+              </Muted>
             )}
           </>
         ) : (
-          <div className="q-desc">Run the preview to choose what the panel charts.</div>
+          <Muted sx={{ display: "block", fontSize: 11.5 }}>
+            Run the preview to choose what the panel charts.
+          </Muted>
         )}
-      </div>
+      </Section>
 
-      <div className="db-drawer-sec db-drawer-row">
-        <Stepper label="Width" value={draft.w} min={1} max={MAX_W}
-          onChange={(w) => set({ w })} suffix="/ 12" />
-        <Stepper label="Height" value={draft.h} min={1} max={MAX_H}
-          onChange={(h) => set({ h })} suffix={draft.h === 1 ? "row" : "rows"} />
-        <Field label="Row limit" hint="Blank uses the server's default." error={errorAt(errors, "limit")}>
-          <input type="number" min="1" value={draft.limit ?? ""}
-            onChange={(e) => set({ limit: e.target.value ? Number(e.target.value) : null })} />
-        </Field>
-      </div>
+      <Section>
+        <DrawerRow align="flex-start">
+          <Stepper label="Width" value={draft.w} min={1} max={MAX_W}
+            onChange={(w) => set({ w })} suffix="/ 12" />
+          <Stepper label="Height" value={draft.h} min={1} max={MAX_H}
+            onChange={(h) => set({ h })} suffix={draft.h === 1 ? "row" : "rows"} />
+          <Field label="Row limit" hint="Blank uses the server's default." error={errorAt(errors, "limit")}>
+            <TextField type="number" value={draft.limit ?? ""}
+              slotProps={{ htmlInput: { min: 1 } }}
+              onChange={(e) => set({ limit: e.target.value ? Number(e.target.value) : null })} />
+          </Field>
+        </DrawerRow>
+      </Section>
     </Drawer>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// the drawers' own furniture
+// --------------------------------------------------------------------------- //
+/** One line of controls inside a drawer. */
+function DrawerRow({ children, align = "center" }: { children?: ReactNode; align?: string }) {
+  return (
+    <Box sx={{ display: "flex", alignItems: align, gap: 1.5, flexWrap: "wrap", mb: 1.75 }}>
+      {children}
+    </Box>
+  );
+}
+
+/** A block of the drawer, ruled off from the one above it. */
+function Section({ children }: { children?: ReactNode }) {
+  return (
+    <Box sx={{ borderTop: 1, borderColor: "border.soft", pt: 1.75, mt: 0.5 }}>{children}</Box>
+  );
+}
+
+function Subhead({ children }: { children?: ReactNode }) {
+  return (
+    <Muted sx={{
+      display: "block", fontSize: 10.5, textTransform: "uppercase",
+      letterSpacing: "0.05em", m: "0 0 4px",
+    }}>
+      {children}
+    </Muted>
+  );
+}
+
+/** A SQL editor: monospace, no spell check, sized to what is in it. */
+function SqlBox({ value, rows, onChange }: {
+  value: string; rows: number; onChange: (value: string) => void;
+}) {
+  return (
+    <TextField
+      multiline
+      fullWidth
+      minRows={rows}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      slotProps={{ htmlInput: { spellCheck: false } }}
+      sx={{ "& .MuiInputBase-root": { fontFamily: MONO_FONT, fontSize: 12.5, lineHeight: 1.55 } }}
+    />
   );
 }
 
@@ -206,37 +266,51 @@ export function VariablesDrawer({ definition, errors, onApply, onClose }: Variab
       onClose={onClose}
       footer={(
         <>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn primary" onClick={() => onApply(list)}>Apply</button>
+          <Button variant="outlined" color="inherit" onClick={onClose}>Cancel</Button>
+          <Button variant="contained" onClick={() => onApply(list)}>Apply</Button>
         </>
       )}
     >
-      <div className="q-desc">
-        A variable is written as {"{{name}}"} in a panel's SQL and in its title. The server
-        substitutes it as an escaped literal, and its value rides in the page's URL.
-      </div>
+      <Muted sx={{ display: "block", fontSize: 11.5, mb: 1.75 }}>
+        A variable is written as {"{{name}}"} in a panel&apos;s SQL and in its title. The server
+        substitutes it as an escaped literal, and its value rides in the page&apos;s URL.
+      </Muted>
 
       {list.map((v, i) => (
-        <div className="db-var-edit" key={i /* eslint-disable-line react/no-array-index-key */}>
-          <div className="db-drawer-row">
+        <Box
+          key={i /* eslint-disable-line react/no-array-index-key */}
+          sx={{ borderLeft: 2, borderColor: "divider", pl: 1.5, my: 1.75 }}
+        >
+          <DrawerRow align="flex-start">
             <Field label="Name" error={errorAt(errors, `variables.${i}.name`)}>
-              <input type="text" className="mono" value={v.name}
-                onChange={(e) => set(i, { name: e.target.value })} />
+              <TextField value={v.name} onChange={(e) => set(i, { name: e.target.value })}
+                slotProps={{ htmlInput: { style: { fontFamily: MONO_FONT } } }} />
             </Field>
             <Field label="Label" hint="Shown above the control.">
-              <input type="text" value={v.label} placeholder={v.name}
+              <TextField value={v.label} placeholder={v.name}
                 onChange={(e) => set(i, { label: e.target.value })} />
             </Field>
             <Field label="Type">
               {/* the options are exactly VARIABLE_TYPES */}
-              <select value={v.type}
-                onChange={(e) => set(i, { type: e.target.value as VariableType })}>
+              <TextField
+                select
+                value={v.type}
+                onChange={(e) => set(i, { type: e.target.value as VariableType })}
+                slotProps={{ select: { native: true } }}
+              >
                 {VARIABLE_TYPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-              </select>
+              </TextField>
             </Field>
-            <button type="button" className="q-x" title="Remove this variable"
-              onClick={() => remove(i)}>×</button>
-          </div>
+            <Tooltip title="Remove this variable">
+              <IconButton
+                aria-label="Remove this variable"
+                onClick={() => remove(i)}
+                sx={{ mt: 2.5, flex: "none", border: 1, borderColor: "divider", borderRadius: "6px", p: 0.25 }}
+              >
+                <CloseIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </Tooltip>
+          </DrawerRow>
 
           {v.type === "select" && (
             <Field
@@ -245,35 +319,50 @@ export function VariablesDrawer({ definition, errors, onApply, onClose }: Variab
               hint="Returns a column named value, and optionally one named label. It may not use variables."
               wide
             >
-              <textarea className="q-sql q-sql-edit mono" spellCheck="false" rows={2} value={v.sql}
-                onChange={(e) => set(i, { sql: e.target.value })} />
+              <SqlBox rows={2} value={v.sql} onChange={(sql) => set(i, { sql })} />
             </Field>
           )}
 
-          <div className="db-drawer-row">
+          <DrawerRow align="flex-start">
             <Field label="Default" error={errorAt(errors, `variables.${i}.default`)}>
-              <input type={v.type === "number" ? "number" : "text"}
+              <TextField
+                type={v.type === "number" ? "number" : "text"}
                 // a default is whatever the column holds; the field edits its text
                 value={hasValue(v.default) ? (v.default as string | number) : ""}
-                onChange={(e) => set(i, { default: e.target.value })} />
+                onChange={(e) => set(i, { default: e.target.value })}
+              />
             </Field>
-            <label className="q-check">
-              <input type="checkbox" checked={v.required}
-                onChange={(e) => set(i, { required: e.target.checked })} />
-              <span>Required</span>
-            </label>
+            <FormControlLabel
+              sx={{ mt: 2.5 }}
+              control={(
+                <Checkbox checked={v.required} onChange={(e) => set(i, { required: e.target.checked })} />
+              )}
+              label="Required"
+            />
             {v.type === "select" && (
-              <label className="q-check">
-                <input type="checkbox" checked={v.multi}
-                  onChange={(e) => set(i, { multi: e.target.checked })} />
-                <span>Allow several</span>
-              </label>
+              <FormControlLabel
+                sx={{ mt: 2.5 }}
+                control={(
+                  <Checkbox checked={v.multi} onChange={(e) => set(i, { multi: e.target.checked })} />
+                )}
+                label="Allow several"
+              />
             )}
-          </div>
-        </div>
+          </DrawerRow>
+        </Box>
       ))}
 
-      <button type="button" className="q-add" onClick={add}>+ variable</button>
+      <Button
+        fullWidth
+        onClick={add}
+        sx={{
+          mt: 0.5, color: "text.secondary", fontSize: 11.5,
+          border: 1, borderStyle: "dashed", borderColor: "divider",
+          "&:hover": { borderStyle: "dashed", borderColor: "primary.main", color: "text.primary" },
+        }}
+      >
+        + variable
+      </Button>
     </Drawer>
   );
 }

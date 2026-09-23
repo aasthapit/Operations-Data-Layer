@@ -12,6 +12,10 @@ import {
 } from "../test/fixtures/cluster";
 import { CLUSTERS, clustersResponse } from "../test/fixtures/fleet";
 
+/** A data row of a table. The grid draws divs, so a row is what carries the
+ * role rather than a `<tr>`. */
+const GRID_ROW = '[role="row"]';
+
 vi.mock("../api", async () => {
   const { createApiMock } = await import("../test/apiMock");
   return { api: createApiMock(), BASE: "" };
@@ -79,7 +83,7 @@ describe("the header", () => {
   it("goes back to the list", async () => {
     const user = userEvent.setup();
     const { back } = open();
-    await user.click(await screen.findByText("← All clusters"));
+    await user.click(await screen.findByRole("button", { name: /All clusters/ }));
     expect(back).toHaveBeenCalledWith("/clusters");
   });
 
@@ -111,8 +115,7 @@ describe("the overview tab", () => {
 
   it("reads capacity as used against allocatable, with what is requested marked", async () => {
     open();
-    const capacity = closestElement(
-      await screen.findByRole("heading", { name: /Capacity/ }), ".card");
+    const capacity = await screen.findByRole("region", { name: "Capacity" });
     expect(within(capacity).getByText("· live usage from metrics.k8s.io")).toBeInTheDocument();
     expect(within(capacity).getByText("80.90 cores used")).toBeInTheDocument();
     expect(within(capacity).getByText(/54.25 cores requested \(59%\)/)).toBeInTheDocument();
@@ -134,7 +137,9 @@ describe("the overview tab", () => {
     await screen.findByRole("heading", { name: "History" });
     expect(await screen.findByText("3 sweeps · health score and CPU % of allocatable"))
       .toBeInTheDocument();
-    expect(container.querySelector("svg[role=img]")).toBeInTheDocument();
+    // the chart is an <svg> the library hides from assistive tech, inside the
+    // labelled image the app wraps round it
+    expect(screen.getByRole("img", { name: /health_score/ })).toBeInTheDocument();
   });
 
   it("says there is not enough history rather than drawing one point", async () => {
@@ -152,8 +157,7 @@ describe("the overview tab", () => {
 
   it("lists every precondition check with its status and message", async () => {
     open();
-    const checks = closestElement(
-      await screen.findByRole("heading", { name: "Precondition checks" }), ".card");
+    const checks = await screen.findByRole("region", { name: "Precondition checks" });
     expect(within(checks).getByText("All nodes ready")).toBeInTheDocument();
     expect(within(checks).getByText("5 of 6 nodes ready")).toBeInTheDocument();
     expect(within(checks).getByText("· critical")).toBeInTheDocument();
@@ -176,17 +180,17 @@ describe("the namespaces tab", () => {
 
   it("shows ownership only on the application table", async () => {
     open("namespaces");
-    const apps = closestElement(await screen.findByText("Applications (1)"), ".card");
-    expect(within(apps).getByRole("cell", { name: "payments" })).toBeInTheDocument();
+    const apps = await screen.findByRole("region", { name: "Applications (1)" });
+    expect(within(apps).getByRole("gridcell", { name: "payments" })).toBeInTheDocument();
     expect(within(apps).getByRole("columnheader", { name: /Tier/ })).toBeInTheDocument();
-    const platform = closestElement(screen.getByText("OpenShift platform namespaces (1)"), ".card");
+    const platform = screen.getByRole("region", { name: "OpenShift platform namespaces (1)" });
     expect(within(platform).queryByRole("columnheader", { name: /Team/ })).toBeNull();
     expect(within(platform).queryByRole("columnheader", { name: /Tier/ })).toBeNull();
   });
 
   it("reads a namespace's pods, restarts, usage and resource counts", async () => {
     open("namespaces");
-    const row = closestElement(await screen.findByText("checkout-prod"), "tr");
+    const row = closestElement(await screen.findByText("checkout-prod"), GRID_ROW);
     expect(within(row).getByText("+2 pending")).toBeInTheDocument();
     expect(within(row).getByText("31")).toBeInTheDocument();
     expect(within(row).getByText("6.02 cores")).toBeInTheDocument();
@@ -211,7 +215,7 @@ describe("the workloads tab", () => {
 
   it("shows replicas, images and the age of each workload", async () => {
     open("workloads");
-    const row = closestElement(await screen.findByText("checkout-api"), "tr");
+    const row = closestElement(await screen.findByText("checkout-api"), GRID_ROW);
     expect(within(row).getByText("degraded")).toBeInTheDocument();
     expect(within(row).getByText(/4\/6/)).toBeInTheDocument();
     expect(within(row).getByText("quay.io/acme/checkout:1.9.2")).toBeInTheDocument();
@@ -259,7 +263,7 @@ describe("the workloads tab", () => {
 describe("the nodes tab", () => {
   it("draws a row per node with its state, usage and identity", async () => {
     open("nodes");
-    const row = closestElement(await screen.findByText("ip-10-4-1-21.ec2.internal"), "tr");
+    const row = closestElement(await screen.findByText("ip-10-4-1-21.ec2.internal"), GRID_ROW);
     expect(within(row).getByText("healthy")).toBeInTheDocument();
     expect(within(row).getByText("control-plane")).toBeInTheDocument();
     expect(within(row).getByText("40%")).toBeInTheDocument();
@@ -269,7 +273,7 @@ describe("the nodes tab", () => {
 
   it("says a node is cordoned and under pressure", async () => {
     open("nodes");
-    const row = closestElement(await screen.findByText("ip-10-4-2-44.ec2.internal"), "tr");
+    const row = closestElement(await screen.findByText("ip-10-4-2-44.ec2.internal"), GRID_ROW);
     expect(within(row).getByText("critical")).toBeInTheDocument();
     expect(within(row).getByText("cordoned")).toBeInTheDocument();
     expect(within(row).getByText("MemoryPressure")).toBeInTheDocument();
@@ -284,7 +288,7 @@ describe("the nodes tab", () => {
 describe("the issues tab", () => {
   it("lists the problem pods with what is wrong", async () => {
     open("issues");
-    const row = closestElement(await screen.findByText("checkout-api-7d9f8b6c4-2xk9p"), "tr");
+    const row = closestElement(await screen.findByText("checkout-api-7d9f8b6c4-2xk9p"), GRID_ROW);
     expect(within(row).getByText("CrashLoopBackOff")).toBeInTheDocument();
     expect(within(row).getByText("ReplicaSet/checkout-api-7d9f8b6c4")).toBeInTheDocument();
     expect(within(row).getByText("19")).toBeInTheDocument();
@@ -293,7 +297,7 @@ describe("the issues tab", () => {
 
   it("says a pending pod has no node yet rather than leaving the cell blank", async () => {
     open("issues");
-    const row = closestElement(await screen.findByText("prometheus-k8s-1"), "tr");
+    const row = closestElement(await screen.findByText("prometheus-k8s-1"), GRID_ROW);
     expect(within(row).getAllByText("—").length).toBeGreaterThan(0);
   });
 
@@ -306,8 +310,9 @@ describe("the issues tab", () => {
 
   it("lists the recent warning events", async () => {
     open("issues");
-    const row = closestElement(await screen.findByText("Pod/prometheus-k8s-1"), "tr");
-    expect(within(row).getByText("FailedScheduling")).toHaveClass("chip", "warning");
+    const row = closestElement(await screen.findByText("Pod/prometheus-k8s-1"), GRID_ROW);
+    expect(within(row).getByText("FailedScheduling").closest("[data-tone]"))
+      .toHaveAttribute("data-tone", "warning");
     expect(within(row).getByText("18")).toBeInTheDocument();
     expect(api.events).toHaveBeenCalledWith({ cluster: CLUSTER_NAME, limit: 50 });
   });
@@ -326,7 +331,7 @@ describe("the operators tab", () => {
     open("operators");
     const state = async (name: string) =>
       within(closestElement(
-        await screen.findByText(name), "tr")).getAllByRole("cell")[2].textContent;
+        await screen.findByText(name), GRID_ROW)).getAllByRole("gridcell")[2].textContent;
     expect(await state("authentication")).toBe("Available");
     expect(await state("ingress")).toBe("Progressing");
     expect(await state("monitoring")).toBe("Degraded");
@@ -334,14 +339,15 @@ describe("the operators tab", () => {
 
   it("marks the operators an upgrade cannot proceed without", async () => {
     open("operators");
-    const row = closestElement(await screen.findByText("authentication"), "tr");
-    expect(within(row).getByText("critical")).toHaveClass("tag", "critical");
+    const row = closestElement(await screen.findByText("authentication"), GRID_ROW);
+    expect(within(row).getByText("critical").closest("[data-tone]"))
+      .toHaveAttribute("data-tone", "critical");
   });
 
   it("asks for the blast radius of one operator version", async () => {
     const user = userEvent.setup();
     open("operators");
-    const row = closestElement(await screen.findByText("ingress"), "tr");
+    const row = closestElement(await screen.findByText("ingress"), GRID_ROW);
     await user.click(within(row).getByText("blast radius →"));
     expect(currentUrl()).toBe("/blast?operator=ingress&operator_version=4.16.7");
   });
@@ -350,21 +356,22 @@ describe("the operators tab", () => {
     answer(api, { cluster: { ...CLUSTER_DETAIL, operators: [{ name: "dns", version: "4.16.7",
       available: false, progressing: false, degraded: false, critical: false, message: "" }] } });
     open("operators");
-    const row = closestElement(await screen.findByText("dns"), "tr");
-    expect(within(row).getAllByRole("cell")[2]).toHaveTextContent("Unavailable");
+    const row = closestElement(await screen.findByText("dns"), GRID_ROW);
+    expect(within(row).getAllByRole("gridcell")[2]).toHaveTextContent("Unavailable");
   });
 });
 
 describe("the resources tab", () => {
   it("says what the cluster served, and what it did not", async () => {
     open("resources");
-    const served = closestElement(
-      await screen.findByRole("heading", { name: "What this cluster served" }), ".card");
+    const served = await screen.findByRole("region", { name: "What this cluster served" });
     expect(within(served).getByText("24")).toBeInTheDocument();
     expect(within(served).getByText("312")).toBeInTheDocument();
     expect(within(served).getByText("unavailable")).toBeInTheDocument();
-    expect(within(served).getByText(/clusterserviceversions/))
-      .toHaveAttribute("title", "the server could not find the requested resource");
+    // why a kind is not there is the chip's tooltip, and the tooltip is the
+    // accessible name of the thing it is on
+    expect(closestElement(within(served).getByText(/clusterserviceversions/), "[aria-label]"))
+      .toHaveAttribute("aria-label", "the server could not find the requested resource");
   });
 
   it("opens on routes and says how many were collected", async () => {
@@ -376,7 +383,7 @@ describe("the resources tab", () => {
 
   it("summarises a route the way the inventory reads it", async () => {
     open("resources");
-    const row = closestElement(await screen.findByText("checkout"), "tr");
+    const row = closestElement(await screen.findByText("checkout"), GRID_ROW);
     expect(within(row).getByText(
       "checkout.apps.ocp-prod-iad-02.acme.example/ → checkout · tls edge")).toBeInTheDocument();
     expect(within(row).getByText("admitted")).toBeInTheDocument();

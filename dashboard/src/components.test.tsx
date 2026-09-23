@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -6,6 +6,7 @@ import {
   Skeleton, SkeletonLines, SkeletonStats, SkeletonTable, Sparkline, Stat, SubTabs, Tier, UsageBar,
   fmtAge, fmtBytes, fmtCores, fmtDate, fmtDays, fmtPct, fmtTime,
 } from "./components";
+import { closestElement, renderThemed } from "./test/harness";
 
 describe("formatters", () => {
   it("reads CPU in cores above one and in millicores below it", () => {
@@ -55,47 +56,50 @@ describe("formatters", () => {
 
 describe("status chrome", () => {
   it("names the status on the pill and falls back to unknown", () => {
-    const { rerender } = render(<Pill status="critical" />);
+    const { rerender } = renderThemed(<Pill status="critical" />);
     expect(screen.getByText("critical")).toHaveClass("pill", "critical");
     rerender(<Pill status={null} />);
     expect(screen.getByText("unknown")).toHaveClass("pill", "unknown");
   });
 
   it("gives the dot the status as its class", () => {
-    const { container, rerender } = render(<Dot status="warning" />);
+    const { container, rerender } = renderThemed(<Dot status="warning" />);
     expect(container.firstChild).toHaveClass("dot-s", "warning");
     rerender(<Dot status={null} />);
     expect(container.firstChild).toHaveClass("unknown");
   });
 
   it("marks a critical tier and says nothing for a namespace that has none", () => {
-    const { rerender } = render(<Tier tier="critical" />);
-    expect(screen.getByText("critical")).toHaveClass("tag", "critical");
+    const { rerender } = renderThemed(<Tier tier="critical" />);
+    // the tier is the chip's own property, and only "critical" is coloured
+    expect(closestElement(screen.getByText("critical"), "[data-tier]"))
+      .toHaveAttribute("data-tier", "critical");
     rerender(<Tier tier="standard" />);
-    expect(screen.getByText("standard")).toHaveClass("tag");
+    expect(closestElement(screen.getByText("standard"), "[data-tier]"))
+      .toHaveAttribute("data-tier", "standard");
     rerender(<Tier tier={null} />);
-    expect(screen.getByText("—")).toHaveClass("muted");
+    expect(screen.getByText("—")).toBeInTheDocument();
   });
 
   it("draws the health bar in the fleet's own order, leaving out the empty bands", () => {
-    const { container } = render(
-      <HealthBar counts={{ healthy: 2, warning: 1, critical: 1, unknown: 0 }} />);
-    expect(container.firstChild).toHaveAttribute("title",
-      "healthy: 2  warning: 1  critical: 1  unknown: 0");
-    const bands = [...(container.firstChild as HTMLElement).children];
-    expect(bands.map((b) => b.className)).toEqual(["healthy", "warning", "critical"]);
+    renderThemed(<HealthBar counts={{ healthy: 2, warning: 1, critical: 1, unknown: 0 }} />);
+    // the breakdown is the bar's accessible name as well as its tooltip, so a
+    // bar nobody can hover still says what it is made of
+    const bar = screen.getByLabelText("healthy: 2 warning: 1 critical: 1 unknown: 0");
+    const bands = [...bar.children];
+    expect(bands.map((b) => b.getAttribute("data-status")))
+      .toEqual(["healthy", "warning", "critical"]);
     expect(bands[0]).toHaveStyle({ width: "50%" });
   });
 
   it("draws a usage bar with a tone for the threshold it has crossed", () => {
     const tone = (percent: number) => {
-      const { container, unmount } = render(<UsageBar percent={percent} />);
-      // the bar's fill has no role or name of its own - the class is what the
-      // threshold is expressed in, so the DOM shape is the point here
-      const fill = container.querySelector(".usage-bar > span") as HTMLElement;
-      const { className } = fill;
+      const { container, unmount } = renderThemed(<UsageBar percent={percent} />);
+      // the bar's fill has no role or name of its own - the threshold it has
+      // crossed is what it carries, so the DOM shape is the point here
+      const tone = container.querySelector("[data-tone]")?.getAttribute("data-tone");
       unmount();
-      return className;
+      return tone;
     };
     expect(tone(41.2)).toBe("healthy");
     expect(tone(88.4)).toBe("warning");
@@ -103,20 +107,20 @@ describe("status chrome", () => {
   });
 
   it("says usage is not available rather than drawing an empty bar", () => {
-    render(<UsageBar percent={null} />);
+    renderThemed(<UsageBar percent={null} />);
     expect(screen.getByText("n/a")).toBeInTheDocument();
   });
 
   it("caps the filled part of the bar at the width of the bar", () => {
-    const { container } = render(<UsageBar percent={140} label="CPU" />);
-    expect(container.querySelector(".usage-bar > span")).toHaveStyle({ width: "100%" });
+    const { container } = renderThemed(<UsageBar percent={140} label="CPU" />);
+    expect(container.querySelector("[data-tone]")).toHaveStyle({ width: "100%" });
     expect(screen.getByText("140%")).toBeInTheDocument();
   });
 });
 
 describe("stats and sparklines", () => {
   it("draws a label, a value and the sub-line under it", () => {
-    render(<Stat label="Clusters" value={5} kind="accent" sub="2 upgrading" />);
+    renderThemed(<Stat label="Clusters" value={5} kind="accent" sub="2 upgrading" />);
     expect(screen.getByText("Clusters")).toBeInTheDocument();
     expect(screen.getByText("5")).toBeInTheDocument();
     expect(screen.getByText("2 upgrading")).toBeInTheDocument();
@@ -125,55 +129,55 @@ describe("stats and sparklines", () => {
   it("is clickable only when the view gave it somewhere to go", async () => {
     const onClick = vi.fn();
     const user = userEvent.setup();
-    const { container, rerender } = render(<Stat label="Healthy" value={2} onClick={onClick} />);
-    expect(container.firstChild).toHaveClass("clickable");
+    const { rerender } = renderThemed(<Stat label="Healthy" value={2} onClick={onClick} />);
+    // a tile that goes somewhere is a button, so a keyboard reaches it too
+    expect(screen.getByRole("button", { name: /Healthy/ })).toBeInTheDocument();
     await user.click(screen.getByText("Healthy"));
     expect(onClick).toHaveBeenCalled();
     rerender(<Stat label="Healthy" value={2} />);
-    expect(container.firstChild).not.toHaveClass("clickable");
+    expect(screen.queryByRole("button")).toBeNull();
   });
 
   it("draws a sparkline over the points it was given", () => {
-    const { container } = render(<Sparkline points={[10, 40, 25]} width={100} height={20} />);
+    const { container } = renderThemed(<Sparkline points={[10, 40, 25]} width={100} height={20} />);
     const paths = container.querySelectorAll("path");
     expect(paths).toHaveLength(2);
     expect(paths[1]).toHaveAttribute("d", "M0.0,18.0 L50.0,12.0 L100.0,15.0");
   });
 
   it("says there is no history rather than drawing an empty chart", () => {
-    render(<Sparkline points={[]} />);
+    renderThemed(<Sparkline points={[]} />);
     expect(screen.getByText("no history")).toBeInTheDocument();
   });
 
   it("draws a single point without dividing by zero", () => {
-    const { container } = render(<Sparkline points={[50]} width={100} height={20} />);
+    const { container } = renderThemed(<Sparkline points={[50]} width={100} height={20} />);
     expect(container.querySelector("svg")).toBeInTheDocument();
   });
 });
 
 describe("placeholders", () => {
   it("draws a block the shape of the content that will replace it", () => {
-    const { container } = render(<Skeleton width="60%" height={11} />);
-    expect(container.firstChild).toHaveClass("skeleton");
+    const { container } = renderThemed(<Skeleton width="60%" height={11} />);
     expect(container.firstChild).toHaveStyle({ width: "60%", height: "11px" });
   });
 
   it("draws the right number of pending rows, cells, stats and lines", () => {
-    const { container: table } = render(<SkeletonTable columns={3} rows={4} dense />);
+    const { container: table } = renderThemed(<SkeletonTable columns={3} rows={4} dense />);
     expect(table.querySelectorAll("tr")).toHaveLength(4);
     expect(table.querySelectorAll("td")).toHaveLength(12);
-    expect(table.querySelector("table")).toHaveClass("dt-dense");
+    // a placeholder is scenery: it is not read out and it is not a table
     expect(table.querySelector("table")).toHaveAttribute("aria-hidden", "true");
 
-    const { container: stats } = render(<SkeletonStats count={6} />);
-    expect(stats.querySelectorAll(".stat")).toHaveLength(6);
+    const { container: stats } = renderThemed(<SkeletonStats count={6} />);
+    expect(stats.firstChild?.childNodes).toHaveLength(6);
 
-    const { container: lines } = render(<SkeletonLines rows={3} />);
-    expect(lines.querySelectorAll(".skeleton")).toHaveLength(3);
+    const { container: lines } = renderThemed(<SkeletonLines rows={3} />);
+    expect(lines.firstChild?.childNodes).toHaveLength(3);
   });
 
   it("says it is loading", () => {
-    render(<Loading />);
+    renderThemed(<Loading />);
     expect(screen.getByText("Loading…")).toBeInTheDocument();
   });
 });
@@ -185,7 +189,7 @@ describe("SearchInput", () => {
   it("reports once the user stops typing rather than once per keystroke", async () => {
     const onChange = vi.fn();
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    render(<SearchInput value="" onChange={onChange} aria-label="Filter images" />);
+    renderThemed(<SearchInput value="" onChange={onChange} aria-label="Filter images" />);
     await user.type(screen.getByLabelText("Filter images"), "quay");
     expect(onChange).not.toHaveBeenCalled();
     vi.advanceTimersByTime(300);
@@ -194,7 +198,7 @@ describe("SearchInput", () => {
 
   it("takes a new value from outside without reporting it straight back", async () => {
     const onChange = vi.fn();
-    const { rerender } = render(
+    const { rerender } = renderThemed(
       <SearchInput value="quay" onChange={onChange} aria-label="Filter images" />);
     const box = screen.getByLabelText("Filter images");
     expect(box).toHaveValue("quay");
@@ -209,7 +213,7 @@ describe("SearchInput", () => {
   it("reports an emptied box, so clearing it in place clears the filter", async () => {
     const onChange = vi.fn();
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    render(<SearchInput value="quay" onChange={onChange} aria-label="Filter images" />);
+    renderThemed(<SearchInput value="quay" onChange={onChange} aria-label="Filter images" />);
     await user.clear(screen.getByLabelText("Filter images"));
     vi.advanceTimersByTime(300);
     await waitFor(() => expect(onChange).toHaveBeenCalledExactlyOnceWith(""));
@@ -220,10 +224,10 @@ describe("small controls", () => {
   it("marks the active sub-tab and reports the one that was chosen", async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
-    render(<SubTabs tabs={[["overview", "Overview", 3], ["nodes", "Nodes"]]}
+    renderThemed(<SubTabs tabs={[["overview", "Overview", 3], ["nodes", "Nodes"]]}
       value="overview" onChange={onChange} />);
-    expect(screen.getByRole("button", { name: /Overview/ })).toHaveClass("active");
-    expect(screen.getByText("3")).toHaveClass("count");
+    expect(screen.getByRole("button", { name: /Overview/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /Overview/ })).toHaveTextContent("Overview3");
     await user.click(screen.getByRole("button", { name: "Nodes" }));
     expect(onChange).toHaveBeenCalledWith("nodes");
   });
@@ -231,7 +235,7 @@ describe("small controls", () => {
   it("offers every option plus the all-entry, and reports what was picked", async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
-    render(<FilterSelect label="Hub" value="" options={["hub-east", "hub-west"]}
+    renderThemed(<FilterSelect label="Hub" value="" options={["hub-east", "hub-west"]}
       onChange={onChange} />);
     const select = screen.getByLabelText("Hub") as HTMLSelectElement;
     expect([...select.options].map((o) => o.textContent))
@@ -241,7 +245,7 @@ describe("small controls", () => {
   });
 
   it("uses the caller's own word for the all-entry", () => {
-    render(<FilterSelect label="Kind" value="routes" options={["routes"]} onChange={() => {}}
+    renderThemed(<FilterSelect label="Kind" value="routes" options={["routes"]} onChange={() => {}}
       allLabel="routes" />);
     expect(screen.getAllByText("routes")).toHaveLength(2);
   });
@@ -249,20 +253,20 @@ describe("small controls", () => {
 
 describe("error chrome", () => {
   it("shows an error's message and nothing at all when there is none", () => {
-    const { rerender, container } = render(<ErrorBanner error={new Error("404 Not Found")} />);
+    const { rerender, container } = renderThemed(<ErrorBanner error={new Error("404 Not Found")} />);
     expect(screen.getByText("Error: 404 Not Found")).toBeInTheDocument();
     rerender(<ErrorBanner error={null} />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it("shows a string error as it is", () => {
-    render(<ErrorBanner error="No schema." />);
+    renderThemed(<ErrorBanner error="No schema." />);
     expect(screen.getByText("Error: No schema.")).toBeInTheDocument();
   });
 
   it("draws the empty state it was given", () => {
-    render(<Empty>Run a query to see the impact.</Empty>);
-    expect(screen.getByText("Run a query to see the impact.")).toHaveClass("empty");
+    renderThemed(<Empty>Run a query to see the impact.</Empty>);
+    expect(screen.getByText("Run a query to see the impact.")).toBeInTheDocument();
   });
 });
 
@@ -280,7 +284,7 @@ describe("ErrorBoundary", () => {
     const swallow = (e: ErrorEvent) => e.preventDefault();
     window.addEventListener("error", swallow);
     const user = userEvent.setup();
-    render(<ErrorBoundary onReset={onReset}><Boom fail /></ErrorBoundary>);
+    renderThemed(<ErrorBoundary onReset={onReset}><Boom fail /></ErrorBoundary>);
     expect(screen.getByText("This view failed to render")).toBeInTheDocument();
     expect(screen.getByText(/reading 'cpu'/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Go to overview" })).toHaveAttribute("href", "/");
@@ -291,7 +295,7 @@ describe("ErrorBoundary", () => {
   });
 
   it("stays out of the way while the view renders", () => {
-    render(<ErrorBoundary><Boom /></ErrorBoundary>);
+    renderThemed(<ErrorBoundary><Boom /></ErrorBoundary>);
     expect(screen.getByText("the view")).toBeInTheDocument();
   });
 });

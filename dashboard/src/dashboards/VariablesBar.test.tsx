@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -6,6 +6,7 @@ import VariablesBar from "./VariablesBar";
 import { normalizeDefinition } from "./model";
 import type { Params } from "./model";
 import type { VariableOptions } from "./runtime";
+import { renderThemed } from "../test/harness";
 
 // The variables a test writes are partial documents, not `Variable`s - reading
 // one field by field is what `normalizeDefinition` is for.
@@ -27,7 +28,7 @@ const draw = (variables: unknown[],
   { params = {}, variablesState = {}, right = null }: DrawOptions = {}) => {
   const onChange = vi.fn();
   const user = userEvent.setup();
-  render(<VariablesBar definition={definition(variables)} params={params}
+  renderThemed(<VariablesBar definition={definition(variables)} params={params}
     variables={variablesState} onChange={onChange} right={right} />);
   return { onChange, user };
 };
@@ -49,9 +50,9 @@ describe("a select variable", () => {
   });
 
   it("marks a required variable that has no value", () => {
-    const { container } = render(<VariablesBar definition={definition(hub)} params={{}}
+    const { container } = renderThemed(<VariablesBar definition={definition(hub)} params={{}}
       variables={{}} onChange={() => {}} />);
-    expect(container.querySelector(".db-var")).toHaveClass("missing");
+    expect(container.querySelector("[data-missing]")).toBeInTheDocument();
     expect(screen.getByTitle("Required")).toBeInTheDocument();
   });
 
@@ -123,7 +124,7 @@ describe("a text or number variable", () => {
   });
 
   it("takes a new value from outside, which is how the back button moves it", () => {
-    const { rerender } = render(<VariablesBar definition={definition(days)} params={{ days: 7 }}
+    const { rerender } = renderThemed(<VariablesBar definition={definition(days)} params={{ days: 7 }}
       variables={{}} onChange={() => {}} />);
     expect(screen.getByRole("spinbutton")).toHaveValue(7);
     rerender(<VariablesBar definition={definition(days)} params={{ days: 30 }}
@@ -139,7 +140,7 @@ describe("a text or number variable", () => {
 
 describe("the bar itself", () => {
   it("is not drawn at all for a dashboard with no variables and nothing to say", () => {
-    const { container } = render(<VariablesBar definition={definition([])} params={{}}
+    const { container } = renderThemed(<VariablesBar definition={definition([])} params={{}}
       variables={{}} onChange={() => {}} />);
     expect(container).toBeEmptyDOMElement();
   });

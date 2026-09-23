@@ -1,9 +1,10 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import { PanelDrawer, VariablesDrawer } from "./editor";
 import { normalizeDefinition, normalizePanel } from "./model";
+import { renderThemed } from "../test/harness";
 
 // The drawer previews a panel through the query runtime, which is the only
 // thing here that is not pure.
@@ -43,7 +44,7 @@ function openPanel(props = {}) {
   const onApply = vi.fn();
   const onClose = vi.fn();
   const user = userEvent.setup();
-  render(<PanelDrawer panel={PANEL} definition={DEFINITION} params={{ hub: "hub-east" }}
+  renderThemed(<PanelDrawer panel={PANEL} definition={DEFINITION} params={{ hub: "hub-east" }}
     errors={[]} onApply={onApply} onClose={onClose} {...props} />);
   return { onApply, onClose, user };
 }
@@ -105,7 +106,7 @@ describe("PanelDrawer", () => {
     expect(screen.getByText("Run the preview to choose what the panel charts.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Run preview" }));
     expect(await screen.findByLabelText("Chart")).toBeInTheDocument();
-    expect(container.querySelectorAll("path.chart-bar")).toHaveLength(3);
+    expect(container.querySelectorAll("rect.MuiBarChart-element")).toHaveLength(3);
   });
 
   it("asks for the variable's value rather than sending a query with a placeholder in it", async () => {
@@ -169,12 +170,11 @@ describe("PanelDrawer", () => {
     expect(onApply).toHaveBeenLastCalledWith(expect.objectContaining({ limit: null }));
   });
 
-  it("does not run a preview for an empty query", async () => {
-    const { user } = openPanel({ panel: normalizePanel({ id: "p", title: "t", sql: "" }) });
+  it("does not run a preview for an empty query", () => {
+    openPanel({ panel: normalizePanel({ id: "p", title: "t", sql: "" }) });
+    // A disabled MUI button takes no pointer events at all, so there is nothing
+    // to click: being disabled IS the behaviour, and nothing ran.
     expect(screen.getByRole("button", { name: "Run preview" })).toBeDisabled();
-    // `pointerEventsCheck` is a `userEvent.setup()` option; passing it to
-    // `click` did nothing, and a disabled button never fires either way.
-    await user.click(screen.getByRole("button", { name: "Run preview" }));
     expect(runQueries).not.toHaveBeenCalled();
   });
 });
@@ -184,7 +184,7 @@ describe("VariablesDrawer", () => {
     const onApply = vi.fn();
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(<VariablesDrawer definition={DEFINITION} errors={[]} onApply={onApply}
+    renderThemed(<VariablesDrawer definition={DEFINITION} errors={[]} onApply={onApply}
       onClose={onClose} {...props} />);
     return { onApply, onClose, user };
   };
@@ -208,7 +208,7 @@ describe("VariablesDrawer", () => {
 
   it("removes a variable", async () => {
     const { onApply, user } = openVariables();
-    await user.click(screen.getByTitle("Remove this variable"));
+    await user.click(screen.getByRole("button", { name: "Remove this variable" }));
     await user.click(screen.getByRole("button", { name: "Apply" }));
     expect(onApply).toHaveBeenCalledWith([]);
   });

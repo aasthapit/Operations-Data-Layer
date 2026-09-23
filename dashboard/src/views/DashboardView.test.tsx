@@ -63,7 +63,7 @@ describe("running a dashboard", () => {
     expect(screen.getByRole("region", { name: "Clusters by status" })).toBeInTheDocument();
     // The panel's frame is drawn from the definition and its chart from the
     // run, so the bars land a tick after the title they sit under.
-    await waitFor(() => expect(container.querySelectorAll("path.chart-bar")).toHaveLength(3));
+    await waitFor(() => expect(container.querySelectorAll("rect.MuiBarChart-element")).toHaveLength(3));
     expect(screen.getByText("ocp-prod-iad-01")).toBeInTheDocument();
   });
 
@@ -107,7 +107,7 @@ describe("running a dashboard", () => {
     answer(api, { runDashboard: runs });
     open();
     await screen.findByRole("region", { name: "Clusters by status" });
-    await user.click(screen.getByRole("button", { name: "↻ Refresh" }));
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(runs.mock.calls.length).toBeGreaterThan(1));
   });
 
@@ -120,7 +120,7 @@ describe("running a dashboard", () => {
   it("goes back to the list", async () => {
     const user = userEvent.setup();
     open();
-    await user.click(await screen.findByText("← All dashboards"));
+    await user.click(await screen.findByRole("button", { name: /All dashboards/ }));
     expect(currentUrl()).toBe("/dashboards");
   });
 
@@ -160,7 +160,8 @@ describe("the fixture dashboard", () => {
     } } });
     open("fixture-hub", "/dashboards/fixture-hub?fixture=1&hub=hub-east");
     expect(await screen.findByText("Hub overview - hub-east")).toBeInTheDocument();
-    expect(screen.getByText("fixture")).toHaveClass("db-tag");
+    // the page says out loud that this is the sample rather than the API's
+    expect(screen.getByText("fixture")).toBeInTheDocument();
     expect(api.runDashboard).not.toHaveBeenCalled();
   });
 });

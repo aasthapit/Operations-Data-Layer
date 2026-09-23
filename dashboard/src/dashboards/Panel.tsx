@@ -7,10 +7,11 @@
 // A panel waiting on a variable is not an error - it is an instruction.
 import { useMemo } from "react";
 import type { CSSProperties } from "react";
+import { Box, Button, Paper, Tooltip, Typography } from "@mui/material";
 import Chart, { inferFields, resolveSpec } from "../Chart";
 import ResultTable from "../ResultTable";
 import type { ResultNav, TableResult } from "../ResultTable";
-import { SkeletonTable } from "../components";
+import { MONO_FONT, Muted, SkeletonTable } from "../components";
 import { Menu } from "./ui";
 import type { MenuItem } from "./ui";
 import {
@@ -80,65 +81,118 @@ export default function Panel({
     editing && onRemove && { label: "Remove", onSelect: onRemove, danger: true },
   ];
 
+  const move = (delta: number, word: string, glyph: string, disabled: boolean) => (
+    <Button
+      variant="outlined"
+      color="inherit"
+      disabled={disabled}
+      title={`Move ${word}`}
+      aria-label={`Move ${title} ${word}`}
+      onClick={() => onMove?.(delta)}
+      sx={{ minWidth: 0, px: 0.75, py: 0.125, fontSize: 11, lineHeight: 1.4 }}
+    >
+      {glyph}
+    </Button>
+  );
+
   return (
-    <section
+    <Paper
+      component="section"
       // `busy` is a panel the agent is in the middle of rewriting: the rows on
       // screen are the old answer, so the panel says so rather than pretending
       // they are the new one.
-      className={`db-panel card${spec ? " is-chart" : ""}${busy ? " is-busy" : ""}`}
+      data-body={spec ? "chart" : "table"}
       // the grid reads the panel's size off two custom properties, which is
       // not something React's CSSProperties knows how to spell
       style={{ "--w": panel.w, "--h": panel.h } as CSSProperties}
       aria-label={title}
       aria-busy={busy || undefined}
+      sx={{
+        gridColumn: "span var(--w, 6)",
+        gridRow: "span var(--h, 2)",
+        display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0,
+        p: 0, overflow: "hidden",
+        ...(busy ? { opacity: 0.5, transition: "opacity 120ms ease-out" } : {}),
+      }}
     >
-      <header className="db-panel-head">
-        <h4 className="db-panel-title" title={title}>
-          {title}
-          {panel.description && (
-            <span className="db-info" title={panel.description} aria-label={panel.description}>i</span>
-          )}
-        </h4>
-        <div className="db-panel-tools">
+      <Box
+        component="header"
+        sx={{
+          display: "flex", alignItems: "center", gap: 1,
+          p: "9px 8px 9px 14px", borderBottom: 1, borderColor: "border.soft", flex: "none",
+        }}
+      >
+        <Tooltip title={title}>
+          <Typography
+            variant="h5"
+            component="h4"
+            sx={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
+            {title}
+            {panel.description && (
+              <Tooltip title={panel.description}>
+                <Box
+                  component="span"
+                  aria-label={panel.description}
+                  sx={{
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    width: 14, height: 14, ml: 0.75, borderRadius: "50%",
+                    border: 1, borderColor: "divider", color: "text.disabled",
+                    fontSize: 9.5, fontWeight: 700, fontStyle: "italic", cursor: "help",
+                  }}
+                >
+                  i
+                </Box>
+              </Tooltip>
+            )}
+          </Typography>
+        </Tooltip>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flex: "none" }}>
           {ran?.row_count != null && (
-            <span className="db-panel-meta">
+            <Muted sx={{ fontSize: 11.5, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
               {ran.row_count.toLocaleString()} {ran.row_count === 1 ? "row" : "rows"}
               {ran.elapsed_ms != null ? ` · ${ran.elapsed_ms} ms` : ""}
               {ran.truncated ? " · truncated" : ""}
-            </span>
+            </Muted>
           )}
           {editing && onMove && (
-            <span className="db-move">
-              <button type="button" className="q-mini" disabled={first}
-                title="Move up" aria-label={`Move ${title} up`}
-                onClick={() => onMove(-1)}>↑</button>
-              <button type="button" className="q-mini" disabled={last}
-                title="Move down" aria-label={`Move ${title} down`}
-                onClick={() => onMove(1)}>↓</button>
-            </span>
+            <Box sx={{ display: "flex", gap: 0.25 }}>
+              {move(-1, "up", "↑", !!first)}
+              {move(1, "down", "↓", !!last)}
+            </Box>
           )}
           <Menu items={items} title={`Menu for ${title}`} />
-        </div>
-      </header>
+        </Box>
+      </Box>
 
-      <div className="db-panel-body">
+      <Box sx={{
+        flex: 1, minHeight: 0, overflow: spec ? "hidden" : "auto",
+        p: spec ? "10px 14px 6px" : "8px 4px 4px",
+      }}>
         {unset ? (
-          <div className="db-panel-msg">
+          <PanelMessage>
             {/* an unset variable the dashboard does not declare is still named
                 in the panel's own words, so the fallback is the bare name */}
             Choose {article(variableLabel(variableByName(definition, unset)
               || { name: unset, label: "" }))}{" "}
             {variableLabel(variableByName(definition, unset)
               || { name: unset, label: "" }).toLowerCase()} above.
-          </div>
+          </PanelMessage>
         ) : error ? (
-          <div className="db-panel-error">
+          <Box sx={{ p: "12px 14px", color: "error.main", fontSize: 12.5 }}>
             <div>{error}</div>
-            {result?.sql && <pre className="q-sql mono">{substituteSql(result.sql, params)}</pre>}
-          </div>
+            {result?.sql && (
+              <Box component="pre" sx={{
+                mt: 1, maxHeight: 140, overflow: "auto", color: "text.secondary",
+                fontFamily: MONO_FONT, fontSize: 12.5, whiteSpace: "pre-wrap", m: 0,
+              }}>
+                {substituteSql(result.sql, params)}
+              </Box>
+            )}
+          </Box>
         ) : !result ? (
           loading ? <SkeletonTable columns={4} rows={Math.max(3, panel.h * 2)} dense />
-            : <div className="db-panel-msg">Nothing ran for this panel.</div>
+            : <PanelMessage>Nothing ran for this panel.</PanelMessage>
         ) : spec ? (
           <Chart fields={fields} rows={result.rows} spec={spec}
             height={panelChartHeight(panel.h)} tableBelow={false} />
@@ -156,7 +210,20 @@ export default function Panel({
             searchPlaceholder="Search"
           />
         )}
-      </div>
-    </section>
+      </Box>
+    </Paper>
+  );
+}
+
+/** A panel with nothing in it yet says why, in the middle of where the answer
+ * will be. */
+function PanelMessage({ children }: { children?: React.ReactNode }) {
+  return (
+    <Box sx={{
+      display: "flex", alignItems: "center", justifyContent: "center", height: "100%",
+      color: "text.secondary", fontSize: 13, p: 2, textAlign: "center",
+    }}>
+      {children}
+    </Box>
   );
 }

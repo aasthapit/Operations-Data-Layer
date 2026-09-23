@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Versions from "./Versions";
@@ -6,7 +6,11 @@ import * as cache from "../cache";
 import { answer, fails } from "../test/apiMock";
 import type { ApiMock } from "../test/apiMock";
 import { OPERATOR_VERSIONS, VERSIONS } from "../test/fixtures/fleet";
-import { closestElement, parentOf } from "../test/harness";
+import { closestElement, parentOf, renderThemed } from "../test/harness";
+
+/** A data row of a table. The grid draws divs, so a row is what carries the
+ * role rather than a `<tr>`. */
+const GRID_ROW = '[role="row"]';
 
 vi.mock("../api", async () => {
   const { createApiMock } = await import("../test/apiMock");
@@ -26,7 +30,7 @@ function open() {
   const onOpen = vi.fn();
   const onBlast = vi.fn();
   const user = userEvent.setup();
-  render(<Versions onOpen={onOpen} onBlast={onBlast} />);
+  renderThemed(<Versions onOpen={onOpen} onBlast={onBlast} />);
   return { onOpen, onBlast, user };
 }
 
@@ -55,7 +59,7 @@ describe("the OCP version distribution", () => {
   it("stands the distribution in while it is on the wire", () => {
     answer(api, { versions: () => new Promise(() => {}) });
     const { container } = { container: document.body, ...open() };
-    expect(container.querySelector(".skeleton-lines")).toBeInTheDocument();
+    expect(container.querySelector("[data-placeholder]")).toBeInTheDocument();
   });
 
   it("shows nothing but the error when versions cannot be read", async () => {
@@ -76,7 +80,7 @@ describe("the operator version spread", () => {
 
   it("names every version in the fleet and how many carry it", async () => {
     open();
-    const row = closestElement(await screen.findByText("ingress"), "tr");
+    const row = closestElement(await screen.findByText("ingress"), GRID_ROW);
     expect(within(row).getByText("4.16.7 (4), 4.15.22 (1)")).toBeInTheDocument();
   });
 

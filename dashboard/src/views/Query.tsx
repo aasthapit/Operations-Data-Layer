@@ -6,12 +6,21 @@
 // the query that produced it are always on screen together.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import {
+  Alert, Box, Button, Checkbox, Chip, FormControlLabel, IconButton, Link, Paper, Stack,
+  TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
+} from "@mui/material";
+import CloseIcon from "@mui/icons-material/Close";
 import { api } from "../api";
 import type { ApiError } from "../api";
-import type { AskResponse, QueryResult, QuerySchemaResponse, SnapshotInfo } from "../api/types";
+import type { AskResponse, QueryResult, SnapshotInfo } from "../api/types";
 import { useFetch } from "../hooks";
 import type { Nav, RouteApi } from "../router";
-import { ErrorBanner, SkeletonLines, SkeletonTable, fmtTime } from "../components";
+import {
+  Card, Empty, MONO_FONT, Mono, Muted, SectionHead, Tag,
+  ErrorBanner, SkeletonLines, SkeletonTable, fmtTime,
+} from "../components";
+import { TOPBAR_HEIGHT } from "../theme";
 import Chart, { inferFields, resolveSpec } from "../Chart";
 import ChartControls, { chartNoneText } from "../ChartControls";
 import ResultTable from "../ResultTable";
@@ -26,6 +35,7 @@ import type {
   Aggregate, AggregateFn, BuilderColumn, BuilderState, Filter, FilterOp, Group, QuerySchema,
   SavedQuery, Sort,
 } from "../query/builder";
+import { download } from "../files";
 
 /** The chart's own vocabulary lives with the chart, so the builder state's own
  * field is what names it here. */
@@ -68,22 +78,6 @@ function readState(q: string | undefined): BuilderState | null {
     return hash.startsWith(HASH_PREFIX) ? decodeState(hash.slice(HASH_PREFIX.length)) : null;
   } catch {
     return null;
-  }
-}
-
-function download(filename: string, text: string, mime: string): boolean {
-  try {
-    const url = URL.createObjectURL(new Blob([text], { type: mime }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -386,20 +380,13 @@ export default function Query({ nav, route }: QueryProps) {
   const table = tableOf(schema, state.table);
 
   return (
-    <div className="grid" style={{ gap: 16 }}>
-      <div className="section-head">
-        <div>
-          <div className="section-title" style={{ margin: 0 }}>Query</div>
-          <div className="desc">
-            Every table the collector fills, queried directly. The builder writes the SQL, the
-            SQL is what runs, and both stay on screen.
-          </div>
-        </div>
-        <div className="muted" style={{ fontSize: 12.5, textAlign: "right" }}>
+    <Stack spacing={2}>
+      <SectionHead title="Query" description={PAGE_DESCRIPTION}>
+        <Muted sx={{ fontSize: 12.5, textAlign: "right" }}>
           snapshot {snap.generation ?? "?"} · built {fmtTime(snap.built_at)}<br />
           {(snap.total_rows ?? 0).toLocaleString()} rows · max {maxRows} per query
-        </div>
-      </div>
+        </Muted>
+      </SectionHead>
 
       <AskBox
         state={askState}
@@ -410,60 +397,64 @@ export default function Query({ nav, route }: QueryProps) {
         onBuild={() => route.navigate("/generate", { q: askState.question.trim() })}
       />
 
-      <div className="q-layout">
-        <div className="card q-rail">
+      <Layout>
+        <Rail>
           <Section title="Data set">
-            <select
-              className="q-full"
+            <Picker
+              label="Data set"
+              hideLabel
               value={state.table}
-              onChange={(e) => setTable(e.target.value)}
-              aria-label="Data set"
+              onChange={setTable}
+              sx={{ width: "100%" }}
             >
               {(schema.tables || []).map((t) => (
                 <option key={t.name} value={t.name}>
                   {t.name} ({(snap.rows || {})[t.name] ?? 0})
                 </option>
               ))}
-            </select>
-            {table && <div className="q-desc">{table.description}</div>}
-            <label
-              className={`q-check${canJoinClusters(schema, state.table) ? "" : " q-off"}`}
-              title={canJoinClusters(schema, state.table)
-                ? "LEFT JOIN clusters ON clusters.name = cluster_name"
-                : "Only for tables with a cluster_name column"}
+            </Picker>
+            {table && <Hint>{table.description}</Hint>}
+            {/* The tooltip names whatever it is put on, and naming a <label>
+                renames the control the label is for - hence the wrapper. */}
+            <Tooltip title={canJoinClusters(schema, state.table)
+              ? "LEFT JOIN clusters ON clusters.name = cluster_name"
+              : "Only for tables with a cluster_name column"}
             >
-              <input
-                type="checkbox"
-                checked={clusterContextOn(schema, state)}
-                disabled={!canJoinClusters(schema, state.table)}
-                onChange={(e) => toggleClusterContext(e.target.checked)}
-              />
-              <span>Cluster context</span>
-              <span className="q-type">join</span>
-            </label>
+              <Box component="span" sx={{ display: "block" }}>
+                <FormControlLabel
+                  disabled={!canJoinClusters(schema, state.table)}
+                  control={(
+                    <Checkbox
+                      checked={clusterContextOn(schema, state)}
+                      onChange={(e) => toggleClusterContext(e.target.checked)}
+                    />
+                  )}
+                  label={<>Cluster context <Muted sx={{ fontSize: 10.5 }}>join</Muted></>}
+                />
+              </Box>
+            </Tooltip>
           </Section>
 
           <Section
             title={state.group.enabled ? "Aggregates" : "Columns"}
             right={state.group.enabled ? null : (
               <>
-                <span className="muted">{state.columns.length}/{columns.length}</span>
-                <button type="button" className="q-mini"
-                  onClick={() => patch({ columns: columns.map((c) => c.id) })}>all</button>
-                <button type="button" className="q-mini"
-                  onClick={() => patch({ columns: [] })}>none</button>
+                <Muted>{state.columns.length}/{columns.length}</Muted>
+                <Mini onClick={() => patch({ columns: columns.map((c) => c.id) })}>all</Mini>
+                <Mini onClick={() => patch({ columns: [] })}>none</Mini>
               </>
             )}
           >
-            <label className="q-check">
-              <input
-                type="checkbox"
-                checked={state.group.enabled}
-                onChange={(e) => setState((s) => (s ? keepValidSorts(schema,
-                  { ...s, group: startGrouping(s, e.target.checked) }) : s))}
-              />
-              <span>Group rows</span>
-            </label>
+            <FormControlLabel
+              control={(
+                <Checkbox
+                  checked={state.group.enabled}
+                  onChange={(e) => setState((s) => (s ? keepValidSorts(schema,
+                    { ...s, group: startGrouping(s, e.target.checked) }) : s))}
+                />
+              )}
+              label="Group rows"
+            />
 
             {state.group.enabled ? (
               <Grouping group={state.group} columns={columns} patch={patch}
@@ -476,14 +467,14 @@ export default function Query({ nav, route }: QueryProps) {
           <Section
             title="Filters"
             right={state.filters.length > 1 ? (
-              <div className="toggle-group q-tiny">
-                {(["AND", "OR"] as const).map((j) => (
-                  <button key={j} type="button" className={state.filterJoin === j ? "active" : ""}
-                    onClick={() => patch({ filterJoin: j })}>
-                    {j === "AND" ? "all of" : "any of"}
-                  </button>
-                ))}
-              </div>
+              <ToggleButtonGroup
+                value={state.filterJoin}
+                onChange={(_, j: "AND" | "OR" | null) => { if (j) patch({ filterJoin: j }); }}
+                sx={{ "& .MuiToggleButton-root": { py: 0.25, px: 1, fontSize: 11.5 } }}
+              >
+                <ToggleButton value="AND">all of</ToggleButton>
+                <ToggleButton value="OR">any of</ToggleButton>
+              </ToggleButtonGroup>
             ) : null}
           >
             {state.filters.map((f, i) => (
@@ -497,194 +488,194 @@ export default function Query({ nav, route }: QueryProps) {
                 onRemove={() => patch({ filters: state.filters.filter((_, j) => j !== i) })}
               />
             ))}
-            <button
-              type="button"
-              className="q-add"
+            <AddButton
               disabled={!columns.length}
               onClick={() => patch({
                 filters: [...state.filters,
                   { id: newId(), column: columns[0]?.id || "", op: "eq", value: "", value2: "" }],
               })}
             >
-              + filter
-            </button>
+              filter
+            </AddButton>
           </Section>
 
           <Section title="Sort">
             {state.sorts.map((s, i) => (
-              <div className="q-row" key={`${s.column}-${i}`}>
-                <select
-                  className="q-grow"
+              <Row key={`${s.column}-${i}`}>
+                <Picker
+                  label="Sort column"
                   value={s.column}
-                  aria-label="Sort column"
-                  onChange={(e) => patch({
-                    sorts: state.sorts.map((x, j) => (j === i ? { ...x, column: e.target.value } : x)),
+                  grow
+                  onChange={(v) => patch({
+                    sorts: state.sorts.map((x, j) => (j === i ? { ...x, column: v } : x)),
                   })}
                 >
                   <ColumnOptions columns={sortCols} />
-                </select>
-                <select
+                </Picker>
+                <Picker
+                  label="Sort direction"
+                  sx={{ minWidth: 118 }}
                   value={s.dir}
-                  aria-label="Sort direction"
-                  onChange={(e) => patch({
-                    // The only two options the control offers are the two
-                    // directions a sort has.
-                    sorts: state.sorts.map((x, j) =>
-                      (j === i ? { ...x, dir: e.target.value as Sort["dir"] } : x)),
+                  // The only two options the control offers are the two
+                  // directions a sort has.
+                  onChange={(v) => patch({
+                    sorts: state.sorts.map((x, j) => (j === i ? { ...x, dir: v as Sort["dir"] } : x)),
                   })}
                 >
                   <option value="asc">asc</option>
                   <option value="desc">desc</option>
-                </select>
-                <button type="button" className="q-x" title="Remove"
-                  onClick={() => patch({ sorts: state.sorts.filter((_, j) => j !== i) })}>×</button>
-              </div>
+                </Picker>
+                <RemoveButton
+                  label="Remove sort"
+                  onClick={() => patch({ sorts: state.sorts.filter((_, j) => j !== i) })}
+                />
+              </Row>
             ))}
-            <button
-              type="button"
-              className="q-add"
+            <AddButton
               disabled={!sortCols.length}
               onClick={() => patch({
                 sorts: [...state.sorts, { column: sortCols[0]?.id || "", dir: "asc" }],
               })}
             >
-              + sort
-            </button>
+              sort
+            </AddButton>
           </Section>
 
           <Section title="Options">
-            <label className="q-check">
-              <input type="checkbox" checked={state.distinct}
-                onChange={(e) => setState((s) => (s ? keepValidSorts(schema,
-                  { ...s, distinct: e.target.checked }) : s))} />
-              <span>Distinct rows</span>
-            </label>
-            <div className="q-row">
-              <label className="fld q-grow">
-                Row limit (max {maxRows})
-                <input
-                  type="number"
-                  min="1"
-                  max={maxRows}
-                  value={state.limit}
-                  onChange={(e) => patch({ limit: e.target.value })}
-                  onBlur={(e) => patch({ limit: clampLimit(e.target.value, schema) })}
+            <FormControlLabel
+              control={(
+                <Checkbox
+                  checked={state.distinct}
+                  onChange={(e) => setState((s) => (s ? keepValidSorts(schema,
+                    { ...s, distinct: e.target.checked }) : s))}
                 />
-              </label>
-            </div>
+              )}
+              label="Distinct rows"
+            />
+            <Row>
+              <TextField
+                type="number"
+                label={`Row limit (max ${maxRows})`}
+                value={state.limit}
+                onChange={(e) => patch({ limit: e.target.value })}
+                onBlur={(e) => patch({ limit: clampLimit(e.target.value, schema) })}
+                slotProps={{ htmlInput: { min: 1, max: maxRows }, inputLabel: { shrink: true } }}
+                sx={{ flex: 1 }}
+              />
+            </Row>
           </Section>
 
           <Section title="Saved queries">
             {saved.length > 0 ? (
-              <div className="q-row">
-                <select className="q-grow" value="" aria-label="Load a saved query"
-                  onChange={(e) => e.target.value && loadQuery(e.target.value)}>
+              <Row>
+                <Picker label="Load a saved query" value="" grow
+                  onChange={(v) => v && loadQuery(v)}>
                   <option value="">load…</option>
                   {saved.map((q) => <option key={q.name} value={q.name}>{q.name}</option>)}
-                </select>
-                <select className="q-grow" value="" aria-label="Delete a saved query"
-                  onChange={(e) => e.target.value && deleteQuery(e.target.value)}>
+                </Picker>
+                <Picker label="Delete a saved query" value="" grow
+                  onChange={(v) => v && deleteQuery(v)}>
                   <option value="">delete…</option>
                   {saved.map((q) => <option key={q.name} value={q.name}>{q.name}</option>)}
-                </select>
-              </div>
+                </Picker>
+              </Row>
             ) : (
-              <div className="q-desc">Nothing saved yet. Saved queries live in this browser.</div>
+              <Hint>Nothing saved yet. Saved queries live in this browser.</Hint>
             )}
-            <div className="q-row">
-              <input
-                className="q-grow"
-                type="text"
+            <Row>
+              <TextField
                 placeholder="name this query"
+                aria-label="Name this query"
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") saveQuery(); }}
+                sx={{ flex: 1, minWidth: 0 }}
               />
-              <button type="button" className="btn" disabled={!saveName.trim()}
-                onClick={saveQuery}>Save</button>
-            </div>
-            {note && <div className="q-desc">{note}</div>}
+              <Button variant="outlined" color="inherit" disabled={!saveName.trim()}
+                onClick={saveQuery}>Save</Button>
+            </Row>
+            {note && <Hint>{note}</Hint>}
           </Section>
-        </div>
+        </Rail>
 
-        <div className="q-main">
-          <div className="card">
-            <div className="section-head" style={{ marginBottom: 10 }}>
-              <h3 style={{ margin: 0 }}>
-                SQL {custom && <span className="tag">custom SQL</span>}
-              </h3>
-              <div className="q-actions">
-                <button type="button" className="btn"
+        <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 2, minWidth: 0 }}>
+          <Card
+            title={<>SQL {custom && <Tag>custom SQL</Tag>}</>}
+            action={(
+              <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap" }}>
+                <Button variant="outlined" color="inherit"
                   onClick={async () => flash(await copyText(sqlText) ? "SQL copied" : "Copy failed")}>
                   Copy
-                </button>
+                </Button>
                 {custom ? (
-                  <button type="button" className="btn"
+                  <Button variant="outlined" color="inherit"
                     onClick={() => patch({ mode: "builder", sql: "" })}>
                     Back to builder
-                  </button>
+                  </Button>
                 ) : (
-                  <button type="button" className="btn"
+                  <Button variant="outlined" color="inherit"
                     onClick={() => patch({ mode: "sql", sql: built.sql })}>
                     Edit SQL
-                  </button>
+                  </Button>
                 )}
-                <button type="button" className="btn primary" disabled={running || !sqlText.trim()}
-                  onClick={runCurrent} title="Run the query (Ctrl / Cmd + Enter)">
-                  {running ? "Running…" : "Run"}
-                </button>
-              </div>
-            </div>
-
+                <Tooltip title="Run the query (Ctrl / Cmd + Enter)">
+                  <span>
+                    <Button variant="contained" disabled={running || !sqlText.trim()} onClick={runCurrent}>
+                      {running ? "Running…" : "Run"}
+                    </Button>
+                  </span>
+                </Tooltip>
+              </Stack>
+            )}
+          >
             {custom ? (
-              <textarea
-                className="q-sql q-sql-edit mono"
-                spellCheck="false"
+              <TextField
+                multiline
+                fullWidth
                 value={state.sql}
                 onChange={(e) => patch({ sql: e.target.value })}
-                rows={Math.min(20, Math.max(6, state.sql.split("\n").length + 1))}
-                aria-label="SQL"
+                minRows={Math.min(20, Math.max(6, state.sql.split("\n").length + 1))}
+                slotProps={{ htmlInput: { spellCheck: false, "aria-label": "SQL" } }}
+                sx={{ "& .MuiInputBase-root": { fontFamily: MONO_FONT, fontSize: 12.5, lineHeight: 1.55 } }}
               />
             ) : (
-              <pre className="q-sql mono">{built.sql || "-- nothing to run yet"}</pre>
+              <Sql>{built.sql || "-- nothing to run yet"}</Sql>
             )}
 
             {!custom && built.problems.length > 0 && (
-              <ul className="q-problems">
+              <Box component="ul" sx={{ m: "10px 0 0", pl: 2.25, color: "warning.main", fontSize: 12.5 }}>
                 {built.problems.map((p, i) => <li key={i}>{p}</li>)}
-              </ul>
+              </Box>
             )}
             {custom && (
-              <div className="q-desc">
-                The builder no longer writes this query. "Back to builder" regenerates it.
-              </div>
+              <Hint>The builder no longer writes this query. &quot;Back to builder&quot; regenerates it.</Hint>
             )}
 
             {runError && (
-              <div className="banner" style={{ marginTop: 12, marginBottom: 0 }}>
+              <Alert severity="error" sx={{ mt: 1.5, mb: 0 }}>
                 {runError.status === 400 ? "Rejected: " : runError.status === 504 ? "Timed out: " : ""}
                 {String(runError.message || runError)}
-              </div>
+              </Alert>
             )}
 
             {result && !runError && (
-              <div className="q-meta">
+              <Muted sx={{ display: "block", mt: 1.5, fontSize: 12.5 }}>
                 {result.row_count.toLocaleString()} rows · {result.elapsed_ms} ms ·
                 {" "}snapshot generation {result.generation}
                 {result.truncated && (
-                  <span className="tag critical" style={{ marginLeft: 8 }}>
-                    truncated at {result.row_count}
-                  </span>
+                  <Tag tone="critical" sx={{ ml: 1 }}>truncated at {result.row_count}</Tag>
                 )}
                 {result.sql && squash(result.sql) !== squash(ranSql) && (
-                  <details className="q-ran">
+                  <Box component="details" sx={{
+                    mt: 1, "& summary": { cursor: "pointer", color: "text.secondary" },
+                  }}>
                     <summary>SQL that ran</summary>
-                    <pre className="q-sql mono">{result.sql}</pre>
-                  </details>
+                    <Sql sx={{ mt: 1 }}>{result.sql}</Sql>
+                  </Box>
                 )}
-              </div>
+              </Muted>
             )}
-          </div>
+          </Card>
 
           <Results
             result={result}
@@ -699,9 +690,9 @@ export default function Query({ nav, route }: QueryProps) {
             panelTitle={askState.answer ? askState.question : state.table}
             onAdded={(dashboardId) => nav.goDashboard(dashboardId)}
           />
-        </div>
-      </div>
-    </div>
+        </Box>
+      </Layout>
+    </Stack>
   );
 }
 
@@ -710,24 +701,56 @@ export default function Query({ nav, route }: QueryProps) {
 // --------------------------------------------------------------------------- //
 function QuerySkeleton() {
   return (
-    <div className="grid" style={{ gap: 16 }}>
-      <div className="section-head">
-        <div>
-          <div className="section-title" style={{ margin: 0 }}>Query</div>
-          <div className="desc">
-            Every table the collector fills, queried directly. The builder writes the SQL, the
-            SQL is what runs, and both stay on screen.
-          </div>
-        </div>
-      </div>
-      <div className="q-layout">
-        <div className="card q-rail"><div className="q-sec"><SkeletonLines rows={9} /></div></div>
-        <div className="q-main">
-          <div className="card"><SkeletonLines rows={5} /></div>
-          <div className="card flush"><SkeletonTable columns={6} rows={6} /></div>
-        </div>
-      </div>
-    </div>
+    <Stack spacing={2}>
+      <SectionHead title="Query" description={PAGE_DESCRIPTION} />
+      <Layout>
+        <Rail><Section title="Data set"><SkeletonLines rows={9} /></Section></Rail>
+        <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 2, minWidth: 0 }}>
+          <Card><SkeletonLines rows={5} /></Card>
+          <Card flush><SkeletonTable columns={6} rows={6} /></Card>
+        </Box>
+      </Layout>
+    </Stack>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// the page's own furniture
+// --------------------------------------------------------------------------- //
+const PAGE_DESCRIPTION = "Every table the collector fills, queried directly. The builder writes the"
+  + " SQL, the SQL is what runs, and both stay on screen.";
+
+/** A left rail of controls that stays put, and the SQL plus the rows it
+ * produced filling the rest of the width. Below the breakpoint the rail becomes
+ * the first thing on the page and the result follows it. */
+function Layout({ children }: { children?: ReactNode }) {
+  return (
+    <Box sx={{
+      display: "grid", gap: 2, alignItems: "start",
+      // the second column must be capped, or a wide result table sizes it to
+      // its own max-content and the page scrolls sideways
+      gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "340px minmax(0, 1fr)" },
+    }}>
+      {children}
+    </Box>
+  );
+}
+
+function Rail({ children }: { children?: ReactNode }) {
+  return (
+    <Paper
+      component="section"
+      aria-label="Query builder"
+      sx={{
+        p: 0,
+        position: { xs: "static", lg: "sticky" },
+        top: { lg: `${TOPBAR_HEIGHT + 24}px` },
+        maxHeight: { xs: "none", lg: `calc(100vh - ${TOPBAR_HEIGHT + 48}px)` },
+        overflow: "auto",
+      }}
+    >
+      {children}
+    </Paper>
   );
 }
 
@@ -739,13 +762,132 @@ interface SectionProps {
 
 function Section({ title, right, children }: SectionProps) {
   return (
-    <div className="q-sec">
-      <div className="q-head">
-        <span className="q-title">{title}</span>
-        {right && <span className="q-actions">{right}</span>}
-      </div>
+    <Box sx={{ p: "12px 14px", borderBottom: 1, borderColor: "border.soft", "&:last-child": { borderBottom: 0 } }}>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, mb: 1 }}>
+        <Typography variant="subtitle2" color="text.secondary">{title}</Typography>
+        {right && (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flex: "none" }}>{right}</Box>
+        )}
+      </Box>
       {children}
-    </div>
+    </Box>
+  );
+}
+
+/** A line of guidance under a control. */
+function Hint({ children }: { children?: ReactNode }) {
+  return <Muted sx={{ display: "block", fontSize: 11.5, mt: 0.75 }}>{children}</Muted>;
+}
+
+/** One line of controls inside a section. */
+function Row({ children }: { children?: ReactNode }) {
+  return (
+    <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.75, mb: 0.75 }}>
+      {children}
+    </Box>
+  );
+}
+
+/** A word-sized button beside a section's title. */
+function Mini({ children, onClick }: { children?: ReactNode; onClick: () => void }) {
+  return (
+    <Button
+      variant="outlined"
+      color="inherit"
+      onClick={onClick}
+      sx={{ minWidth: 0, px: 0.875, py: 0.125, fontSize: 11, lineHeight: 1.5 }}
+    >
+      {children}
+    </Button>
+  );
+}
+
+/** The dashed "+ filter" / "+ sort" button that ends a section. */
+function AddButton({ children, disabled, onClick }: {
+  children?: ReactNode; disabled?: boolean; onClick: () => void;
+}) {
+  return (
+    <Button
+      fullWidth
+      disabled={disabled}
+      onClick={onClick}
+      sx={{
+        mt: 0.5, color: "text.secondary", fontSize: 11.5,
+        border: 1, borderStyle: "dashed", borderColor: "divider",
+        "&:hover": { borderStyle: "dashed", borderColor: "primary.main", color: "text.primary" },
+      }}
+    >
+      + {children}
+    </Button>
+  );
+}
+
+/** The × that takes one row out of a list. Its name says what it removes, so
+ * three of them on one page are three different buttons. */
+function RemoveButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <Tooltip title={label}>
+      <IconButton
+        aria-label={label}
+        onClick={onClick}
+        sx={{ flex: "none", border: 1, borderColor: "divider", borderRadius: "6px", p: 0.25 }}
+      >
+        <CloseIcon sx={{ fontSize: 14 }} />
+      </IconButton>
+    </Tooltip>
+  );
+}
+
+/** A block of SQL, as text rather than as a control. */
+function Sql({ children, sx }: { children?: ReactNode; sx?: object }) {
+  return (
+    <Box
+      component="pre"
+      data-sql=""
+      sx={{
+        m: 0, p: "12px 14px", bgcolor: "background.default",
+        border: 1, borderColor: "border.soft", borderRadius: "8px",
+        fontFamily: MONO_FONT, fontSize: 12.5, lineHeight: 1.55,
+        whiteSpace: "pre-wrap", wordBreak: "break-word", overflowX: "auto",
+        ...sx,
+      }}
+    >
+      {children}
+    </Box>
+  );
+}
+
+interface PickerProps {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children?: ReactNode;
+  /** True when the control should take the width the row has left. */
+  grow?: boolean;
+  /** True when the section it sits in is already called this, so showing the
+   * label again would say the same word twice. The control keeps the name. */
+  hideLabel?: boolean;
+  sx?: object;
+}
+
+/** A native dropdown, named by its own label. The builder's lists are short and
+ * there are a dozen of them on one rail, so a native select is what stays
+ * legible and quick to operate. */
+function Picker({ label, value, onChange, children, grow, hideLabel, sx }: PickerProps) {
+  return (
+    <TextField
+      select
+      label={hideLabel ? undefined : label}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      slotProps={{
+        select: { native: true, ...(hideLabel ? { "aria-label": label } : {}) },
+        inputLabel: { shrink: true },
+      }}
+      sx={{ minWidth: 0, ...(grow ? { flex: "1 1 110px" } : {}), ...sx }}
+    >
+      {children}
+    </TextField>
   );
 }
 
@@ -777,18 +919,41 @@ function ColumnPicker({ columns, selected, onToggle }: ColumnPickerProps) {
   const base = columns.filter((c) => c.source === "base");
   const ctx = columns.filter((c) => c.source === "cluster");
   const check = (c: BuilderColumn) => (
-    <label className="q-check" key={c.id} title={c.description}>
-      <input type="checkbox" checked={chosen.has(c.id)} onChange={() => onToggle(c.id)} />
-      <span className="mono q-name">{c.label}</span>
-      <span className="q-type">{c.type}</span>
-    </label>
+    <Tooltip title={c.description || ""} key={c.id}>
+      <Box component="span" sx={{ display: "block" }}>
+      <FormControlLabel
+        control={<Checkbox checked={chosen.has(c.id)} onChange={() => onToggle(c.id)} />}
+        label={(
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.875, minWidth: 0 }}>
+            <Mono sx={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {c.label}
+            </Mono>
+            <Muted sx={{ fontSize: 10.5, flex: "none" }}>{c.type}</Muted>
+          </Box>
+        )}
+        sx={{ display: "flex", mr: 0, "& .MuiFormControlLabel-label": { flex: 1, minWidth: 0 } }}
+      />
+      </Box>
+    </Tooltip>
   );
   return (
-    <div className="q-list">
+    <Box sx={{ maxHeight: 260, overflow: "auto", mx: -0.5, px: 0.5 }}>
       {base.map(check)}
-      {ctx.length > 0 && <div className="q-subhead">Cluster context</div>}
+      {ctx.length > 0 && <Subhead>Cluster context</Subhead>}
       {ctx.map(check)}
-    </div>
+    </Box>
+  );
+}
+
+/** A caption inside a section, over a group of controls. */
+function Subhead({ children }: { children?: ReactNode }) {
+  return (
+    <Muted sx={{
+      display: "block", fontSize: 10.5, textTransform: "uppercase",
+      letterSpacing: "0.05em", m: "10px 0 4px",
+    }}>
+      {children}
+    </Muted>
   );
 }
 
@@ -804,64 +969,62 @@ function Grouping({ group, columns, patch, onAggChange }: GroupingProps) {
 
   return (
     <>
-      <div className="q-subhead">Group by</div>
+      <Subhead>Group by</Subhead>
       {group.by.map((id, i) => (
-        <div className="q-row" key={`${id}-${i}`}>
-          <select className="q-grow" value={id} aria-label="Group by column"
-            onChange={(e) => setGroup({ by: group.by.map((x, j) => (j === i ? e.target.value : x)) })}>
+        <Row key={`${id}-${i}`}>
+          <Picker label="Group by column" value={id} grow
+            onChange={(v) => setGroup({ by: group.by.map((x, j) => (j === i ? v : x)) })}>
             <ColumnOptions columns={columns} />
-          </select>
-          <button type="button" className="q-x" title="Remove"
-            onClick={() => setGroup({ by: group.by.filter((_, j) => j !== i) })}>×</button>
-        </div>
+          </Picker>
+          <RemoveButton label="Remove group" onClick={() => setGroup({ by: group.by.filter((_, j) => j !== i) })} />
+        </Row>
       ))}
-      <button type="button" className="q-add" disabled={!columns.length}
+      <AddButton disabled={!columns.length}
         onClick={() => setGroup({ by: [...group.by, columns[0]?.id || ""] })}>
-        + group by
-      </button>
+        group by
+      </AddButton>
 
-      <div className="q-subhead">Aggregates</div>
+      <Subhead>Aggregates</Subhead>
       {group.aggs.map((agg, i) => {
         const usable = aggNumericOnly(agg.fn) ? columns.filter((c) => c.kind === "number") : columns;
         const update = (fields: Partial<Aggregate>) => onAggChange(i, fields);
         return (
-          <div className="q-agg" key={agg.id}>
-            <div className="q-row">
-              <select className="q-grow" value={agg.fn} aria-label="Aggregate function"
-                onChange={(e) => {
+          <Box key={agg.id} sx={{ borderLeft: 2, borderColor: "divider", pl: 1, mb: 1.25 }}>
+            <Row>
+              <Picker label="Aggregate function" value={agg.fn} grow
+                onChange={(v) => {
                   // The options are AGGREGATES' own ids.
-                  const fn = e.target.value as AggregateFn;
+                  const fn = v as AggregateFn;
                   const column = aggNeedsColumn(fn)
                     ? (usable.some((c) => c.id === agg.column) ? agg.column : "")
                     : "";
                   update({ fn, column, alias: "" });
                 }}>
                 {AGGREGATES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-              </select>
+              </Picker>
               {aggNeedsColumn(agg.fn) && (
-                <select className="q-grow" value={agg.column} aria-label="Aggregate column"
-                  onChange={(e) => update({ column: e.target.value, alias: "" })}>
+                <Picker label="Aggregate column" value={agg.column} grow
+                  onChange={(v) => update({ column: v, alias: "" })}>
                   <ColumnOptions columns={usable} placeholder="column…" />
-                </select>
+                </Picker>
               )}
-              <button type="button" className="q-x" title="Remove"
-                onClick={() => setGroup({ aggs: group.aggs.filter((_, j) => j !== i) })}>×</button>
-            </div>
-            <input
-              className="q-full"
-              type="text"
+              <RemoveButton label="Remove aggregate"
+                onClick={() => setGroup({ aggs: group.aggs.filter((_, j) => j !== i) })} />
+            </Row>
+            <TextField
+              fullWidth
               value={agg.alias}
               placeholder={`as ${defaultAggAlias(agg.fn, agg.column)}`}
-              aria-label="Aggregate name"
               onChange={(e) => update({ alias: e.target.value })}
+              slotProps={{ htmlInput: { "aria-label": "Aggregate name" } }}
             />
-          </div>
+          </Box>
         );
       })}
-      <button type="button" className="q-add"
+      <AddButton
         onClick={() => setGroup({ aggs: [...group.aggs, { id: newId(), fn: "count", column: "", alias: "" }] })}>
-        + aggregate
-      </button>
+        aggregate
+      </AddButton>
     </>
   );
 }
@@ -889,37 +1052,36 @@ function FilterRow({ filter, columns, onChange, onRemove }: FilterRowProps) {
   };
 
   const input = (key: "value" | "value2", placeholder: string) => (
-    <input
-      className="q-grow"
+    <TextField
       type={type === "date" ? "date" : type === "number" || type === "days" ? "number" : "text"}
-      min={type === "days" ? "1" : undefined}
       value={filter[key] || ""}
       placeholder={placeholder}
-      aria-label="Filter value"
       onChange={(e) => onChange({ ...filter, [key]: e.target.value })}
+      slotProps={{
+        htmlInput: { "aria-label": "Filter value", min: type === "days" ? 1 : undefined },
+      }}
+      sx={{ flex: "1 1 110px", minWidth: 0 }}
     />
   );
 
   return (
-    <div className="q-filter">
-      <div className="q-row">
-        <select className="q-full" value={filter.column} aria-label="Filter column"
-          onChange={(e) => changeColumn(e.target.value)}>
+    <Box sx={{ borderLeft: 2, borderColor: "divider", pl: 1, mb: 1.25 }}>
+      <Row>
+        <Picker label="Filter column" value={filter.column} onChange={changeColumn} sx={{ width: "100%" }}>
           <ColumnOptions columns={columns} placeholder="column…" />
-        </select>
-      </div>
-      <div className="q-row">
-        <select className="q-grow" value={op} aria-label="Filter operator"
-          onChange={(e) =>
-            // The options are the operator list built for this column's kind.
-            onChange({ ...filter, op: e.target.value as FilterOp, value: "", value2: "" })}>
+        </Picker>
+      </Row>
+      <Row>
+        {/* The options are the operator list built for this column's kind. */}
+        <Picker label="Filter operator" value={op} grow
+          onChange={(v) => onChange({ ...filter, op: v as FilterOp, value: "", value2: "" })}>
           {ops.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-        </select>
+        </Picker>
         {args >= 1 && input("value", type === "list" ? "a, b, c" : type === "days" ? "7" : "value")}
         {args >= 2 && input("value2", "and")}
-        <button type="button" className="q-x" title="Remove filter" onClick={onRemove}>×</button>
-      </div>
-    </div>
+        <RemoveButton label="Remove filter" onClick={onRemove} />
+      </Row>
+    </Box>
   );
 }
 
@@ -939,85 +1101,91 @@ function AskBox({ state, examples, onChange, onAsk, onExample, onBuild }: AskBox
   const disabled = !!state.unavailable || state.busy;
   const answer = state.answer;
   return (
-    <div className="card">
-      <div className="section-head" style={{ marginBottom: 10 }}>
-        <h3 style={{ margin: 0 }}>Ask in English</h3>
-        {answer && (
-          <span className="tag">confidence {Math.round((answer.confidence || 0) * 100)}%
-            {answer.attempts > 1 ? ` · ${answer.attempts} attempts` : ""}</span>
-        )}
-      </div>
-      <div className="q-row">
-        <input
-          className="q-grow"
-          type="text"
+    <Card
+      title="Ask in English"
+      action={answer && (
+        <Tag>
+          confidence {Math.round((answer.confidence || 0) * 100)}%
+          {answer.attempts > 1 ? ` · ${answer.attempts} attempts` : ""}
+        </Tag>
+      )}
+    >
+      <Row>
+        <TextField
           placeholder="How many application namespaces per team and environment?"
           value={state.question}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") onAsk(); }}
-          aria-label="Ask a question about the fleet"
+          slotProps={{ htmlInput: { "aria-label": "Ask a question about the fleet" } }}
+          sx={{ flex: "1 1 260px", minWidth: 0 }}
         />
-        <button type="button" className="btn" disabled={disabled || !state.question.trim()}
+        <Button variant="outlined" color="inherit" disabled={disabled || !state.question.trim()}
           onClick={onAsk}>
           {state.busy ? "Asking…" : "Ask"}
-        </button>
-      </div>
+        </Button>
+      </Row>
 
       {/* Some questions are a dashboard rather than a row - the same words, and
           the agent composes several panels out of them. */}
       {state.question.trim() && (
-        <div className="q-desc">
-          <span className="link" onClick={onBuild}>Build a dashboard from this question</span>
+        <Hint>
+          <Link component="button" type="button" onClick={onBuild}>Build a dashboard from this question</Link>
           {" "}- several panels instead of one answer.
-        </div>
+        </Hint>
       )}
 
       {state.unavailable && (
-        <div className="q-desc">
-          Not available: {state.unavailable} - the SQL builder below works without it.
-        </div>
+        <Hint>Not available: {state.unavailable} - the SQL builder below works without it.</Hint>
       )}
       {state.error && (
-        <div className="banner" style={{ marginTop: 12, marginBottom: 0 }}>
+        <Alert severity="error" sx={{ mt: 1.5, mb: 0 }}>
           {String(state.error.message || state.error)}
-        </div>
+        </Alert>
       )}
       {answer && (
-        <div className="q-answer">
+        <Box sx={{ mt: 1.5, fontSize: 13 }}>
           <div>{answer.explanation}</div>
           {(answer.assumptions || []).length > 0 && (
-            <ul className="q-assumptions">
+            <Box component="ul" sx={{ m: "6px 0 0", pl: 2.25, color: "text.secondary", fontSize: 12.5 }}>
               {answer.assumptions.map((a, i) => <li key={i}>{a}</li>)}
-            </ul>
+            </Box>
           )}
-        </div>
+        </Box>
       )}
 
       {examples.length > 0 && (
-        <div className="q-examples">
-          <span className="muted">Examples:</span>
+        <ExampleRow label="Examples:">
           {examples.slice(0, 5).map((ex, i) => (
-            <button type="button" className="tag q-example" key={i}
-              title="Load this example query" onClick={() => onExample(ex)}>
-              {ex.question}
-            </button>
+            <Chip key={i} variant="outlined" clickable label={ex.question}
+              title="Load this example query" onClick={() => onExample(ex)} sx={EXAMPLE_SX} />
           ))}
-        </div>
+        </ExampleRow>
       )}
 
       {/* History questions, written out as SQL. They run without a model, and
           each one comes back in a shape the chart under the table picks up. */}
-      <div className="q-examples">
-        <span className="muted">Trends:</span>
+      <ExampleRow label="Trends:">
         {TREND_EXAMPLES.map((ex) => (
-          <button type="button" className="tag q-example" key={ex.question}
-            title="Run this query - the result charts itself" onClick={() => onExample(ex)}>
-            {ex.question}
-          </button>
+          <Chip key={ex.question} variant="outlined" clickable label={ex.question}
+            title="Run this query - the result charts itself" onClick={() => onExample(ex)} sx={EXAMPLE_SX} />
         ))}
-      </div>
-    </div>
+      </ExampleRow>
+    </Card>
+  );
+}
+
+const EXAMPLE_SX = { borderRadius: "5px", fontWeight: 400, fontSize: 11.5, height: "auto", py: 0.5 };
+
+/** A row of ready-made questions, behind the word that says what they are. */
+function ExampleRow({ label, children }: { label: string; children?: ReactNode }) {
+  return (
+    <Box sx={{
+      display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.75, mt: 1.5, fontSize: 12,
+    }}>
+      <Muted>{label}</Muted>
+      {children}
+    </Box>
   );
 }
 
@@ -1047,14 +1215,14 @@ function ChartPanel({ result, chart, onChange }: ChartPanelProps) {
   const none = chartNoneText(chart);
 
   return (
-    <div className="chart-panel">
+    <Box sx={{ p: "2px 18px 16px", borderBottom: 1, borderColor: "border.soft" }}>
       <ChartControls fields={fields} spec={spec} chart={chart} onChange={onChange} />
       {spec ? (
         <Chart fields={fields} rows={result.rows} spec={spec} height={280} />
       ) : none ? (
-        <div className="chart-none">{none}</div>
+        <Muted sx={{ display: "block", fontSize: 12.5, p: "2px 0 4px" }}>{none}</Muted>
       ) : null}
-    </div>
+    </Box>
   );
 }
 
@@ -1079,9 +1247,9 @@ function Results({ result, running, mode, table, nav, onFlash, chart, onChart, s
 
   if (!result) {
     return (
-      <div className="card">
-        {running ? <SkeletonLines rows={4} /> : <div className="empty">Run a query to see rows.</div>}
-      </div>
+      <Card>
+        {running ? <SkeletonLines rows={4} /> : <Empty>Run a query to see rows.</Empty>}
+      </Card>
     );
   }
 
@@ -1096,26 +1264,29 @@ function Results({ result, running, mode, table, nav, onFlash, chart, onChart, s
   };
 
   return (
-    <div className="card flush">
-      <div className="card-head">
-        <div className="section-head" style={{ marginBottom: 4 }}>
-          <h3 style={{ margin: 0 }}>
-            Results <span className="muted">{result.row_count.toLocaleString()} rows ·
-              {" "}{result.columns.length} columns</span>
-          </h3>
-          <div className="q-actions">
-            <button type="button" className="btn" disabled={!sql.trim()} onClick={() => setAdding(true)}>
-              Add to dashboard
-            </button>
-            <button type="button" className="btn" disabled={!result.row_count} onClick={csv}>
-              Download CSV
-            </button>
-            <button type="button" className="btn" disabled={!result.row_count} onClick={json}>
-              Copy as JSON
-            </button>
-          </div>
-        </div>
-      </div>
+    <Card
+      flush
+      label="Results"
+      title={(
+        <>
+          Results <Muted>{result.row_count.toLocaleString()} rows ·
+            {" "}{result.columns.length} columns</Muted>
+        </>
+      )}
+      action={(
+        <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap" }}>
+          <Button variant="outlined" color="inherit" disabled={!sql.trim()} onClick={() => setAdding(true)}>
+            Add to dashboard
+          </Button>
+          <Button variant="outlined" color="inherit" disabled={!result.row_count} onClick={csv}>
+            Download CSV
+          </Button>
+          <Button variant="outlined" color="inherit" disabled={!result.row_count} onClick={json}>
+            Copy as JSON
+          </Button>
+        </Stack>
+      )}
+    >
       <ChartPanel result={result} chart={chart} onChange={onChart} />
       <ResultTable
         id="query.results"
@@ -1135,6 +1306,6 @@ function Results({ result, running, mode, table, nav, onFlash, chart, onChart, s
           onAdded={(id) => { setAdding(false); onAdded(id); }}
         />
       )}
-    </div>
+    </Card>
   );
 }

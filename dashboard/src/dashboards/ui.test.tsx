@@ -1,8 +1,13 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { Drawer, Field, IdDialog, Menu, Modal, Stepper } from "./ui";
+import { BACKDROP_ID, Drawer, Field, IdDialog, Menu, Modal, Stepper } from "./ui";
 import type { MenuItem } from "./ui";
+import { renderThemed } from "../test/harness";
+
+/** An overlay's backdrop. It is the overlay's own shape rather than a control,
+ * so it has no role and no name to ask for. */
+const backdrop = () => document.getElementById(BACKDROP_ID) as HTMLElement;
 
 describe("Menu", () => {
   // A tuple rather than an array, so a test can reach for the first entry
@@ -14,14 +19,14 @@ describe("Menu", () => {
   ];
 
   it("draws nothing at all when every item was conditioned away", () => {
-    const { container } = render(<Menu items={[false, null, undefined]} />);
+    const { container } = renderThemed(<Menu items={[false, null, undefined]} />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it("opens on a click and reports which item was chosen", async () => {
     const user = userEvent.setup();
     const list = items();
-    render(<Menu items={list} title="Menu for Clusters on hub-east" />);
+    renderThemed(<Menu items={list} title="Menu for Clusters on hub-east" />);
     // The button's label is its own glyph; the panel it belongs to is in the
     // title, which is what tells two panels' menus apart.
     const button = screen.getByRole("button", { name: "⋯" });
@@ -36,30 +41,33 @@ describe("Menu", () => {
 
   it("marks a destructive item so it does not read like the others", async () => {
     const user = userEvent.setup();
-    render(<Menu items={items()} />);
+    renderThemed(<Menu items={items()} />);
     await user.click(screen.getByRole("button", { name: "⋯" }));
-    expect(screen.getByRole("menuitem", { name: "Remove" })).toHaveClass("danger");
+    expect(screen.getByRole("menuitem", { name: "Remove" }))
+      .toHaveAttribute("data-danger", "true");
   });
 
   it("closes on Escape and on a click outside it", async () => {
     const user = userEvent.setup();
-    render(<div><Menu items={items()} /><button type="button">elsewhere</button></div>);
+    renderThemed(<div><Menu items={items()} /><button type="button">elsewhere</button></div>);
     const button = screen.getByRole("button", { name: "⋯" });
 
     await user.click(button);
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).toBeNull();
 
+    // An open menu covers the page, so "outside" is its own backdrop rather
+    // than the button behind it.
     await user.click(button);
     expect(screen.getByRole("menu")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "elsewhere" }));
+    await user.click(backdrop());
     expect(screen.queryByRole("menu")).toBeNull();
   });
 });
 
 describe("Modal", () => {
   it("is a labelled dialog with the footer the caller gave it", () => {
-    render(<Modal title="Delete this dashboard" onClose={() => {}}
+    renderThemed(<Modal title="Delete this dashboard" onClose={() => {}}
       footer={<button type="button">Delete</button>}>Are you sure?</Modal>);
     const dialog = screen.getByRole("dialog", { name: "Delete this dashboard" });
     expect(dialog).toHaveAttribute("aria-modal", "true");
@@ -70,21 +78,19 @@ describe("Modal", () => {
   it("closes on its own button, on Escape and on a click outside", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(<Modal title="Add to dashboard" onClose={onClose}>body</Modal>);
+    renderThemed(<Modal title="Add to dashboard" onClose={onClose}>body</Modal>);
 
-    await user.click(screen.getByRole("button", { name: "×" }));
+    await user.click(screen.getByRole("button", { name: "Close Add to dashboard" }));
     await user.keyboard("{Escape}");
-    // the scrim is the modal's own backdrop: it carries no role or name,
-    // because clicking it is the shape of the dialog rather than a control
-    await user.click(document.querySelector(".db-scrim") as HTMLElement);
+    await user.click(backdrop());
     expect(onClose).toHaveBeenCalledTimes(3);
   });
 
   it("puts the focus back where it was when it goes away", async () => {
-    render(<button type="button">Clone to edit</button>);
+    renderThemed(<button type="button">Clone to edit</button>);
     const opener = screen.getByRole("button", { name: "Clone to edit" });
     opener.focus();
-    const { unmount } = render(<Modal title="Clone" onClose={() => {}}>body</Modal>);
+    const { unmount } = renderThemed(<Modal title="Clone" onClose={() => {}}>body</Modal>);
     unmount();
     expect(document.activeElement).toBe(opener);
   });
@@ -94,7 +100,7 @@ describe("Drawer", () => {
   it("is a labelled dialog that closes the way the modal does", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(<Drawer title="Edit &quot;Clusters&quot;" onClose={onClose}
+    renderThemed(<Drawer title="Edit &quot;Clusters&quot;" onClose={onClose}
       footer={<button type="button">Apply</button>}>the form</Drawer>);
     expect(screen.getByRole("dialog", { name: 'Edit "Clusters"' })).toBeInTheDocument();
     expect(screen.getByText("the form")).toBeInTheDocument();
@@ -108,7 +114,7 @@ describe("IdDialog", () => {
     const onSubmit = vi.fn();
     const onCancel = vi.fn();
     const user = userEvent.setup();
-    render(<IdDialog title="Clone this dashboard" intro="A copy under a new id."
+    renderThemed(<IdDialog title="Clone this dashboard" intro="A copy under a new id."
       defaultId="hub-review-copy" onSubmit={onSubmit} onCancel={onCancel} {...props} />);
     return { onSubmit, onCancel, user };
   };
@@ -161,7 +167,7 @@ describe("IdDialog", () => {
 
 describe("Field", () => {
   it("shows the hint until there is an error to show instead", () => {
-    const { rerender } = render(
+    const { rerender } = renderThemed(
       <Field label="SQL" hint="A single SELECT."><textarea /></Field>);
     expect(screen.getByText("A single SELECT.")).toBeInTheDocument();
     rerender(<Field label="SQL" hint="A single SELECT." error="unknown table 'pods'">
@@ -176,7 +182,7 @@ describe("Stepper", () => {
   it("nudges the value and stops at each end", async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
-    const { rerender } = render(
+    const { rerender } = renderThemed(
       <Stepper label="Width" value={6} min={1} max={12} onChange={onChange} suffix="/ 12" />);
     await user.click(screen.getByRole("button", { name: "Increase Width" }));
     expect(onChange).toHaveBeenCalledWith(7);

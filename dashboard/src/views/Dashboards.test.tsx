@@ -39,22 +39,22 @@ describe("the list", () => {
 
   it("shows a variable slot in a title as the variable rather than as a gap", async () => {
     open();
-    const card = closestElement(await screen.findByText(/Hub review/), ".db-card");
-    expect(within(card).getByText("hub", { selector: ".db-slot" })).toBeInTheDocument();
+    const card = closestElement(await screen.findByText(/Hub review/), "[data-dashboard]");
+    expect(within(card).getByText("hub", { selector: "[data-slot]" })).toBeInTheDocument();
   });
 
   it("counts the panels and names the variables a dashboard takes", async () => {
     open();
-    const card = closestElement(await screen.findByText(/Hub review/), ".db-card");
+    const card = closestElement(await screen.findByText(/Hub review/), "[data-dashboard]");
     expect(within(card).getByText("2 panels")).toBeInTheDocument();
-    expect(within(card).getByText("hub", { selector: ".db-card-vars .tag" }))
+    expect(within(card).getByText("hub", { selector: "[data-variables] *" }))
       .toBeInTheDocument();
   });
 
   it("says panel rather than panels for one, and says when there is no description",
     async () => {
       open();
-      const card = closestElement(await screen.findByText("Capacity watch"), ".db-card");
+      const card = closestElement(await screen.findByText("Capacity watch"), "[data-dashboard]");
       expect(within(card).getByText("1 panel")).toBeInTheDocument();
       expect(within(card).getByText("No description.")).toBeInTheDocument();
       expect(within(card).getByText(/^updated /)).toBeInTheDocument();
@@ -79,7 +79,7 @@ describe("the list", () => {
     answer(api, { dashboards: reads });
     open();
     await screen.findByText("Capacity watch");
-    await user.click(screen.getByRole("button", { name: "↻ Refresh" }));
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(reads.mock.calls.length).toBeGreaterThan(1));
   });
 
@@ -148,7 +148,7 @@ describe("cloning a built-in", () => {
 
   it("is not offered for a dashboard that can simply be edited", async () => {
     open();
-    const card = closestElement(await screen.findByText("Capacity watch"), ".db-card");
+    const card = closestElement(await screen.findByText("Capacity watch"), "[data-dashboard]");
     expect(within(card).queryByRole("button", { name: "Clone" })).toBeNull();
   });
 });
@@ -178,7 +178,8 @@ describe("the fixture list", () => {
     open("/dashboards?fixture=1");
     expect(await screen.findByText(/Hub overview/)).toBeInTheDocument();
     expect(screen.getByText("Fleet trends")).toBeInTheDocument();
-    expect(screen.getByText("fixture")).toHaveClass("db-tag");
+    // the page says out loud that these are the samples rather than the API's
+    expect(screen.getByText("fixture")).toBeInTheDocument();
     expect(api.dashboards).not.toHaveBeenCalled();
   });
 

@@ -1,9 +1,10 @@
-import { render, screen, within } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import Panel from "./Panel";
 import type { PanelProps } from "./Panel";
 import { normalizeDefinition } from "./model";
+import { renderThemed } from "../test/harness";
 
 const DEFINITION = normalizeDefinition({
   id: "hub-review",
@@ -36,7 +37,7 @@ const handlers = () => ({
   onOpenQuery: vi.fn(), onEdit: vi.fn(), onRemove: vi.fn(), onMove: vi.fn(),
 });
 
-const draw = (props: Partial<PanelProps> = {}) => render(
+const draw = (props: Partial<PanelProps> = {}) => renderThemed(
   <Panel panel={PANEL} definition={DEFINITION} params={{ hub: "hub-east" }}
     {...handlers()} {...props} />);
 
@@ -59,7 +60,7 @@ describe("the header", () => {
 
   it("carries the panel's description as a tooltip rather than as more text", () => {
     const described = { ...PANEL, description: "Overall status of every cluster on this hub." };
-    render(<Panel panel={described} definition={DEFINITION} params={{ hub: "hub-east" }}
+    renderThemed(<Panel panel={described} definition={DEFINITION} params={{ hub: "hub-east" }}
       result={TABLE_RESULT} {...handlers()} />);
     expect(screen.getByLabelText("Overall status of every cluster on this hub."))
       .toBeInTheDocument();
@@ -93,7 +94,7 @@ describe("the header", () => {
   it("says the panel is being rewritten rather than passing the old rows off as new", () => {
     const { container } = draw({ result: TABLE_RESULT, busy: true });
     expect(container.querySelector("section")).toHaveAttribute("aria-busy", "true");
-    expect(container.querySelector("section")).toHaveClass("is-busy");
+    expect(container.querySelector("section")).toHaveAttribute("aria-busy", "true");
   });
 });
 
@@ -107,17 +108,17 @@ describe("the body", () => {
   it("draws a chart when the columns can carry the one the panel asked for", () => {
     const charted = { ...PANEL, chart: { type: "bars" as const, x: "overall_status", series: "",
       y: ["clusters"], stack: false } };
-    const { container } = render(<Panel panel={charted} definition={DEFINITION} params={{}}
+    const { container } = renderThemed(<Panel panel={charted} definition={DEFINITION} params={{}}
       result={CHART_RESULT} {...handlers()} />);
-    expect(container.querySelectorAll("path.chart-bar")).toHaveLength(3);
-    expect(container.querySelector("section")).toHaveClass("is-chart");
-    expect(screen.queryByRole("table")).toBeNull();
+    expect(container.querySelectorAll("rect.MuiBarChart-element")).toHaveLength(3);
+    expect(container.querySelector("section")).toHaveAttribute("data-body", "chart");
+    expect(screen.queryByRole("grid")).toBeNull();
   });
 
   it("turns a panel waiting on a variable into an instruction, in the variable's own words", () => {
     const { container } = draw({ result: { error: "variable hub is not set", sql: "SELECT 1" },
       params: {} });
-    expect(container.querySelector(".db-panel-msg")).toHaveTextContent("Choose a hub above.");
+    expect(container.querySelector("section")).toHaveTextContent("Choose a hub above.");
     expect(screen.queryByText(/variable hub is not set/)).toBeNull();
   });
 
@@ -125,16 +126,16 @@ describe("the body", () => {
     const definition = normalizeDefinition({ id: "d",
       variables: [{ name: "env", label: "Environment", type: "text" }],
       panels: [{ id: "p", title: "t", sql: "SELECT 1" }] });
-    const { container } = render(<Panel panel={definition.panels[0]} definition={definition}
+    const { container } = renderThemed(<Panel panel={definition.panels[0]} definition={definition}
       params={{}} result={{ error: "variable env is not set", sql: "SELECT 1" }}
       {...handlers()} />);
-    expect(container.querySelector(".db-panel-msg"))
+    expect(container.querySelector("section"))
       .toHaveTextContent("Choose an environment above.");
   });
 
   it("falls back to the variable's name when the dashboard does not declare it", () => {
     const { container } = draw({ result: { error: "variable region is not set" }, params: {} });
-    expect(container.querySelector(".db-panel-msg")).toHaveTextContent("Choose a region above.");
+    expect(container.querySelector("section")).toHaveTextContent("Choose a region above.");
   });
 
   it("shows a query error with the SQL that was actually sent", () => {
@@ -146,7 +147,7 @@ describe("the body", () => {
 
   it("stands in for rows that are still on the wire", () => {
     const { container } = draw({ result: undefined, loading: true });
-    expect(container.querySelector(".skeleton-table")).toBeInTheDocument();
+    expect(container.querySelector("[data-placeholder]")).toBeInTheDocument();
   });
 
   it("says nothing ran rather than leaving the panel blank", () => {
@@ -155,7 +156,7 @@ describe("the body", () => {
   });
 
   it("gives a tall panel a filter row and a short one none", () => {
-    const { rerender } = render(<Panel panel={{ ...PANEL, h: 3 }} definition={DEFINITION}
+    const { rerender } = renderThemed(<Panel panel={{ ...PANEL, h: 3 }} definition={DEFINITION}
       params={{ hub: "hub-east" }} result={TABLE_RESULT} {...handlers()} />);
     expect(screen.getByLabelText("Filter by name")).toBeInTheDocument();
     rerender(<Panel panel={{ ...PANEL, h: 2 }} definition={DEFINITION}
@@ -167,9 +168,9 @@ describe("the body", () => {
     const nav = { openCluster: vi.fn(), openApp: vi.fn() };
     const user = userEvent.setup();
     const result = { ...TABLE_RESULT, columns: ["cluster_name", "overall_status"] };
-    render(<Panel panel={PANEL} definition={DEFINITION} params={{ hub: "hub-east" }}
+    renderThemed(<Panel panel={PANEL} definition={DEFINITION} params={{ hub: "hub-east" }}
       result={result} nav={nav} {...handlers()} />);
-    await user.click(within(screen.getByRole("table")).getByText("ocp-prod-iad-01"));
+    await user.click(within(screen.getByRole("grid")).getByText("ocp-prod-iad-01"));
     expect(nav.openCluster).toHaveBeenCalledWith("ocp-prod-iad-01");
   });
 });

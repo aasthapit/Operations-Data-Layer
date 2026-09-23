@@ -33,9 +33,9 @@ const open = (at = "/query") => renderView(
   ({ route, nav }) => (route.path === "/query" ? <Query route={route} nav={nav} /> : null),
   { at });
 
-// The SQL the page is about to run, which it shows in a <pre> rather than in
-// a control - so there is no role or label to ask for.
-const sql = () => (document.querySelector(".q-sql") as HTMLElement | null)?.textContent;
+// The SQL the page is about to run, which it shows as text rather than in a
+// control - so there is no role or label to ask for.
+const sql = () => (document.querySelector("[data-sql]") as HTMLElement | null)?.textContent;
 
 describe("opening the page", () => {
   it("starts on clusters, with the columns people came for, already run", async () => {
@@ -63,8 +63,8 @@ describe("opening the page", () => {
   it("stands the page in while the schema is on the wire", () => {
     answer(api, { querySchema: () => new Promise(() => {}) });
     const { container } = open();
-    expect(container.querySelector(".q-rail")).toBeInTheDocument();
-    expect(container.querySelector(".skeleton")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Query builder" })).toBeInTheDocument();
+    expect(container.querySelector("[data-placeholder]")).toBeInTheDocument();
   });
 
   it("shows nothing but the error when the schema cannot be read", async () => {
@@ -161,7 +161,7 @@ describe("the builder", () => {
     open();
     await screen.findByLabelText("Data set");
     await user.click(screen.getByRole("button", { name: "+ filter" }));
-    await user.click(screen.getByTitle("Remove filter"));
+    await user.click(screen.getByRole("button", { name: "Remove filter" }));
     expect(screen.queryByLabelText("Filter column")).toBeNull();
   });
 
@@ -184,7 +184,7 @@ describe("the builder", () => {
     await screen.findByLabelText("Data set");
     await user.selectOptions(screen.getByLabelText("Sort direction"), "desc");
     await waitFor(() => expect(sql()).toContain('ORDER BY "name" DESC'));
-    await user.click(screen.getByTitle("Remove"));
+    await user.click(screen.getByRole("button", { name: "Remove sort" }));
     await waitFor(() => expect(sql()).not.toContain("ORDER BY"));
     await user.click(screen.getByRole("button", { name: "+ sort" }));
     await waitFor(() => expect(sql()).toContain("ORDER BY"));
@@ -453,9 +453,12 @@ describe("the results", () => {
     const { container } = open();
     await screen.findByText(/3 rows · 7 ms/);
     expect(await screen.findByLabelText("Chart")).toBeInTheDocument();
-    await waitFor(() => expect(container.querySelectorAll("path.chart-bar")).toHaveLength(3));
-    await user.selectOptions(screen.getByLabelText("Chart"), "none");
-    await waitFor(() => expect(container.querySelectorAll("path.chart-bar")).toHaveLength(0));
+    await waitFor(() => expect(container.querySelectorAll("rect.MuiBarChart-element")).toHaveLength(3));
+    // the chart picker is a MUI Select: it opens a listbox rather than being a
+    // native <select> with options to pick from
+    await user.click(screen.getByLabelText("Chart"));
+    await user.click(await screen.findByRole("option", { name: "Table only" }));
+    await waitFor(() => expect(container.querySelectorAll("rect.MuiBarChart-element")).toHaveLength(0));
   });
 
   it("says why there is no chart for a result that cannot carry one", async () => {

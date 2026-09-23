@@ -15,6 +15,23 @@ const port = process.env.PORT ? Number(process.env.PORT) : 5173;
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // The MUI chunk is 540 kB raw and 168 kB gzipped by design; the warning
+    // exists to catch a chunk that grew by accident, so it stays but starts above it.
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        // MUI and the two MUI X packages are the bulk of the bundle and change
+        // on their own schedule; in their own chunks they cache across
+        // releases of the app, and Vite stops warning about one 1.5 MB file.
+        manualChunks: {
+          mui: ["@mui/material", "@emotion/react", "@emotion/styled"],
+          "mui-grid": ["@mui/x-data-grid"],
+          "mui-charts": ["@mui/x-charts"],
+        },
+      },
+    },
+  },
   server: {
     host: true,
     port,

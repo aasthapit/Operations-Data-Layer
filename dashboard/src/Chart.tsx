@@ -1,19 +1,31 @@
-// Inline-SVG charts for a result set: a line (or area) over time, or bars by
+// A result set drawn as a chart: a line (or area) over time, or bars by
 // category. Nothing else - a query result either has a time axis, a category
 // axis, or no chart at all, and the table underneath is always the full answer.
 //
-// There is no chart library here on purpose. What a chart of this kind needs is
-// two scales, a path builder and a hover layer; a dependency would be larger
-// than that and would bring its own colours, which this dashboard already has.
+// The drawing itself is MUI X Charts' `LineChart` and `BarChart`: two scales, a
+// legend, tooltips and axis highlighting that used to be hand-rolled SVG here
+// are now a dependency's job. What stays is everything the library cannot know
+// on its own - which column is a time axis, which is a series, how many lines
+// is too many, how a category label is shortened instead of dropped, and how a
+// column named `_bytes` or `_percent` is read. That is inference and shape
+// detection, not rendering, and it does not change because the renderer did.
 //
-// The colours come from CSS variables (--series-1..8 for identity, --chart-line
-// for a lone series). Status colours are never used as series colours: green
-// here would mean "this series", not "healthy", and that is exactly the
-// confusion the status tokens exist to avoid.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, RefObject,
-} from "react";
+// The colours come from `theme.palette.chart` (`useTheme()`), never a hex
+// literal - the same eight validated categorical slots and lone-series accent
+// this file used to read off `--series-1..8` / `--chart-line` in styles.css,
+// now read through the theme instead. Status colours (success / warning /
+// error) are never used as series colours: green here would mean "this
+// series", not "healthy", and that is exactly the confusion the status tokens
+// exist to avoid.
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ComponentProps, ReactNode, RefObject } from "react";
+import Box from "@mui/material/Box";
+import Typography from "@mui/material/Typography";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import { LineChart } from "@mui/x-charts/LineChart";
+import { BarChart } from "@mui/x-charts/BarChart";
+import type { BarItem } from "@mui/x-charts/BarChart";
 import { fmtBytes, fmtCores } from "./components";
 import type { QueryRow } from "./api/types";
 
@@ -378,14 +390,27 @@ function parseTime(v: unknown): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-/** How wide the gap between two ticks is, which decides how a time is worded. */
-type TimeUnit = "minute" | "hour" | "day" | "month";
+/** How wide the gap between two ticks is, which decides how a time is worded.
+ * "hour" covers both clock-time buckets (a chart never needs to tell "the
+ * minute" and "the hour" apart in words - both read as `18:42`). */
+type TimeUnit = "hour" | "day" | "month";
+
+// Which bucket a span of time reads in - the same "largest step that still
+// gives a handful of ticks" rule the axis used to compute for itself, kept
+// only for wording now that MUI places the ticks: a sweep-sized window reads
+// as a clock time, a month-sized one as a date, a year-sized one as a month.
+function pickTimeUnit(min: number, max: number, count: number): TimeUnit {
+  const span = Math.max(1, max - min);
+  const fine = [MINUTE, 2 * MINUTE, 5 * MINUTE, 10 * MINUTE, 15 * MINUTE, 30 * MINUTE,
+    HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR];
+  if (fine.some((step) => span / step <= count)) return "hour";
+  if ([1, 2, 3, 7, 14, 28].some((days) => span / (days * DAY) <= count)) return "day";
+  return "month";
+}
 
 function formatTimeTick(t: number, unit: TimeUnit): string {
   const d = new Date(t);
-  if (unit === "minute" || unit === "hour") {
-    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  }
+  if (unit === "hour") return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   if (unit === "day") return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   return d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
 }
@@ -402,82 +427,12 @@ function formatTimeFull(t: number, unit: TimeUnit): string {
 }
 
 // --------------------------------------------------------------------------- //
-// scales
-// --------------------------------------------------------------------------- //
-// minStep is 1 for a count: "0, 0.5, 1, 1.5, 2 clusters" is not a thing, and an
-// axis that offers half a cluster is worse than one with fewer gridlines.
-/** An axis: the gridline values, and the range they span. */
-interface Ticks {
-  ticks: number[];
-  lo: number;
-  hi: number;
-}
-
-function niceTicks(min: number, max: number, count: number, minStep = 0): Ticks {
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return { ticks: [0, 1], lo: 0, hi: 1 };
-  if (min === max) {
-    const pad = Math.abs(min) || 1;
-    return niceTicks(min - pad / 2, max + pad / 2, count, minStep);
-  }
-  const raw = (max - min) / Math.max(2, count);
-  const mag = 10 ** Math.floor(Math.log10(raw));
-  const norm = raw / mag;
-  const step = Math.max(minStep, (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag);
-  const lo = Math.floor(min / step) * step;
-  const hi = Math.ceil(max / step) * step;
-  const ticks: number[] = [];
-  // stepping from `lo` rather than accumulating keeps 0.1 + 0.2 off the axis
-  for (let i = 0; lo + i * step <= hi + step / 1000; i += 1) {
-    ticks.push(Number((lo + i * step).toPrecision(12)));
-  }
-  return { ticks, lo, hi };
-}
-
-// Tick spacing follows the span: minutes for an hour of sweeps, hours for a
-// day, days for a month, months for a year.
-function timeTicks(min: number, max: number, count: number): { ticks: number[]; unit: TimeUnit } {
-  const span = Math.max(1, max - min);
-  const fine = [MINUTE, 2 * MINUTE, 5 * MINUTE, 10 * MINUTE, 15 * MINUTE, 30 * MINUTE,
-    HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR];
-  for (const step of fine) {
-    if (span / step <= count) {
-      const ticks: number[] = [];
-      // aligned to a local boundary, so ticks land on :00 rather than on the
-      // odd second the first sample happened to carry
-      const offset = new Date(min).getTimezoneOffset() * MINUTE;
-      for (let t = Math.ceil((min - offset) / step) * step + offset; t <= max; t += step) {
-        ticks.push(t);
-      }
-      return { ticks, unit: step < HOUR ? "minute" : "hour" };
-    }
-  }
-  for (const days of [1, 2, 3, 7, 14, 28]) {
-    if (span / (days * DAY) <= count) {
-      const ticks: number[] = [];
-      const d = new Date(min);
-      d.setHours(0, 0, 0, 0);
-      if (d.getTime() < min) d.setDate(d.getDate() + 1);
-      // stepping through Date keeps a daylight-saving change from drifting ticks
-      while (d.getTime() <= max) { ticks.push(d.getTime()); d.setDate(d.getDate() + days); }
-      return { ticks, unit: "day" };
-    }
-  }
-  const ticks: number[] = [];
-  const months = span / (365 * DAY) > 2 ? 3 : 1;
-  const d = new Date(min);
-  d.setDate(1);
-  d.setHours(0, 0, 0, 0);
-  if (d.getTime() < min) d.setMonth(d.getMonth() + 1);
-  while (d.getTime() <= max && ticks.length < 24) {
-    ticks.push(d.getTime());
-    d.setMonth(d.getMonth() + months);
-  }
-  return { ticks, unit: "month" };
-}
-
-// --------------------------------------------------------------------------- //
 // text measurement
 // --------------------------------------------------------------------------- //
+// MUI hides overlapping axis ticks entirely rather than shortening them; this
+// dashboard's rule is that a category label is never dropped, only shortened,
+// with the full name staying in the tooltip and in the table. That rule is not
+// something the library does, so the measuring it takes stays here.
 const FONT = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 let measureCtx: CanvasRenderingContext2D | null | undefined;
 const widths = new Map<string, number>();
@@ -519,36 +474,35 @@ function ellipsize(text: unknown, max: number): string {
 // --------------------------------------------------------------------------- //
 // colours
 // --------------------------------------------------------------------------- //
-// Eight categorical slots in the order they were validated for this surface.
-// The colour follows the series, not its rank, so hiding one never repaints
-// the others.
-const SERIES_COLORS = Array.from({ length: SERIES_CAP }, (_, i) => `var(--series-${i + 1})`);
-const colorAt = (i: number, total: number): string => (total <= 1 ? "var(--chart-line)" : SERIES_COLORS[i % SERIES_COLORS.length]);
+// The eight categorical slots and the lone-series colour are `theme.palette
+// .chart` (see `theme.ts`): the same validated palette this file used to read
+// off `--series-1..8` and `--chart-line` as CSS variables, now read through
+// the theme instead. Never `.success` / `.warning` / `.error` - those carry
+// meaning (healthy / warning / critical), and a series borrowing one of them
+// would say "this series" when the colour actually means "this is bad".
+const colorAt = (theme: Theme, i: number, total: number): string => (total <= 1
+  ? theme.palette.chart.line
+  : theme.palette.chart.series[i % theme.palette.chart.series.length]);
 
 // --------------------------------------------------------------------------- //
-// models
+// grouping rows into series
 // --------------------------------------------------------------------------- //
 const keyOf = (v: unknown): string => (v == null ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v));
 
 // Rows in one sweep are written a few milliseconds apart, so two clusters
-// never share a timestamp exactly. The crosshair therefore matches the nearest
-// sample within a series' own sampling interval rather than on equality.
-/** One sample of one line. A null value is a gap, never a zero. */
+// never share a timestamp exactly. Each series is therefore matched to a
+// shared time grid by nearest sample within its own sampling interval, rather
+// than by exact equality.
+/** One sample of one line, before it is aligned to the shared time grid. A
+ * null value is a gap, never a zero. */
 interface LinePoint {
   t: number;
   v: number | null;
 }
 
-/** One sample of one stacked band: where it starts, where it ends, and the
- * value it carried (null when the band is holding the last reading forward). */
-interface BandPoint {
-  t: number;
-  base: number;
-  top: number;
-  v: number | null;
-}
-
-interface LineSeries {
+/** One series while it is still being grouped, before the palette cap and the
+ * shared time grid are applied. */
+interface RawSeries {
   key: string;
   label: string;
   unit: Unit;
@@ -558,54 +512,6 @@ interface LineSeries {
   tol: number;
   /** The sum of |v|, which is how the series past the palette cap are ranked. */
   total: number;
-  /** Assigned once the series that survive the cap are known, so it is not part
-   * of what the builder first puts together. */
-  color?: string;
-  /** Only a stacked model has bands. */
-  band?: BandPoint[];
-}
-
-export interface LineModel {
-  series: LineSeries[];
-  stamps: number[];
-  stacked: boolean;
-  /** What the caption says about anything the chart had to leave out. */
-  note: string;
-  xMin: number;
-  xMax: number;
-  yMin: number;
-  yMax: number;
-  integer: boolean;
-  unit: Unit;
-  xLabel: string;
-  measureLabel: string;
-  ariaLabel?: string;
-}
-
-interface BarItem {
-  key: string;
-  label: string;
-  /** One entry per measure, in the order the series are drawn. */
-  values: Array<number | null>;
-}
-
-interface BarSeries {
-  key: string;
-  label: string;
-  unit: Unit;
-  color: string;
-}
-
-export interface BarModel {
-  items: BarItem[];
-  series: BarSeries[];
-  note: string;
-  lo: number;
-  hi: number;
-  integer: boolean;
-  unit: Unit;
-  xLabel: string;
-  ariaLabel?: string;
 }
 
 /** One category's samples while they are still being collected by timestamp. */
@@ -640,7 +546,34 @@ function nearestPoint(points: readonly LinePoint[], t: number, tol: number): Lin
   return best;
 }
 
-function buildLineModel(fields: Field[], rows: Row[], spec: Spec): LineModel | null {
+// --------------------------------------------------------------------------- //
+// the data a line chart is drawn from
+// --------------------------------------------------------------------------- //
+/** One series as MUI X Charts draws it: a value per stamp in `LineChartData`,
+ * aligned by index rather than re-matched at render time. */
+interface LineSeriesData {
+  key: string;
+  label: string;
+  unit: Unit;
+  data: Array<number | null>;
+  color: string;
+  /** A lone series (or any series in a stack) is filled under the line. */
+  area: boolean;
+}
+
+export interface LineChartData {
+  stamps: number[];
+  series: LineSeriesData[];
+  stacked: boolean;
+  /** What the caption says about anything the chart had to leave out. */
+  note: string;
+  unit: Unit;
+  integer: boolean;
+  xLabel: string;
+  measureLabel: string;
+}
+
+function buildLineData(fields: Field[], rows: Row[], spec: Spec, theme: Theme): LineChartData | null {
   const x = byName(fields, spec.x);
   const seriesField = spec.series ? byName(fields, spec.series) : null;
   const measures = spec.y.map((n) => byName(fields, n)).filter((f): f is Field => !!f);
@@ -668,7 +601,7 @@ function buildLineModel(fields: Field[], rows: Row[], spec: Spec): LineModel | n
     }
   }
 
-  let series: LineSeries[] = [...groups.values()].map((g) => {
+  let raw: RawSeries[] = [...groups.values()].map((g) => {
     const points = [...g.points.entries()].sort((a, b) => a[0] - b[0]).map(([t, v]) => ({ t, v }));
     return {
       key: g.key,
@@ -679,19 +612,19 @@ function buildLineModel(fields: Field[], rows: Row[], spec: Spec): LineModel | n
       total: points.reduce((sum, p) => sum + (p.v == null ? 0 : Math.abs(p.v)), 0),
     };
   });
-  if (!series.length) return null;
+  if (!raw.length) return null;
 
   // Past eight lines the palette stops telling them apart. Stacked, the tail is
   // a real part of the whole and is summed into "Other"; unstacked, summing
   // unrelated measurements would invent a number, so the tail is left out and
   // the caption says which.
   let note = "";
-  if (series.length > SERIES_CAP) {
+  if (raw.length > SERIES_CAP) {
     const keep = spec.stack ? SERIES_CAP - 1 : SERIES_CAP;
-    const ranked = [...series].sort((a, b) => b.total - a.total);
+    const ranked = [...raw].sort((a, b) => b.total - a.total);
     const kept = new Set(ranked.slice(0, keep).map((s) => s.key));
     const rest = ranked.slice(keep);
-    series = series.filter((s) => kept.has(s.key));
+    raw = raw.filter((s) => kept.has(s.key));
     if (spec.stack) {
       const summed = new Map<number, number>();
       for (const s of rest) {
@@ -701,10 +634,10 @@ function buildLineModel(fields: Field[], rows: Row[], spec: Spec): LineModel | n
         }
       }
       const points = [...summed.entries()].sort((a, b) => a[0] - b[0]).map(([t, v]) => ({ t, v }));
-      series.push({
+      raw.push({
         key: "__other__",
         label: "Other",
-        unit: series[0].unit,
+        unit: raw[0].unit,
         points,
         tol: medianGap(points) * 0.75,
         total: 0,
@@ -715,65 +648,86 @@ function buildLineModel(fields: Field[], rows: Row[], spec: Spec): LineModel | n
     }
   }
 
-  for (const s of series) {
+  for (const s of raw) {
     if (!(s.tol > 0)) s.tol = Math.max(MINUTE, (s.points[s.points.length - 1]?.t - s.points[0]?.t || 0) / 20);
   }
-  series.forEach((s, i) => { s.color = colorAt(i, series.length); });
 
-  const stamps = [...new Set(series.flatMap((s) => s.points.map((p) => p.t)))].sort((a, b) => a - b);
-  const stacked = !!spec.stack && series.length > 1;
-  let lo = 0;
-  let hi = 0;
+  const stamps = [...new Set(raw.flatMap((s) => s.points.map((p) => p.t)))].sort((a, b) => a - b);
+  const stacked = !!spec.stack && raw.length > 1;
 
-  if (stacked) {
-    // A stack is read as a total, so every band needs a value at every stamp.
-    // Each series contributes its nearest sample, or the last one it had -
-    // which is what the sweep before this one actually measured.
-    const running = new Map<number, number>(stamps.map((t): [number, number] => [t, 0]));
-    for (const s of series) {
+  const series: LineSeriesData[] = raw.map((s, i) => {
+    let data: Array<number | null>;
+    if (stacked) {
+      // Each series contributes its nearest sample, or the last one it had -
+      // which is what the sweep before this one actually measured. A stack is
+      // read as a total, so every band needs a value at every stamp.
       let carried = 0;
-      s.band = stamps.map((t) => {
+      data = stamps.map((t) => {
         const p = nearestPoint(s.points, t, Math.max(s.tol, MINUTE));
         const v = p && p.v != null ? p.v : carried;
         carried = v;
-        // `running` is seeded with every stamp above, so a miss and a zero
-        // are the same number - which is what `?? 0` says.
-        const base = running.get(t) ?? 0;
-        running.set(t, base + v);
-        return { t, base, top: base + v, v: p && p.v != null ? p.v : null };
+        return v;
+      });
+    } else {
+      data = stamps.map((t) => {
+        const p = nearestPoint(s.points, t, s.tol);
+        return p && p.v != null ? p.v : null;
       });
     }
-    hi = Math.max(0, ...running.values());
-    note = note ? `${note} · stacked on a shared time grid` : "stacked on a shared time grid";
-  } else {
-    const values = series.flatMap((s) => s.points.map((p) => p.v))
-      .filter((v): v is number => v != null);
-    if (!values.length) return null;
-    lo = Math.min(0, ...values);
-    hi = Math.max(...values, 0);
-  }
-  const plotted = series.flatMap((s) => s.points.map((p) => p.v))
-    .filter((v): v is number => v != null);
-  const integer = plotted.every(Number.isInteger);
+    return {
+      key: s.key,
+      label: s.label,
+      unit: s.unit,
+      data,
+      color: colorAt(theme, i, raw.length),
+      area: stacked || raw.length === 1,
+    };
+  });
+
+  if (stacked) note = note ? `${note} · stacked on a shared time grid` : "stacked on a shared time grid";
+
+  const plotted = series.flatMap((s) => s.data).filter((v): v is number => v != null);
+  if (!stacked && !plotted.length) return null;
 
   const units = new Set(series.map((s) => s.unit));
   return {
-    series,
     stamps,
+    series,
     stacked,
     note,
-    xMin: stamps[0],
-    xMax: stamps[stamps.length - 1],
-    yMin: lo,
-    yMax: hi,
-    integer,
     unit: units.size === 1 ? [...units][0] : "",
+    integer: plotted.every(Number.isInteger),
     xLabel: x.name,
     measureLabel: seriesField ? measures[0].name : spec.y.join(", "),
   };
 }
 
-function buildBarModel(fields: Field[], rows: Row[], spec: Spec): BarModel | null {
+// --------------------------------------------------------------------------- //
+// the data a bar chart is drawn from
+// --------------------------------------------------------------------------- //
+interface BarSeriesData {
+  key: string;
+  label: string;
+  unit: Unit;
+  data: Array<number | null>;
+  color: string;
+}
+
+export interface BarChartData {
+  /** Category labels, index-aligned with each series' `data`. Two rows may
+   * share a label - the chart keeps the query's own order, never groups by it. */
+  items: string[];
+  series: BarSeriesData[];
+  note: string;
+  unit: Unit;
+  integer: boolean;
+  /** Horizontal once labels stop fitting under a column - most real category
+   * axes here: cluster names, reasons, check titles. */
+  horizontal: boolean;
+  xLabel: string;
+}
+
+function buildBarData(fields: Field[], rows: Row[], spec: Spec, theme: Theme): BarChartData | null {
   const x = byName(fields, spec.x);
   const measures = spec.y.map((n) => byName(fields, n))
     .filter((f): f is Field => !!f).slice(0, GROUPED_CAP);
@@ -782,35 +736,55 @@ function buildBarModel(fields: Field[], rows: Row[], spec: Spec): BarModel | nul
   // Bars keep the order the query returned them in - the ORDER BY is the
   // author's answer to "sorted how", and re-sorting here would overrule it.
   const shown = rows.slice(0, BAR_CAP);
-  const items: BarItem[] = shown.map((row, i) => ({
-    key: `${i}:${keyOf(cellAt(row, x.index))}`,
-    label: keyOf(cellAt(row, x.index)),
-    values: measures.map((m) => numberAt(row, m.index)),
-  }));
-  const flat = items.flatMap((it) => it.values).filter((v): v is number => v != null);
+  const items = shown.map((row) => keyOf(cellAt(row, x.index)));
+  const values = shown.map((row) => measures.map((m) => numberAt(row, m.index)));
+  const flat = values.flat().filter((v): v is number => v != null);
   if (!flat.length) return null;
 
-  const series: BarSeries[] = measures.map((m, i) => ({
-    key: m.name, label: m.name, unit: unitOf(m.name), color: colorAt(i, measures.length),
+  const series: BarSeriesData[] = measures.map((m, i) => ({
+    key: m.name,
+    label: m.name,
+    unit: unitOf(m.name),
+    data: values.map((row) => row[i]),
+    color: colorAt(theme, i, measures.length),
   }));
   const units = new Set(series.map((s) => s.unit));
+  const longest = Math.max(0, ...items.map((label) => textWidth(label)));
   return {
     items,
     series,
     note: rows.length > BAR_CAP ? `the first ${BAR_CAP} of ${rows.length} rows` : "",
-    lo: Math.min(0, ...flat),
-    hi: Math.max(0, ...flat),
-    integer: flat.every(Number.isInteger),
     unit: units.size === 1 ? [...units][0] : "",
+    integer: flat.every(Number.isInteger),
+    horizontal: items.length > 12 || longest > 72,
     xLabel: x.name,
   };
 }
 
 // --------------------------------------------------------------------------- //
-// shared pieces
+// one of the two, resolved
 // --------------------------------------------------------------------------- //
-// The SVG is drawn at the width it actually has, so labels are measured against
-// real pixels rather than a guess a media query later breaks.
+type ChartData =
+  | { kind: "line"; value: LineChartData }
+  | { kind: "bars"; value: BarChartData };
+
+function buildChartData(fields: Field[], rows: Row[], spec: Spec, theme: Theme): ChartData | null {
+  if (spec.type === "line") {
+    const value = buildLineData(fields, rows, spec, theme);
+    return value && { kind: "line", value };
+  }
+  const value = buildBarData(fields, rows, spec, theme);
+  return value && { kind: "bars", value };
+}
+
+// --------------------------------------------------------------------------- //
+// sizing a chart to the card it is drawn in
+// --------------------------------------------------------------------------- //
+// Measured for the category-label ellipsis and the time-bucket wording only -
+// MUI sizes the chart itself. A fallback width is used until the first
+// measurement lands, so the first paint still gets a sensible guess.
+const FALLBACK_WIDTH = 600;
+
 function useWidth(ref: RefObject<HTMLElement | null>): number {
   const [width, setWidth] = useState(0);
   useEffect(() => {
@@ -829,578 +803,181 @@ function useWidth(ref: RefObject<HTMLElement | null>): number {
   return width;
 }
 
-// A legend is the dependable identity channel and is always there for two or
-// more series; direct labels on the marks supplement it, never replace it.
-/** All a legend needs of a series, which both models happen to carry. */
-interface LegendEntry {
-  key: string;
-  label: string;
-  color?: string;
+// --------------------------------------------------------------------------- //
+// axis and series adapters
+// --------------------------------------------------------------------------- //
+// A structural stand-in for MUI's own `AxisValueFormatterContext`: only the
+// field this file reads. MUI's real context always carries at least this, so
+// a callback typed against it is accepted wherever the fuller type is asked
+// for, without coupling this file to an internal generic.
+interface AxisFormatContext {
+  location: "tick" | "tooltip" | "legend" | "zoom-slider-tooltip";
 }
 
-interface LegendProps {
-  series: readonly LegendEntry[];
-  mark: "line" | "box";
-}
-
-function Legend({ series, mark }: LegendProps) {
-  if (series.length < 2) return null;
-  return (
-    <div className="chart-legend">
-      {series.map((s) => (
-        <span className="chart-key" key={s.key}>
-          <span className={mark === "line" ? "chart-key-line" : "chart-key-box"}
-            style={{ background: s.color }} />
-          {s.label}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-// Values lead, series names follow: the reader already knows which line they
-// are looking at and came for the number.
-const TIP_WIDTH = 240;                               // matches .chart-tip's max-width
-
-/** One line of the readout: which series, and what it read. */
-interface TipRow {
-  key: string;
-  label: string;
-  color?: string;
-  value: string;
-}
-
-/** The readout itself, positioned in the plot's own pixels. */
-interface Tip {
-  x: number;
-  y: number;
-  head: string;
-  rows: TipRow[];
-}
-
-interface TooltipProps {
-  tip: Tip | null;
-  width: number;
-}
-
-function Tooltip({ tip, width }: TooltipProps) {
-  if (!tip) return null;
-  // The readout never leaves the card: near the right edge it flips to the
-  // other side of what it is describing.
-  const flip = tip.x > width - (TIP_WIDTH + 14);
-  return (
-    <div
-      className="chart-tip"
-      aria-hidden="true"
-      style={{
-        left: Math.max(0, Math.min(tip.x, width)),
-        top: tip.y,
-        transform: `translate(${flip ? "calc(-100% - 12px)" : "12px"}, -50%)`,
-      }}
-    >
-      <div className="chart-tip-head">{tip.head}</div>
-      {tip.rows.map((r) => (
-        <div className="chart-tip-row" key={r.key}>
-          <span className="chart-key-line" style={{ background: r.color }} />
-          <span className="chart-tip-name">{r.label}</span>
-          <span className="chart-tip-value">{r.value}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// A null is a gap: the pen lifts and the next run starts a new subpath.
-/** A point on the plot. A null y is a gap the pen lifts over. */
-interface PathPoint {
-  x: number;
-  y: number | null;
-}
-
-function linePath(points: readonly PathPoint[]): string {
-  let d = "";
-  let pen = false;
-  for (const p of points) {
-    if (p.y == null) { pen = false; continue; }
-    d += `${pen ? "L" : "M"}${p.x.toFixed(1)},${p.y.toFixed(1)}`;
-    pen = true;
-  }
-  return d;
-}
-
-// The area under a single line, one closed shape per run of real values.
-/** A point that has a value. The area under a line is made of runs of these,
- * so the gaps are gone by the time a run is built rather than re-checked at
- * every read of `y`. */
-type SolidPoint = { x: number; y: number };
-
-function areaPath(points: readonly PathPoint[], baseY: number): string {
-  let d = "";
-  let run: SolidPoint[] = [];
-  const flush = () => {
-    if (run.length > 1) {
-      d += `M${run[0].x.toFixed(1)},${baseY.toFixed(1)}`;
-      for (const p of run) d += `L${p.x.toFixed(1)},${p.y.toFixed(1)}`;
-      d += `L${run[run.length - 1].x.toFixed(1)},${baseY.toFixed(1)}Z`;
-    }
-    run = [];
-  };
-  for (const p of points) {
-    if (p.y == null) flush(); else run.push({ x: p.x, y: p.y });
-  }
-  flush();
-  return d;
-}
-
-// A bar with its data end rounded and its baseline end square.
-function barPath(x: number, y: number, w: number, h: number, r: number,
-  horizontal: boolean): string {
-  const radius = Math.max(0, Math.min(r, horizontal ? w : h, (horizontal ? h : w) / 2));
-  if (radius <= 0) return `M${x},${y}h${w}v${h}h${-w}Z`;
-  if (horizontal) {
-    return `M${x},${y}h${w - radius}a${radius},${radius} 0 0 1 ${radius},${radius}`
-      + `v${h - 2 * radius}a${radius},${radius} 0 0 1 ${-radius},${radius}h${-(w - radius)}Z`;
-  }
-  return `M${x},${y + h}v${-(h - radius)}a${radius},${radius} 0 0 1 ${radius},${-radius}`
-    + `h${w - 2 * radius}a${radius},${radius} 0 0 1 ${radius},${radius}v${h - radius}Z`;
-}
-
-// Enough headroom for the value label a vertical bar chart draws above its
-// tallest bar: at 10px the glyphs of a bar that reaches the top gridline were
-// clipped by the top of the SVG.
-const PAD_TOP = 16;
-const AXIS_H = 24;
+type LineSeriesItem = ComponentProps<typeof LineChart>["series"][number];
+type BarSeriesItem = ComponentProps<typeof BarChart>["series"][number];
+type BarXAxis = NonNullable<ComponentProps<typeof BarChart>["xAxis"]>[number];
+type BarYAxis = NonNullable<ComponentProps<typeof BarChart>["yAxis"]>[number];
 
 // --------------------------------------------------------------------------- //
 // line
 // --------------------------------------------------------------------------- //
-interface LineChartProps {
-  model: LineModel;
+interface LineViewProps {
+  data: LineChartData;
   height: number;
 }
 
-function LineChart({ model, height }: LineChartProps) {
+function LineView({ data, height }: LineViewProps) {
+  const theme = useTheme();
   const wrap = useRef<HTMLDivElement | null>(null);
   const width = useWidth(wrap);
-  const [hover, setHover] = useState<number | null>(null);   // an index into model.stamps
 
-  const layout = useMemo(() => {
-    if (!width) return null;
-    const { ticks: yTicks, lo, hi } = niceTicks(model.yMin, model.yMax,
-      Math.max(2, Math.floor(height / 48)), model.integer ? 1 : 0);
-    const yLabels = yTicks.map((t) => formatTick(t, model.unit));
-    const left = Math.min(90, Math.max(...yLabels.map((t) => textWidth(t))) + 10);
+  const xAxis = useMemo(() => {
+    const unit = pickTimeUnit(data.stamps[0], data.stamps[data.stamps.length - 1],
+      Math.max(2, Math.floor((width || FALLBACK_WIDTH) / 80)));
+    return [{
+      scaleType: "time" as const,
+      data: data.stamps.map((t) => new Date(t)),
+      valueFormatter: (value: Date, ctx: AxisFormatContext) => (ctx.location === "tick"
+        ? formatTimeTick(value.getTime(), unit)
+        : formatTimeFull(value.getTime(), unit)),
+    }];
+  }, [data.stamps, width]);
 
-    // Direct labels ride the line ends for a handful of series; past four, or
-    // when two ends converge, the legend carries identity on its own.
-    const labelled = model.series.length <= 4 && !model.stacked;
-    const labelWidth = labelled
-      ? Math.min(124, Math.max(0, ...model.series.map((s) => textWidth(s.label))) + 10)
-      : 0;
-    const plotW = Math.max(40, width - left - Math.max(10, labelWidth));
-    const plotH = Math.max(40, height - PAD_TOP - AXIS_H);
-    const xScale = (t: number) => left + (model.xMax === model.xMin
-      ? plotW / 2
-      : ((t - model.xMin) / (model.xMax - model.xMin)) * plotW);
-    const yScale = (v: number) => PAD_TOP + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
-    const time = timeTicks(model.xMin, model.xMax, Math.max(2, Math.floor(plotW / 80)));
-    return {
-      left, plotW, plotH, xScale, yScale, yTicks, yLabels, labelled, labelWidth,
-      xTicks: time.ticks, xUnit: time.unit,
-    };
-  }, [width, height, model]);
-
-  const onMove = useCallback((e: ReactPointerEvent<SVGSVGElement>) => {
-    if (!layout || !model.stamps.length) return;
-    const box = e.currentTarget.getBoundingClientRect();
-    const px = e.clientX - box.left;
-    let best = 0;
-    let bestD = Infinity;
-    model.stamps.forEach((t, i) => {
-      const d = Math.abs(layout.xScale(t) - px);
-      if (d < bestD) { bestD = d; best = i; }
-    });
-    setHover(best);
-  }, [layout, model]);
-
-  // Keyboard reads the same values as the pointer: the crosshair steps along
-  // the axis, and Escape puts it away.
-  const onKey = useCallback((e: ReactKeyboardEvent<SVGSVGElement>) => {
-    const last = model.stamps.length - 1;
-    if (last < 0) return;
-    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-      e.preventDefault();
-      const step = e.key === "ArrowRight" ? 1 : -1;
-      setHover((h) => Math.max(0, Math.min(last, h == null ? (step > 0 ? 0 : last) : h + step)));
-    } else if (e.key === "Escape") {
-      setHover(null);
-    }
-  }, [model]);
-
-  if (!layout) return <div className="chart-plot" ref={wrap} style={{ height }} />;
-
-  const { left, plotW, plotH, xScale, yScale, yTicks, yLabels, xTicks, xUnit, labelled } = layout;
-  const single = model.series.length === 1 && !model.stacked;
-  const hoverT = hover != null ? model.stamps[hover] : null;
-  const baseY = yScale(0);
-  let lastLabelEnd = -Infinity;
-
-  // What each series is showing at the hovered stamp: the sample itself (only
-  // when it has a value - a gap is "—" rather than a dot), and the y it is
-  // drawn at, which is the band's top when the model is stacked and the value
-  // itself when it is not. `top` is null exactly when `point` is, so the dot
-  // and the tooltip row agree without either re-deciding.
-  const hovered: Array<{ series: LineSeries; point: LinePoint | null; top: number | null }> =
-    hoverT == null ? [] : model.series.map((s) => {
-      // A stacked model always has bands; `|| []` says so to the compiler
-      // rather than adding a case the drawing would have to handle.
-      const band = model.stacked ? (s.band || []).find((b) => b.t === hoverT) : null;
-      if (model.stacked) {
-        return band && band.v != null
-          ? { series: s, point: band, top: band.top }
-          : { series: s, point: null, top: null };
-      }
-      const p = nearestPoint(s.points, hoverT, s.tol);
-      return p && p.v != null
-        ? { series: s, point: p, top: p.v }
-        : { series: s, point: null, top: null };
-    });
+  const series = useMemo((): LineSeriesItem[] => data.series.map((s) => ({
+    id: s.key,
+    label: s.label,
+    data: s.data,
+    color: s.color,
+    area: s.area,
+    stack: data.stacked ? "total" : undefined,
+    valueFormatter: (value: number | null) => (value == null ? "—" : formatValue(value, s.unit)),
+  })), [data]);
 
   return (
-    <div className="chart-plot" ref={wrap}>
-      <svg
-        width="100%"
+    <Box ref={wrap} sx={{ width: "100%" }}>
+      <LineChart
         height={height}
-        viewBox={`0 0 ${width} ${height}`}
-        role="img"
-        aria-label={model.ariaLabel}
-        tabIndex={0}
-        onPointerMove={onMove}
-        onPointerLeave={() => setHover(null)}
-        onBlur={() => setHover(null)}
-        onKeyDown={onKey}
-      >
-        {/* grid: solid hairlines one step off the surface, never dashed */}
-        <g className="chart-grid">
-          {yTicks.map((t) => (
-            <line key={t} x1={left} x2={left + plotW} y1={yScale(t)} y2={yScale(t)}
-              strokeWidth="1" shapeRendering="crispEdges" opacity={t === 0 ? 1 : 0.65} />
-          ))}
-        </g>
-        <g className="chart-axis">
-          {yTicks.map((t, i) => (
-            <text key={t} x={left - 6} y={yScale(t)} textAnchor="end" dominantBaseline="middle">
-              {yLabels[i]}
-            </text>
-          ))}
-          {xTicks.map((t) => {
-            const label = formatTimeTick(t, xUnit);
-            const cx = xScale(t);
-            const half = textWidth(label) / 2;
-            if (cx - half < left - 6 || cx + half > left + plotW + 6 || cx - half < lastLabelEnd + 10) {
-              return null;
-            }
-            lastLabelEnd = cx + half;
-            return (
-              <text key={t} x={cx} y={PAD_TOP + plotH + 14} textAnchor="middle"
-                dominantBaseline="hanging">{label}</text>
-            );
-          })}
-        </g>
-
-        {model.stacked
-          ? model.series.map((s) => {
-            // Only a stacked model has bands, and this is the stacked branch -
-            // the fallback is what says so to the compiler rather than a
-            // second case the drawing has to handle.
-            const band = s.band || [];
-            return (
-              // a 1px inset top and bottom is the surface gap between bands:
-              // the separation is air, never a stroke around the fill
-              <path
-                key={s.key}
-                d={`${band.map((b, i) => `${i ? "L" : "M"}${xScale(b.t).toFixed(1)},${(yScale(b.top) + 1).toFixed(1)}`).join("")}`
-                  + `${[...band].reverse().map((b) => `L${xScale(b.t).toFixed(1)},${(yScale(b.base) - 1).toFixed(1)}`).join("")}Z`}
-                fill={s.color}
-                fillOpacity="0.62"
-              />
-            );
-          })
-          : model.series.map((s) => {
-            const pts = s.points.map((p) => ({ x: xScale(p.t), y: p.v == null ? null : yScale(p.v) }));
-            return (
-              <g key={s.key}>
-                {single && <path d={areaPath(pts, baseY)} fill={s.color} fillOpacity="0.1" />}
-                <path d={linePath(pts)} fill="none" stroke={s.color} strokeWidth="2"
-                  strokeLinejoin="round" strokeLinecap="round" />
-              </g>
-            );
-          })}
-
-        {/* the crosshair finds the X: the reader aims at a time, not at a line */}
-        {hoverT != null && (
-          <g>
-            <line className="chart-crosshair" x1={xScale(hoverT)} x2={xScale(hoverT)}
-              y1={PAD_TOP} y2={PAD_TOP + plotH} strokeWidth="1" shapeRendering="crispEdges" />
-            {hovered.map((h) => (h.point == null || h.top == null ? null : (
-              <circle key={h.series.key} className="chart-dot" cx={xScale(h.point.t)}
-                cy={yScale(h.top)} r="4.5" fill={h.series.color} strokeWidth="2" />
-            )))}
-          </g>
-        )}
-
-        {/* end labels ride the lines only where they will not collide */}
-        {labelled && model.series.map((s) => {
-          // `find` already answered "the last point that has a value", so the
-          // two reads below are of a number - the extra null test is what says
-          // that where the compiler can see it.
-          const last = [...s.points].reverse().find((p) => p.v != null);
-          if (!last || last.v == null) return null;
-          const y = yScale(last.v);
-          const clash = model.series.some((o) => {
-            if (o === s) return false;
-            const p = [...o.points].reverse().find((q) => q.v != null);
-            return p != null && p.v != null && Math.abs(yScale(p.v) - y) < 13;
-          });
-          if (clash) return null;
-          return (
-            <text key={s.key} className="chart-end-label" x={left + plotW + 6} y={y}
-              dominantBaseline="middle">
-              {ellipsize(s.label, layout.labelWidth - 8)}
-            </text>
-          );
-        })}
-      </svg>
-      {hoverT != null && (
-        <Tooltip
-          width={width}
-          tip={{
-            x: xScale(hoverT),
-            y: height / 2,
-            head: formatTimeFull(hoverT, xUnit),
-            rows: hovered.map((h) => ({
-              key: h.series.key,
-              label: h.series.label,
-              color: h.series.color,
-              value: h.point ? formatValue(h.point.v, h.series.unit) : "—",
-            })),
-          }}
-        />
-      )}
-    </div>
+        series={series}
+        xAxis={xAxis}
+        yAxis={[{ valueFormatter: (v: number) => formatTick(v, data.unit) }]}
+        hideLegend={data.series.length < 2}
+        grid={{ horizontal: true }}
+        sx={{
+          "& .MuiChartsGrid-line": { stroke: theme.palette.chart.grid },
+          // A stacked band is read as a surface, not a line: the separation
+          // between bands is air, never a stroke, which is why the old SVG
+          // stacked areas never drew a stroke either.
+          ...(data.stacked ? { "& .MuiLineChart-line": { display: "none" } } : null),
+        }}
+      />
+    </Box>
   );
 }
 
 // --------------------------------------------------------------------------- //
 // bars
 // --------------------------------------------------------------------------- //
-interface BarChartProps {
-  model: BarModel;
+interface BarViewProps {
+  data: BarChartData;
   height: number;
 }
 
-function BarChart({ model, height }: BarChartProps) {
+// Enough vertical room per row that a horizontal bar chart does not squeeze
+// twenty categories into the same box a five-category one gets.
+const BAR_ROW = 28;
+
+function BarView({ data, height }: BarViewProps) {
+  const theme = useTheme();
   const wrap = useRef<HTMLDivElement | null>(null);
   const width = useWidth(wrap);
-  const [hover, setHover] = useState<string | null>(null);   // "item:series"
+  const w = width || FALLBACK_WIDTH;
+  const singleMeasure = data.series.length === 1;
 
-  const longest = useMemo(
-    () => Math.max(0, ...model.items.map((it) => textWidth(it.label))), [model]);
-  // Horizontal once labels stop fitting under a column - which is most real
-  // category axes here: cluster names, reasons, check titles.
-  const horizontal = model.items.length > 12 || longest > 72;
-  const count = model.series.length;
-  const rowBand = Math.max(22, count * 14 + 12);
-  const plotH = horizontal
-    ? model.items.length * rowBand
-    : Math.max(110, height - PAD_TOP - AXIS_H - 2);
-  const svgHeight = horizontal ? PAD_TOP + plotH + AXIS_H : height;
+  // The budget a category label is ellipsized against: a share of the card's
+  // width for a horizontal chart's left margin, an even split of it for a
+  // vertical chart's columns. Only a rough match for MUI's own margins, which
+  // are not known until it has laid itself out - close enough that a label is
+  // shortened rather than left to collide.
+  const budget = data.horizontal
+    ? Math.max(40, Math.round(w * 0.35))
+    : Math.max(20, w / data.items.length - 6);
 
-  // The value labels' width decides how much room the bars leave for them.
-  const widestValue = useMemo(() => Math.max(0, ...model.items.flatMap(
-    (it) => it.values.map((v, j) => (v == null ? 0 : textWidth(formatValue(v, model.series[j].unit)))))), [model]);
-  const vertical = useMemo(() => niceTicks(model.lo, model.hi, 4, model.integer ? 1 : 0), [model]);
+  const categoryAxis: BarXAxis & BarYAxis = useMemo(() => ({
+    scaleType: "band",
+    data: data.items,
+    valueFormatter: (value: string, ctx: AxisFormatContext) => (ctx.location === "tick"
+      ? ellipsize(value, budget)
+      : value),
+  }), [data.items, budget]);
 
-  const left = horizontal
-    ? Math.min(Math.max(56, longest + 12), Math.round((width || 600) * 0.38))
-    : Math.min(90, Math.max(...vertical.ticks.map((t) => textWidth(formatTick(t, model.unit)))) + 10);
-  const right = horizontal ? Math.min(92, widestValue + 14) : 10;
-  const plotW = Math.max(40, (width || 600) - left - right);
+  const valueAxis: BarXAxis & BarYAxis = useMemo(() => ({
+    valueFormatter: (value: number) => formatTick(value, data.unit),
+  }), [data.unit]);
 
-  const scale = horizontal
-    ? niceTicks(model.lo, model.hi, Math.max(2, Math.floor(plotW / 110)), model.integer ? 1 : 0)
-    : vertical;
-  const { ticks, lo, hi } = scale;
-  const zero = Math.max(lo, Math.min(0, hi));
-  const vx = (v: number) => left + ((v - lo) / (hi - lo || 1)) * plotW;
-  const vy = (v: number) => PAD_TOP + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
+  const series = useMemo((): BarSeriesItem[] => data.series.map((s) => ({
+    id: s.key,
+    label: s.label,
+    data: s.data,
+    color: s.color,
+    layout: data.horizontal ? "horizontal" : "vertical",
+    valueFormatter: (value: number | null) => (value == null ? "—" : formatValue(value, s.unit)),
+    // Grouped, multi-measure bars keep no value labels - the old chart only
+    // drew them for a vertical single measure or a horizontal chart that had
+    // room, and matching that pixel-fit check through MUI's own layout is not
+    // cheap, so the simpler single-measure rule stands in for both layouts.
+    barLabel: singleMeasure
+      ? (item: BarItem) => (item.value == null ? undefined : formatValue(item.value, s.unit))
+      : undefined,
+  })), [data, singleMeasure]);
 
-  const onKey = useCallback((e: ReactKeyboardEvent<SVGSVGElement>) => {
-    const last = model.items.length - 1;
-    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft" && e.key !== "Escape") return;
-    if (e.key === "Escape") { setHover(null); return; }
-    e.preventDefault();
-    const step = e.key === "ArrowRight" ? 1 : -1;
-    setHover((h) => {
-      const i = h == null ? (step > 0 ? 0 : last) : Math.max(0, Math.min(last, Number(h.split(":")[0]) + step));
-      return `${i}:0`;
-    });
-  }, [model]);
-
-  if (!width) return <div className="chart-plot" ref={wrap} style={{ height: svgHeight }} />;
-
-  const bars: ReactNode[] = [];
-  const labels: ReactNode[] = [];
-  // Two columns in a wide card would otherwise sit a quarter of a screen
-  // apart. The band is capped and the set is centred, so the bars stay a group
-  // and the leftover stays air.
-  const usedW = Math.min(plotW, model.items.length * 96);
-  const originX = left + (plotW - usedW) / 2;
-  const band = horizontal ? rowBand : usedW / model.items.length;
-  const thickness = horizontal
-    ? Math.min(24, (rowBand - 8 - 2 * (count - 1)) / count)
-    : Math.min(24, (Math.max(6, band - 8) - 2 * (count - 1)) / count);
-
-  model.items.forEach((item, i) => {
-    const groupSize = thickness * count + 2 * (count - 1);
-    item.values.forEach((v, j) => {
-      if (v == null) return;
-      const key = `${i}:${j}`;
-      const color = model.series[j].color;
-      const dim = hover && hover !== key && hover.split(":")[0] !== String(i);
-      const text = formatValue(v, model.series[j].unit);
-      if (horizontal) {
-        const y = PAD_TOP + i * rowBand + (rowBand - groupSize) / 2 + j * (thickness + 2);
-        const x = Math.min(vx(zero), vx(v));
-        const w = Math.abs(vx(v) - vx(zero));
-        // zero gets no mark and no label: a one-pixel sliver reads as "a
-        // little", which is not what zero means. The table still has it.
-        if (w < 0.5) return;
-        bars.push(
-          <path key={key} className="chart-bar" d={barPath(x, y, w, thickness, 4, true)}
-            fill={color} opacity={dim ? 0.68 : 1}
-            onPointerEnter={() => setHover(key)} />
-        );
-        if (thickness >= 11 && x + w + 6 + textWidth(text) <= width - 2) {
-          labels.push(
-            <text key={`v${key}`} className="chart-value" x={x + w + 6} y={y + thickness / 2}
-              dominantBaseline="middle">{text}</text>
-          );
-        }
-      } else {
-        const x = originX + i * band + (band - groupSize) / 2 + j * (thickness + 2);
-        const y = Math.min(vy(zero), vy(v));
-        const h = Math.abs(vy(v) - vy(zero));
-        if (h < 0.5) return;
-        bars.push(
-          <path key={key} className="chart-bar" d={barPath(x, y, thickness, h, 4, false)}
-            fill={color} opacity={dim ? 0.68 : 1}
-            onPointerEnter={() => setHover(key)} />
-        );
-        if (count === 1 && textWidth(text) <= band - 4) {
-          labels.push(
-            <text key={`v${key}`} className="chart-value" x={x + thickness / 2} y={y - 5}
-              textAnchor="middle">{text}</text>
-          );
-        }
-      }
-    });
-    const label = horizontal
-      ? ellipsize(item.label, left - 14)
-      : ellipsize(item.label, band - 6);
-    if (label) {
-      labels.push(horizontal ? (
-        <text key={`c${i}`} className="chart-axis-text" x={left - 8}
-          y={PAD_TOP + i * rowBand + rowBand / 2} textAnchor="end" dominantBaseline="middle">
-          {label}
-        </text>
-      ) : (
-        <text key={`c${i}`} className="chart-axis-text" x={originX + i * band + band / 2}
-          y={PAD_TOP + plotH + 8} textAnchor="middle" dominantBaseline="hanging">{label}</text>
-      ));
-    }
-  });
-
-  const picked = hover ? Number(hover.split(":")[0]) : null;
-  const item = picked == null ? null : model.items[picked];
-  const tip: Tip | null = !item || picked == null ? null : {
-    x: horizontal
-      ? Math.min(vx(Math.max(...item.values.filter((v): v is number => v != null), zero)), width - 4)
-      : originX + picked * band + band / 2,
-    y: horizontal ? PAD_TOP + picked * rowBand + rowBand / 2 : svgHeight / 2,
-    head: item.label,
-    rows: model.series.map((s, k) => ({
-      key: s.key,
-      label: s.label,
-      color: s.color,
-      value: item.values[k] == null ? "—" : formatValue(item.values[k], s.unit),
-    })),
-  };
+  const chartHeight = data.horizontal ? Math.max(height, data.items.length * BAR_ROW + 48) : height;
 
   return (
-    <div className="chart-plot" ref={wrap}>
-      <svg
-        width="100%"
-        height={svgHeight}
-        viewBox={`0 0 ${width} ${svgHeight}`}
-        role="img"
-        aria-label={model.ariaLabel}
-        tabIndex={0}
-        onPointerLeave={() => setHover(null)}
-        onBlur={() => setHover(null)}
-        onKeyDown={onKey}
-      >
-        <g className="chart-grid">
-          {ticks.map((t) => (horizontal ? (
-            <line key={t} x1={vx(t)} x2={vx(t)} y1={PAD_TOP} y2={PAD_TOP + plotH} strokeWidth="1"
-              shapeRendering="crispEdges" opacity={t === zero ? 1 : 0.65} />
-          ) : (
-            <line key={t} x1={left} x2={left + plotW} y1={vy(t)} y2={vy(t)} strokeWidth="1"
-              shapeRendering="crispEdges" opacity={t === zero ? 1 : 0.65} />
-          )))}
-        </g>
-        <g className="chart-axis">
-          {ticks.map((t) => (horizontal ? (
-            <text key={t} x={vx(t)} y={PAD_TOP + plotH + 8} textAnchor="middle"
-              dominantBaseline="hanging">{formatTick(t, model.unit)}</text>
-          ) : (
-            <text key={t} x={left - 6} y={vy(t)} textAnchor="end" dominantBaseline="middle">
-              {formatTick(t, model.unit)}
-            </text>
-          )))}
-        </g>
-        {bars}
-        <g className="chart-axis">{labels}</g>
-      </svg>
-      {tip && <Tooltip tip={tip} width={width} />}
-    </div>
+    <Box ref={wrap} sx={{ width: "100%" }}>
+      <BarChart
+        height={chartHeight}
+        layout={data.horizontal ? "horizontal" : "vertical"}
+        series={series}
+        xAxis={[data.horizontal ? valueAxis : categoryAxis]}
+        yAxis={[data.horizontal ? categoryAxis : valueAxis]}
+        hideLegend={data.series.length < 2}
+        grid={data.horizontal ? { vertical: true } : { horizontal: true }}
+        sx={{ "& .MuiChartsGrid-line": { stroke: theme.palette.chart.grid } }}
+      />
+    </Box>
   );
 }
 
 // --------------------------------------------------------------------------- //
-// the component
+// accessible labels
 // --------------------------------------------------------------------------- //
 // The chart is one image to a screen reader; the label says what is in it and
 // where the values themselves are. The table under a query result is that
 // place - the cluster timeline has no table, so it does not claim one.
 const TABLE_NOTE = " The table below has every value.";
 
-function lineAria(model: LineModel, tableBelow: boolean): string {
-  const who = model.series.length === 1
-    ? model.series[0].label
-    : `${model.series.length} series (${model.series.slice(0, 6).map((s) => s.label).join(", ")}${model.series.length > 6 ? ", and more" : ""})`;
-  return `Line chart of ${model.measureLabel} over ${model.xLabel}: ${who}, from `
-    + `${formatTimeFull(model.xMin, "minute")} to ${formatTimeFull(model.xMax, "minute")}.`
+function lineAria(data: LineChartData, tableBelow: boolean): string {
+  const who = data.series.length === 1
+    ? data.series[0].label
+    : `${data.series.length} series (${data.series.slice(0, 6).map((s) => s.label).join(", ")}${data.series.length > 6 ? ", and more" : ""})`;
+  const first = data.stamps[0];
+  const last = data.stamps[data.stamps.length - 1];
+  return `Line chart of ${data.measureLabel} over ${data.xLabel}: ${who}, from `
+    + `${formatTimeFull(first, "hour")} to ${formatTimeFull(last, "hour")}.`
     + (tableBelow ? TABLE_NOTE : "");
 }
 
-function barAria(model: BarModel, tableBelow: boolean): string {
-  return `Bar chart of ${model.series.map((s) => s.label).join(", ")} by ${model.xLabel}: `
-    + `${model.items.length} categories, ${model.items[0].label} to `
-    + `${model.items[model.items.length - 1].label}.`
+function barAria(data: BarChartData, tableBelow: boolean): string {
+  return `Bar chart of ${data.series.map((s) => s.label).join(", ")} by ${data.xLabel}: `
+    + `${data.items.length} categories, ${data.items[0]} to `
+    + `${data.items[data.items.length - 1]}.`
     + (tableBelow ? TABLE_NOTE : "");
 }
 
+// --------------------------------------------------------------------------- //
+// the component
+// --------------------------------------------------------------------------- //
 // columns / columnTypes / rows are the query response as it arrived; spec is
 // what resolveSpec worked out from it. A caller that hands in something
 // undrawable gets nothing back rather than an empty frame.
@@ -1422,37 +999,30 @@ export interface ChartProps {
 
 export default function Chart({
   columns, columnTypes, rows, spec, fields: given, height = 260, tableBelow = true,
-}: ChartProps) {
+}: ChartProps): ReactNode {
+  const theme = useTheme();
   const fields = useMemo(
     () => given || inferFields(columns, columnTypes, rows), [given, columns, columnTypes, rows]);
-  // Built one branch at a time rather than as a union, so each aria label is
-  // written from the model it is describing.
-  const model = useMemo(() => {
-    if (!spec) return null;
-    if (spec.type === "line") {
-      const built = buildLineModel(fields, rows || [], spec);
-      if (!built) return null;
-      built.ariaLabel = lineAria(built, tableBelow);
-      return built;
-    }
-    const built = buildBarModel(fields, rows || [], spec);
-    if (!built) return null;
-    built.ariaLabel = barAria(built, tableBelow);
-    return built;
-  }, [fields, rows, spec, tableBelow]);
 
-  // A model only exists when a spec produced it, so the second test is what
-  // says so to the type checker rather than a new way out.
-  if (!model || !spec) return null;
-  const line = spec.type === "line";
+  const data = useMemo(
+    () => (spec ? buildChartData(fields, rows || [], spec, theme) : null),
+    [fields, rows, spec, theme]);
+
+  if (!spec || !data) return null;
+  const ariaLabel = data.kind === "line" ? lineAria(data.value, tableBelow) : barAria(data.value, tableBelow);
+
   return (
-    <div className="chart">
-      <Legend series={model.series}
-        mark={line && !(model as LineModel).stacked ? "line" : "box"} />
-      {line
-        ? <LineChart model={model as LineModel} height={height} />
-        : <BarChart model={model as BarModel} height={height} />}
-      {model.note && <div className="chart-note">{model.note}</div>}
-    </div>
+    <Box>
+      <Box role="img" aria-label={ariaLabel}>
+        {data.kind === "line"
+          ? <LineView data={data.value} height={height} />
+          : <BarView data={data.value} height={height} />}
+      </Box>
+      {data.value.note && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+          {data.value.note}
+        </Typography>
+      )}
+    </Box>
   );
 }

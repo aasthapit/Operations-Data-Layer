@@ -4,11 +4,33 @@
 // The views take `route` and `nav` as props rather than reaching for a router,
 // so a test can hand them the real ones (through useRoute) and then assert on
 // window.location - which is what the app itself treats as its state.
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
+import { ThemeProvider } from "@mui/material/styles";
 import { render } from "@testing-library/react";
+import type { RenderOptions } from "@testing-library/react";
 import { vi } from "vitest";
 import { useRoute } from "../router";
 import type { Nav, QueryValues, RouteApi } from "../router";
+import { createAppTheme } from "../theme";
+import type { ColorMode } from "../theme";
+
+// Everything the app renders sits under its own theme, and components read
+// colours and densities off it (`palette.status`, `palette.chart`, the dense
+// control defaults). A component rendered without one would silently get MUI's
+// stock theme, where those are simply absent - so the suite provides the real
+// thing, dark by default because that is what the app opens as.
+/** `render`, under the application theme. The default render for this suite. */
+export function renderThemed(
+  ui: ReactElement,
+  { mode = "dark", ...options }: RenderOptions & { mode?: ColorMode } = {},
+) {
+  return render(ui, {
+    wrapper: ({ children }) => (
+      <ThemeProvider theme={createAppTheme(mode)}>{children}</ThemeProvider>
+    ),
+    ...options,
+  });
+}
 
 const enc = encodeURIComponent;
 
@@ -40,7 +62,7 @@ export function makeNav(navigate: RouteApi["navigate"], back = vi.fn()): Nav {
 // on; `render` is called with { route, nav } every time the route changes, so
 // the view sees the new query string the way it does in the app.
 export function renderView(build: (props: { route: RouteApi; nav: Nav }) => ReactNode,
-  { at = "/" }: { at?: string } = {}) {
+  { at = "/", mode = "dark" }: { at?: string; mode?: ColorMode } = {}) {
   window.history.replaceState({ odl: 0 }, "", at);
   const back = vi.fn();
   let navRef: Nav | null = null;
@@ -52,7 +74,7 @@ export function renderView(build: (props: { route: RouteApi; nav: Nav }) => Reac
     return build({ route, nav });
   }
 
-  const view = render(<Host />);
+  const view = renderThemed(<Host />, { mode });
   return { ...view, back, nav: () => navRef };
 }
 

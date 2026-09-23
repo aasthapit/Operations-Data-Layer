@@ -131,10 +131,9 @@ export default function ResultTable({
         key: `${i}:${name}`,
         label: name,
         filter: filter ? "text" : undefined,
-        // A result cell never wraps: short values stay on one line and long
-        // ones are truncated with the full text in the title, so the table
-        // scrolls sideways instead of growing rows three lines tall.
-        className: "nowrap",
+        // No `nowrap` of its own any more: the grid keeps a cell to one line
+        // and clips what does not fit, and `Cell` already carries the whole of
+        // a long value in its title, which is what the class was for.
         align: numeric ? ("right" as const) : undefined,
         sortValue: (r) => r.values[i],
         filterValue: (r) => {

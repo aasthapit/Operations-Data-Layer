@@ -6,7 +6,12 @@ import * as cache from "../cache";
 import { answer, fails } from "../test/apiMock";
 import type { ApiMock } from "../test/apiMock";
 import { closestElement, currentUrl, renderView } from "../test/harness";
+import { cellTexts, gridRows, searchBox, sortBy } from "../test/grid";
 import { CLUSTERS, clustersResponse } from "../test/fixtures/fleet";
+
+/** A data row of a table. The grid draws divs, so a row is what carries the
+ * role rather than a `<tr>`. */
+const GRID_ROW = '[role="row"]';
 
 vi.mock("../api", async () => {
   const { createApiMock } = await import("../test/apiMock");
@@ -46,7 +51,7 @@ const open = (at = "/clusters", onOpen = vi.fn()) => ({
 describe("the table", () => {
   it("draws a row per cluster with what the fleet view is about", async () => {
     open();
-    const row = closestElement(await screen.findByText("ocp-prod-iad-02"), "tr");
+    const row = closestElement(await screen.findByText("ocp-prod-iad-02"), GRID_ROW);
     expect(within(row).getByText("warning")).toBeInTheDocument();
     expect(within(row).getByText("hub-east")).toBeInTheDocument();
     expect(within(row).getByText("us-east-1 / iad1")).toBeInTheDocument();
@@ -57,13 +62,13 @@ describe("the table", () => {
 
   it("shows where a cluster is upgrading to", async () => {
     open();
-    const row = closestElement(await screen.findByText("ocp-stage-iad-01"), "tr");
+    const row = closestElement(await screen.findByText("ocp-stage-iad-01"), GRID_ROW);
     expect(within(row).getByText("→ 4.16.7 (62%)")).toBeInTheDocument();
   });
 
   it("says usage is not available for a cluster serving no metrics", async () => {
     open();
-    const row = closestElement(await screen.findByText("ocp-dev-iad-01"), "tr");
+    const row = closestElement(await screen.findByText("ocp-dev-iad-01"), GRID_ROW);
     expect(within(row).getAllByText("n/a")).toHaveLength(2);
   });
 
@@ -82,7 +87,7 @@ describe("the table", () => {
   it("stands the table in while it is on the wire", () => {
     answer(api, { clusters: () => new Promise(() => {}) });
     const { container } = open();
-    expect(container.querySelector(".skeleton-table")).toBeInTheDocument();
+    expect(container.querySelector("[data-placeholder]")).toBeInTheDocument();
   });
 
   it("shows the failure in place of the table", async () => {
@@ -153,20 +158,19 @@ describe("sorting the list client-side", () => {
     const user = userEvent.setup();
     open();
     await screen.findByText("ocp-prod-iad-01");
-    const names = () => screen.getAllByRole("row").slice(2)
-      .map((row) => within(row).getAllByRole("cell")[0].textContent);
+    const names = () => cellTexts("Cluster");
 
-    await user.click(screen.getByRole("button", { name: "Nodes" }));
+    await sortBy("Nodes", { user });
     expect(names()[0]).toBe("ocp-dev-iad-01");          // 0/3, the fewest nodes
 
-    await user.click(screen.getByRole("button", { name: "CPU" }));
+    await sortBy("CPU", { user });
     // A cluster with no metrics has no percentage, so it sorts last either way.
     expect(names().at(-1)).toBe("ocp-dev-iad-01");
 
-    await user.click(screen.getByRole("button", { name: "Checks" }));
+    await sortBy("Checks", { user });
     expect(names()[0]).toBe("ocp-prod-iad-01");         // nothing failed or warned
 
-    await user.click(screen.getByRole("button", { name: "Apps" }));
+    await sortBy("Apps", { user });
     expect(names()[0]).toBe("ocp-dev-iad-01");          // 2 applications
   });
 
@@ -174,8 +178,8 @@ describe("sorting the list client-side", () => {
     const user = userEvent.setup();
     open();
     await screen.findByText("ocp-prod-iad-01");
-    await user.type(screen.getByLabelText("Search this table"), "us-west-2");
-    await waitFor(() => expect(screen.getAllByRole("row").slice(2)).toHaveLength(1));
+    await user.type(searchBox(), "us-west-2");
+    await waitFor(() => expect(gridRows()).toHaveLength(1));
     expect(screen.getByText("ocp-prod-sjc-01")).toBeInTheDocument();
   });
 });

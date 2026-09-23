@@ -1,8 +1,12 @@
-import type { ReactNode } from "react";
+import { Box, Link, Stack, Typography } from "@mui/material";
+import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { api } from "../api";
 import type { PatchJobResponse, PatchJobSummary, PatchReportResponse } from "../api/types";
 import { useFetch } from "../hooks";
-import { Stat, ErrorBanner, DataTable, SkeletonStats, SkeletonTable, SkeletonLines } from "../components";
+import {
+  Card, KeyLabel, KeyValues, MONO_FONT, Mono, Muted, Pill, SectionHead, StatGrid, Tag, ToneText,
+  Stat, ErrorBanner, DataTable, SkeletonStats, SkeletonTable, SkeletonLines,
+} from "../components";
 import type { Column } from "../components";
 import type { Nav } from "../router";
 
@@ -25,15 +29,6 @@ const JOB_TONE: Record<string, string> = {
 };
 const OUTCOME_TONE: Record<string, string> = { passed: "healthy", skipped: "warning", failed: "critical", pending: "unknown" };
 
-interface TagProps {
-  tone?: string;
-  children?: ReactNode;
-}
-
-function Tag({ tone, children }: TagProps) {
-  return <span className={`pill ${tone || "unknown"}`}><span className={`dot-s ${tone || "unknown"}`} />{children}</span>;
-}
-
 function fmtTime(iso: string | null | undefined) {
   return iso ? new Date(iso).toLocaleString() : "—";
 }
@@ -44,7 +39,7 @@ const JOB_COLUMNS: Column<PatchJobSummary>[] = [
   { key: "requested_by", label: "Requested", filter: "select" },
   {
     key: "approved_by", label: "Approved", filter: "select",
-    render: (j) => j.approved_by || <span className="muted">pending</span>,
+    render: (j) => j.approved_by || <Muted>pending</Muted>,
   },
   { key: "target_version", label: "Target", className: "mono", filter: "select" },
   {
@@ -53,21 +48,27 @@ const JOB_COLUMNS: Column<PatchJobSummary>[] = [
     filterValue: (j) => `${j.totals.succeeded}/${j.totals.total} ${j.totals.success_pct}%`,
     render: (j) => (
       <>
-        <span style={{ color: "var(--healthy)" }}>{j.totals.succeeded}✓</span>{" "}
-        {j.totals.skipped ? <span style={{ color: "var(--warning)" }}>{j.totals.skipped}⤼</span> : null}{" "}
-        {j.totals.failed ? <span style={{ color: "var(--critical)" }}>{j.totals.failed}✕</span> : null}
-        <span className="muted"> / {j.totals.total} · {j.totals.success_pct}%</span>
+        <ToneText tone="healthy">{j.totals.succeeded}✓</ToneText>{" "}
+        {j.totals.skipped ? <ToneText tone="warning">{j.totals.skipped}⤼</ToneText> : null}{" "}
+        {j.totals.failed ? <ToneText tone="critical">{j.totals.failed}✕</ToneText> : null}
+        <Muted> / {j.totals.total} · {j.totals.success_pct}%</Muted>
       </>
     ),
   },
-  { key: "status", label: "Status", filter: "select", render: (j) => <Tag tone={JOB_TONE[j.status]}>{j.status}</Tag> },
+  {
+    key: "status", label: "Status", filter: "select",
+    render: (j) => <Pill status={JOB_TONE[j.status]}>{j.status}</Pill>,
+  },
   { key: "created_at", label: "Created", className: "muted nowrap", render: (j) => fmtTime(j.created_at) },
 ];
 
 const TASK_COLUMNS: Column<TaskRow>[] = [
   { key: "cluster", label: "Cluster", className: "mono", filter: "text" },
   { key: "phase", label: "Phase", filter: "select" },
-  { key: "outcome", label: "Outcome", filter: "select", render: (t) => <Tag tone={OUTCOME_TONE[t.outcome]}>{t.outcome}</Tag> },
+  {
+    key: "outcome", label: "Outcome", filter: "select",
+    render: (t) => <Pill status={OUTCOME_TONE[t.outcome]}>{t.outcome}</Pill>,
+  },
   {
     key: "version", label: "Version", className: "mono nowrap",
     sortValue: (t) => t.version_to,
@@ -89,19 +90,18 @@ export default function Patching({ id, nav }: PatchingProps) {
   if (id) return <JobDetail id={id} nav={nav} />;
 
   return (
-    <div className="grid" style={{ gap: 20 }}>
-      <div>
-        <div className="section-title" style={{ margin: "0 0 4px" }}>Patching</div>
-        <div className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>
-          Durable system of record - who requested, who approved, the change record, per-cluster outcome, and an immutable audit trail.
-        </div>
+    <Stack spacing={2.5}>
+      <Box>
+        <SectionHead
+          title="Patching"
+          description="Durable system of record - who requested, who approved, the change record, per-cluster outcome, and an immutable audit trail."
+        />
         {report.error && !report.data ? <ErrorBanner error={report.error} /> : !report.data ? <SkeletonStats count={4} /> : (
           <Report data={report.data} />
         )}
-      </div>
+      </Box>
 
-      <div className="card" style={{ padding: 0 }}>
-        <div style={{ padding: "18px 18px 0" }}><h3>Jobs</h3></div>
+      <Card flush title="Jobs">
         {jobs.error && !jobs.data ? <ErrorBanner error={jobs.error} /> : !jobs.data ? <SkeletonTable columns={8} rows={6} /> : (
           <DataTable
             id="patching.jobs"
@@ -113,8 +113,8 @@ export default function Patching({ id, nav }: PatchingProps) {
             empty="No patching jobs yet. Submit one via the N8N form."
           />
         )}
-      </div>
-    </div>
+      </Card>
+    </Stack>
   );
 }
 
@@ -122,22 +122,21 @@ function Report({ data }: { data: PatchReportResponse }) {
   const s = data.jobs_by_status || {};
   const attention = (s.paused || 0) + (s.failed || 0);
   return (
-    <div className="grid" style={{ gap: 12 }}>
-      <div className="stats">
+    <Stack spacing={1.5}>
+      <StatGrid>
         <Stat label="Jobs" value={data.jobs_total} kind="accent" />
         <Stat label="Completed" value={s.completed || 0} kind="healthy" />
         <Stat label="Need attention" value={attention} kind={attention ? "warning" : "healthy"} />
         <Stat label="Avg success" value={data.avg_success_pct == null ? "—" : `${data.avg_success_pct}%`} kind="accent" />
-      </div>
-      <div className="card">
-        <h3>Clusters across all jobs</h3>
-        <div className="row" style={{ gap: 28 }}>
-          <div><span style={{ color: "var(--healthy)" }}>●</span> {data.clusters.succeeded} patched</div>
-          <div><span style={{ color: "var(--critical)" }}>●</span> {data.clusters.failed} failed</div>
-          <div><span style={{ color: "var(--text-faint)" }}>●</span> {data.clusters.pending} pending</div>
-        </div>
-      </div>
-    </div>
+      </StatGrid>
+      <Card title="Clusters across all jobs">
+        <Box sx={{ display: "flex", gap: 3.5, flexWrap: "wrap" }}>
+          <div><ToneText tone="healthy">●</ToneText> {data.clusters.succeeded} patched</div>
+          <div><ToneText tone="critical">●</ToneText> {data.clusters.failed} failed</div>
+          <div><Muted>●</Muted> {data.clusters.pending} pending</div>
+        </Box>
+      </Card>
+    </Stack>
   );
 }
 
@@ -146,30 +145,37 @@ function JobDetail({ id, nav }: { id: string; nav: Nav }) {
   if (error && !j) return <ErrorBanner error={error} />;
 
   return (
-    <div>
-      <span className="back" onClick={() => nav.back("/patching")}>← All jobs</span>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-        <h2 className="mono" style={{ margin: 0 }}>{id}</h2>
-        {j && <Tag tone={JOB_TONE[j.status]}>{j.status}</Tag>}
-        {j && <span className="muted">{j.totals.success_pct}% success (threshold {j.threshold_pct}%)</span>}
-      </div>
+    <Box>
+      <Link
+        component="button"
+        type="button"
+        color="text.secondary"
+        onClick={() => nav.back("/patching")}
+        sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, mb: 1.25, fontSize: 13 }}
+      >
+        <ArrowBackIcon fontSize="inherit" /> All jobs
+      </Link>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 1, flexWrap: "wrap" }}>
+        <Typography variant="h1" component="h2" sx={{ fontFamily: MONO_FONT }}>{id}</Typography>
+        {j && <Pill status={JOB_TONE[j.status]}>{j.status}</Pill>}
+        {j && <Muted>{j.totals.success_pct}% success (threshold {j.threshold_pct}%)</Muted>}
+      </Box>
 
-      <div className="card" style={{ marginBottom: 16 }}>
+      <Card sx={{ mb: 2 }}>
         {!j ? <SkeletonLines rows={6} /> : (
-        <div className="kv">
-          <span className="k">Change record</span><span className="mono">{j.change_record}</span>
-          <span className="k">Requested by</span><span>{j.requested_by}</span>
-          <span className="k">Approved by</span><span>{j.approved_by || "—"} ({j.approval_status})</span>
-          <span className="k">Target version</span><span className="mono">{j.target_version}</span>
-          <span className="k">Source</span><span>{j.source}</span>
-          <span className="k">Started / finished</span><span className="muted">{fmtTime(j.started_at)} → {fmtTime(j.finished_at)}</span>
-        </div>
+          <KeyValues>
+            <KeyLabel>Change record</KeyLabel><Mono>{j.change_record}</Mono>
+            <KeyLabel>Requested by</KeyLabel><span>{j.requested_by}</span>
+            <KeyLabel>Approved by</KeyLabel><span>{j.approved_by || "—"} ({j.approval_status})</span>
+            <KeyLabel>Target version</KeyLabel><Mono>{j.target_version}</Mono>
+            <KeyLabel>Source</KeyLabel><span>{j.source}</span>
+            <KeyLabel>Started / finished</KeyLabel><Muted>{fmtTime(j.started_at)} → {fmtTime(j.finished_at)}</Muted>
+          </KeyValues>
         )}
-      </div>
+      </Card>
 
-      <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <div className="card" style={{ padding: 0 }}>
-          <div style={{ padding: "18px 18px 0" }}><h3>Per-cluster results</h3></div>
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 2 }}>
+        <Card flush title="Per-cluster results">
           {!j ? <SkeletonTable columns={5} rows={5} /> : (
             <DataTable
               id="patching.job.tasks"
@@ -180,27 +186,32 @@ function JobDetail({ id, nav }: { id: string; nav: Nav }) {
               empty="No per-cluster results yet."
             />
           )}
-        </div>
+        </Card>
 
-        <div className="card" style={{ padding: 0 }}>
-          <div style={{ padding: "18px 18px 0" }}><h3>Audit trail{j ? ` (${j.audit.length})` : ""}</h3></div>
-          <div style={{ maxHeight: 380, overflowY: "auto", padding: "4px 0" }}>
+        <Card flush title={`Audit trail${j ? ` (${j.audit.length})` : ""}`}>
+          <Box sx={{ maxHeight: 380, overflowY: "auto", p: "4px 0" }}>
             {!j ? <SkeletonLines rows={6} /> : j.audit.map((e, i) => (
-              <div key={i} className="check" style={{ alignItems: "flex-start" }}>
-                <span className="muted mono" style={{ fontSize: 11.5, minWidth: 64 }}>
+              <Box
+                key={i}
+                sx={{
+                  display: "flex", alignItems: "flex-start", gap: 1.25, p: "9px 18px",
+                  borderBottom: 1, borderColor: "border.soft",
+                }}
+              >
+                <Mono sx={{ color: "text.disabled", fontSize: 11.5, minWidth: 64 }}>
                   {e.ts ? new Date(e.ts).toLocaleTimeString() : ""}
-                </span>
-                <div className="ttl" style={{ flex: 1 }}>
-                  <span className="tag" style={{ marginRight: 6 }}>{e.actor}</span>
-                  <span className="mono" style={{ fontSize: 12.5 }}>{e.action}</span>
-                  {e.cluster && <span className="muted"> · {e.cluster}</span>}
-                  {e.message && <div className="muted" style={{ fontSize: 12 }}>{e.message}</div>}
-                </div>
-              </div>
+                </Mono>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Tag sx={{ mr: 0.75 }}>{e.actor}</Tag>
+                  <Mono>{e.action}</Mono>
+                  {e.cluster && <Muted> · {e.cluster}</Muted>}
+                  {e.message && <Muted sx={{ display: "block", fontSize: 12 }}>{e.message}</Muted>}
+                </Box>
+              </Box>
             ))}
-          </div>
-        </div>
-      </div>
-    </div>
+          </Box>
+        </Card>
+      </Box>
+    </Box>
   );
 }

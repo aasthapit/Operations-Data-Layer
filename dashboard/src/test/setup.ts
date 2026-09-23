@@ -59,6 +59,18 @@ if (!window.matchMedia) {
 window.scrollTo = () => {};
 Element.prototype.scrollIntoView = function scrollIntoView() {};
 
+// jsdom keeps its own record of what last held the focus, and after a test that
+// moved focus around that record can be the document itself - so a focus event
+// arrives with `relatedTarget: document` where a browser would name an element.
+// MUI's focus trap remembers that value and calls `.focus()` on it when the
+// dialog closes, which a Document does not have. A browser cannot focus a
+// document either, so the no-op is the same answer, minus the TypeError.
+if (!("focus" in Document.prototype)) {
+  Object.defineProperty(Document.prototype, "focus", {
+    value: function documentFocus() {}, writable: true, configurable: true,
+  });
+}
+
 // jsdom has no object URLs, and the Query page's CSV download goes through them.
 if (!URL.createObjectURL) URL.createObjectURL = () => "blob:odl-test";
 if (!URL.revokeObjectURL) URL.revokeObjectURL = () => {};
@@ -152,6 +164,9 @@ function unmockedFetch(input: RequestInfo | URL) {
 // sessionStorage, so a test that leaves either behind would change the next
 // test's starting state.
 beforeEach(() => {
+  // The colour mode lives on <html> as well as in storage, so it is reset with
+  // the rest of the state a test could leave behind.
+  document.documentElement.removeAttribute("data-theme");
   window.localStorage.clear();
   window.sessionStorage.clear();
   vi.stubGlobal("fetch", vi.fn(unmockedFetch));
@@ -165,3 +180,17 @@ afterEach(() => {
   window.localStorage.clear();
   window.sessionStorage.clear();
 });
+
+// MUI X Charts measures tick labels with SVGElement.getBBox() and
+// getComputedTextLength(), which jsdom does not implement: without these the
+// axis text is silently empty in tests. A fixed box is enough for layout to
+// proceed; the tests assert on text and structure, never on pixel positions.
+const svgProto = (globalThis as any).SVGElement?.prototype;
+if (svgProto) {
+  if (!svgProto.getBBox) {
+    svgProto.getBBox = () => ({ x: 0, y: 0, width: 40, height: 12, top: 0, left: 0, right: 40, bottom: 12, toJSON() { return {}; } });
+  }
+  if (!svgProto.getComputedTextLength) {
+    svgProto.getComputedTextLength = function () { return (this.textContent || "").length * 6; };
+  }
+}

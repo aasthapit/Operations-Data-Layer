@@ -1,3 +1,5 @@
+import { Box, Button, Chip, Link, Stack, Typography } from "@mui/material";
+import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { api } from "../api";
 import type {
   Application, ApplicationPlacement, ApplicationsResponse, Workload,
@@ -6,7 +8,10 @@ import * as cache from "../cache";
 import { useFetch } from "../hooks";
 import { useQueryFilters } from "../router";
 import type { Nav, RouteApi } from "../router";
-import { Pill, ErrorBanner, FilterSelect, Tier, DataTable, SkeletonTable, fmtBytes, fmtCores } from "../components";
+import {
+  Card, Mono, Muted, SectionHead, Tag, ToneText,
+  Pill, ErrorBanner, FilterSelect, Tier, DataTable, SkeletonTable, fmtBytes, fmtCores,
+} from "../components";
 import type { ColumnDef, Column } from "../components";
 
 interface ApplicationsProps {
@@ -49,14 +54,14 @@ export default function Applications({ app, nav, route }: ApplicationsProps) {
       key: "app", label: "Application", filter: "text",
       render: (a) => (a.assigned
         ? <>{a.app}{mapped && a.tier ? <> <Tier tier={a.tier} /></> : null}</>
-        : <span className="muted">{a.app} <span style={{ fontSize: 11 }}>not under a business application</span></span>),
+        : <Muted>{a.app} <Box component="span" sx={{ fontSize: 11 }}>not under a business application</Box></Muted>),
     },
     { key: "team", label: ownerLabel, className: "muted", render: (a) => a.team || "-" },
     mapped
       ? {
         key: "namespace_environments", label: "Namespace envs",
         filterValue: (a) => (a.namespace_environments || []).join(", "),
-        render: (a) => (a.namespace_environments || []).map((e) => <span key={e} className="tag" style={{ marginRight: 4 }}>{e}</span>),
+        render: (a) => (a.namespace_environments || []).map((e) => <Tag key={e} sx={{ mr: 0.5 }}>{e}</Tag>),
       }
       : { key: "tier", label: "Tier", render: (a) => <Tier tier={a.tier} /> },
     { key: "status", label: "Status", render: (a) => <Pill status={a.status} /> },
@@ -67,19 +72,19 @@ export default function Applications({ app, nav, route }: ApplicationsProps) {
         const names = [...new Set(clusterNames(a))];
         const shown = names.slice(0, 3).join(", ");
         const more = names.length > 3 ? ` +${names.length - 3}` : "";
-        return <>{a.cluster_count}{shown && <span className="muted mono" style={{ fontSize: 12 }}> · {shown}{more}</span>}</>;
+        return <>{a.cluster_count}{shown && <Mono sx={{ color: "text.disabled", fontSize: 12 }}> · {shown}{more}</Mono>}</>;
       },
     },
     {
       key: "hubs", label: "Hubs", filter: "select",
       filterValue: (a) => (a.hubs || []).join(" "),
       sortValue: (a) => (a.hubs || []).join(","),
-      render: (a) => (a.hubs || []).map((h) => <span key={h} className="tag" style={{ marginRight: 4 }}>{h}</span>),
+      render: (a) => (a.hubs || []).map((h) => <Tag key={h} sx={{ mr: 0.5 }}>{h}</Tag>),
     },
     {
       key: "environments", label: "Environments",
       sortValue: (a) => a.environments.join(", "),
-      render: (a) => a.environments.map((e) => <span key={e} className="tag" style={{ marginRight: 4 }}>{e}</span>),
+      render: (a) => a.environments.map((e) => <Tag key={e} sx={{ mr: 0.5 }}>{e}</Tag>),
     },
     { key: "workloads", label: "Workloads" },
     {
@@ -89,42 +94,36 @@ export default function Applications({ app, nav, route }: ApplicationsProps) {
     },
     {
       key: "pod_issues", label: "Pod issues",
-      render: (a) => (a.pod_issues ? <span style={{ color: "var(--warning)" }}>{a.pod_issues}</span> : <span className="muted">0</span>),
+      render: (a) => (a.pod_issues ? <ToneText tone="warning">{a.pod_issues}</ToneText> : <Muted>0</Muted>),
     },
     {
       key: "cpu_used_cores", label: "CPU used",
-      render: (a) => (a.cpu_used_cores != null ? fmtCores(a.cpu_used_cores) : <span className="muted">n/a</span>),
+      render: (a) => (a.cpu_used_cores != null ? fmtCores(a.cpu_used_cores) : <Muted>n/a</Muted>),
     },
     {
       key: "memory_used_bytes", label: "Memory used",
-      render: (a) => (a.memory_used_bytes != null ? fmtBytes(a.memory_used_bytes) : <span className="muted">n/a</span>),
+      render: (a) => (a.memory_used_bytes != null ? fmtBytes(a.memory_used_bytes) : <Muted>n/a</Muted>),
     },
   ];
 
   return (
-    <div>
-      <div className="section-head">
-        <div>
-          <div className="section-title" style={{ margin: 0 }}>Applications</div>
-          <div className="desc">
-            {mapped
-              ? <>Ownership comes from the application mapping file: every resource in a namespace belongs to that namespace's application, and namespaces the file does not list are grouped as <span className="mono">(unassigned)</span>{unassigned ? ` (${unassigned.cluster_count} namespaces)` : ""}. Labels are not used.</>
-              : <>Every non-platform namespace is an application. Identity, team and tier come from namespace labels (falling back to the workloads' labels); OpenShift's own namespaces are grouped separately per cluster.</>}
-          </div>
-        </div>
-      </div>
-      <div className="filters">
+    <Box>
+      <SectionHead
+        title="Applications"
+        description={mapped
+          ? <>Ownership comes from the application mapping file: every resource in a namespace belongs to that namespace&apos;s application, and namespaces the file does not list are grouped as <Mono>(unassigned)</Mono>{unassigned ? ` (${unassigned.cluster_count} namespaces)` : ""}. Labels are not used.</>
+          : <>Every non-platform namespace is an application. Identity, team and tier come from namespace labels (falling back to the workloads&apos; labels); OpenShift&apos;s own namespaces are grouped separately per cluster.</>}
+      />
+      <Stack direction="row" spacing={1.25} useFlexGap sx={{ mb: 2, flexWrap: "wrap", alignItems: "center" }}>
         <FilterSelect label={ownerLabel} value={filters.team} options={data?.teams || []} onChange={(v) => set("team", v)} />
         {!mapped && <FilterSelect label="Tier" value={filters.tier} options={tiers} onChange={(v) => set("tier", v)} />}
         {mapped && <FilterSelect label="Assigned" value={filters.assigned} options={["true", "false"]} onChange={(v) => set("assigned", v)} />}
         <FilterSelect label="Environment" value={filters.environment} options={envs} onChange={(v) => set("environment", v)} />
         <FilterSelect label="Status" value={filters.status} options={["healthy", "warning", "critical"]} onChange={(v) => set("status", v)} />
-        {anyFilter && (
-          <button className="btn" style={{ alignSelf: "flex-end" }} onClick={clear}>Clear</button>
-        )}
-      </div>
+        {anyFilter && <Button variant="outlined" color="inherit" onClick={clear}>Clear</Button>}
+      </Stack>
       {error && !data ? <ErrorBanner error={error} /> : (
-        <div className="card flush">
+        <Card flush>
           {!data ? <SkeletonTable columns={9} rows={10} /> : (
             <DataTable
               id="applications"
@@ -137,22 +136,22 @@ export default function Applications({ app, nav, route }: ApplicationsProps) {
               footer={`${data.count ?? apps.length} applications`}
             />
           )}
-        </div>
+        </Card>
       )}
-    </div>
+    </Box>
   );
 }
 
 const PLACEMENT_COLUMNS: Column<ApplicationPlacement>[] = [
   { key: "cluster", label: "Cluster", className: "mono", filter: "text" },
   { key: "hub", label: "Hub", className: "mono", filter: "select" },
-  { key: "environment", label: "Env", filter: "select", render: (p) => <span className="tag">{p.environment}</span> },
+  { key: "environment", label: "Env", filter: "select", render: (p) => <Tag>{p.environment}</Tag> },
   { key: "ocp_version", label: "OCP", className: "mono", filter: "select" },
   { key: "cluster_status", label: "Cluster status", filter: "select", render: (p) => <Pill status={p.cluster_status} /> },
   { key: "namespace", label: "Namespace", className: "mono", filter: "text" },
   {
     key: "namespace_environment", label: "Namespace env", filter: "select",
-    render: (p) => (p.namespace_environment ? <span className="tag">{p.namespace_environment}</span> : <span className="muted">-</span>),
+    render: (p) => (p.namespace_environment ? <Tag>{p.namespace_environment}</Tag> : <Muted>-</Muted>),
   },
   { key: "status", label: "App status", filter: "select", render: (p) => <Pill status={p.status} /> },
   { key: "workloads", label: "Workloads" },
@@ -161,7 +160,7 @@ const PLACEMENT_COLUMNS: Column<ApplicationPlacement>[] = [
     filterValue: (p) => `${p.replicas_ready}/${p.replicas_desired}`,
     render: (p) => `${p.replicas_ready}/${p.replicas_desired}`,
   },
-  { key: "pod_issues", label: "Pod issues", render: (p) => p.pod_issues || <span className="muted">0</span> },
+  { key: "pod_issues", label: "Pod issues", render: (p) => p.pod_issues || <Muted>0</Muted> },
   { key: "cpu_used_cores", label: "CPU", render: (p) => fmtCores(p.cpu_used_cores) },
   { key: "memory_used_bytes", label: "Memory", render: (p) => fmtBytes(p.memory_used_bytes) },
 ];
@@ -176,7 +175,10 @@ const WORKLOAD_COLUMNS: Column<Workload>[] = [
   { key: "cluster", label: "Cluster", className: "mono", filter: "text" },
   { key: "kind", label: "Kind", className: "muted", filter: "select" },
   { key: "name", label: "Name", filter: "text" },
-  { key: "status", label: "Status", filter: "select", render: (w) => <span className={`chip ${w.status}`}>{w.status}</span> },
+  {
+    key: "status", label: "Status", filter: "select",
+    render: (w) => <Chip variant="outlined" label={w.status} data-status={w.status} sx={{ borderRadius: "5px", fontWeight: 400 }} />,
+  },
   {
     key: "replicas", label: "Replicas",
     sortValue: (w) => w.replicas.ready,
@@ -193,13 +195,13 @@ const WORKLOAD_COLUMNS: Column<Workload>[] = [
     sortValue: (w) => envOf(w).length,
     filterValue: (w) => envOf(w).map((e) => e.name).join(" "),
     render: (w) => (
-      <div className="env-list">
+      <Box sx={{ display: "flex", flexDirection: "column", gap: 0.375, fontSize: 12 }}>
         {envOf(w).map((e) => (
-          <span key={e.name}><span className="mono">{e.name}</span> <span className="src">
+          <span key={e.name}><Mono>{e.name}</Mono> <Muted>
             {e.from?.kind === "literal" ? "(literal, scrubbed)" : e.from?.kind === "field" ? `← ${e.from.path}` : e.from ? `← ${e.from.kind} ${e.from.name}/${e.from.key}` : ""}
-          </span></span>
+          </Muted></span>
         ))}
-      </div>
+      </Box>
     ),
   },
   {
@@ -207,9 +209,9 @@ const WORKLOAD_COLUMNS: Column<Workload>[] = [
     sortValue: (w) => refsOf(w).length,
     filterValue: (w) => refsOf(w).map((r) => `${r.kind} ${r.name}`).join(", "),
     render: (w) => (
-      <span style={{ fontSize: 12 }}>
+      <Box component="span" sx={{ fontSize: 12 }}>
         {refsOf(w).map((r) => `${r.kind} ${r.name} (${r.via})`).join(", ")}
-      </span>
+      </Box>
     ),
   },
 ];
@@ -224,18 +226,25 @@ function ApplicationDetail({ app, nav }: { app: string; nav: Nav }) {
   if (error && !data) return <ErrorBanner error={error} />;
 
   return (
-    <div>
-      <span className="back" onClick={() => nav.back("/applications")}>← All applications</span>
-      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-        <h2 style={{ margin: 0 }}>{a ? a.app : app}</h2>
+    <Box>
+      <Link
+        component="button"
+        type="button"
+        color="text.secondary"
+        onClick={() => nav.back("/applications")}
+        sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, mb: 1.25, fontSize: 13 }}
+      >
+        <ArrowBackIcon fontSize="inherit" /> All applications
+      </Link>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.75, mb: 2, flexWrap: "wrap" }}>
+        <Typography variant="h1" component="h2">{a ? a.app : app}</Typography>
         {a && <Pill status={a.status} />}
         {a?.tier && <Tier tier={a.tier} />}
-        {a?.team && <span className="muted">{a.namespace_environments?.length ? "LOB" : "team"} {a.team}</span>}
-        {a?.assigned === false && <span className="muted">namespaces not under a business application</span>}
-      </div>
-      <div className="grid" style={{ gap: 16 }}>
-        <div className="card flush">
-          <div className="card-head"><h3>Placements{a ? ` (${a.cluster_count} clusters)` : ""}</h3></div>
+        {a?.team && <Muted>{a.namespace_environments?.length ? "LOB" : "team"} {a.team}</Muted>}
+        {a?.assigned === false && <Muted>namespaces not under a business application</Muted>}
+      </Box>
+      <Stack spacing={2}>
+        <Card flush title={`Placements${a ? ` (${a.cluster_count} clusters)` : ""}`}>
           {!data ? <SkeletonTable columns={8} rows={5} /> : (
             <DataTable
               id="application.placements"
@@ -247,12 +256,12 @@ function ApplicationDetail({ app, nav }: { app: string; nav: Nav }) {
               empty="No placements."
             />
           )}
-        </div>
-        <div className="card flush">
-          <div className="card-head">
-            <h3>Workloads{data ? ` (${data.workloads_detail.length})` : ""}</h3>
-            <div className="desc">Container env shows names and sources only - values are never collected.</div>
-          </div>
+        </Card>
+        <Card
+          flush
+          title={`Workloads${data ? ` (${data.workloads_detail.length})` : ""}`}
+          description="Container env shows names and sources only - values are never collected."
+        >
           {!data ? <SkeletonTable columns={7} rows={6} /> : (
             <DataTable
               id="application.workloads"
@@ -263,8 +272,8 @@ function ApplicationDetail({ app, nav }: { app: string; nav: Nav }) {
               empty="No workloads."
             />
           )}
-        </div>
-      </div>
-    </div>
+        </Card>
+      </Stack>
+    </Box>
   );
 }

@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import DataTable from "./DataTable";
 import type { Column, DataTableProps } from "./DataTable";
 import { Pill } from "./components";
-import { closestElement } from "./test/harness";
+import {
+  cellTexts, columnHeader, filterColumn, gridRows, rowCells, searchBox, sortBy, sortDirection,
+} from "./test/grid";
 
 /** One realistic row: what the clusters endpoint sends, narrowed to the fields
  * these tables draw. */
@@ -44,14 +46,15 @@ const setup = (props: Partial<DataTableProps<Cluster>> = {}) => {
   return { user, ...view };
 };
 
-// The first cell of every body row, in the order they are drawn.
-const names = () => screen.getAllByRole("row").slice(1)
-  .map((row) => within(row).getAllByRole("cell")[0].textContent)
-  .filter((text) => text.startsWith("ocp-"));
+// The first column of every row the grid drew, in the order it drew them.
+const names = () => cellTexts("Cluster");
 
-// The header cell's own button: its arrow is aria-hidden, so its accessible
-// name is just the column label.
-const sortBy = (label: string) => screen.getByRole("button", { name: label });
+// One row, found by the cluster it is about.
+const rowFor = (name: string) => {
+  const row = gridRows().find((r) => within(r).queryByText(name));
+  if (!row) throw new Error(`no row for ${name}`);
+  return row;
+};
 
 // The column filters and the search box are debounced, so what is on screen
 // settles a moment after the last keystroke.
@@ -60,16 +63,16 @@ const settlesTo = (expected: string[]) => waitFor(() => expect(names()).toEqual(
 describe("rendering", () => {
   it("draws a row per record and a header per column", () => {
     setup();
-    expect(screen.getByRole("columnheader", { name: /Cluster/ })).toBeInTheDocument();
+    expect(columnHeader("Cluster")).toBeInTheDocument();
     expect(names()).toEqual(["ocp-prod-iad-02", "ocp-prod-iad-01", "ocp-prod-sjc-01"]);
   });
 
   it("renders a cell through its render function and a missing value as nothing", () => {
     setup();
-    const healthyRow = closestElement(screen.getByText("ocp-prod-iad-01"), "tr");
-    expect(within(healthyRow).getByText("healthy")).toHaveClass("pill", "healthy");
-    const warningRow = closestElement(screen.getByText("ocp-prod-iad-02"), "tr");
-    expect(within(warningRow).getAllByRole("cell").at(-1)).toBeEmptyDOMElement();
+    // The status column draws a Pill rather than the word, and the Pill's own
+    // classes are what say it is the component and not the raw value.
+    expect(within(rowFor("ocp-prod-iad-01")).getByText("healthy")).toHaveClass("pill", "healthy");
+    expect(rowCells(rowFor("ocp-prod-iad-02")).at(-1)).toBeEmptyDOMElement();
   });
 
   it("says the table is empty in the caller's own words", () => {
@@ -98,24 +101,23 @@ describe("rendering", () => {
     // deliberately a row the key does not resolve on, so it is not a whole one
     render(<DataTable columns={COLUMNS} rows={[{ name: "", hub: "hub-east" } as Cluster]}
       rowKey="name" />);
-    expect(screen.getAllByRole("row")).toHaveLength(3);     // header, filters, the one row
-    expect(screen.getByRole("cell", { name: "hub-east" })).toBeInTheDocument();
+    expect(gridRows()).toHaveLength(1);
+    expect(screen.getByRole("gridcell", { name: "hub-east" })).toBeInTheDocument();
   });
 });
 
 describe("sorting", () => {
   it("sorts ascending, then descending, then back to the query's own order", async () => {
     const { user } = setup();
-    const header = sortBy("Cluster");
-    await user.click(header);
+    await sortBy("Cluster", { user });
     expect(names()).toEqual(["ocp-prod-iad-01", "ocp-prod-iad-02", "ocp-prod-sjc-01"]);
-    expect(screen.getByRole("columnheader", { name: /Cluster/ })).toHaveAttribute("aria-sort", "ascending");
+    expect(sortDirection("Cluster")).toBe("ascending");
 
-    await user.click(header);
+    await sortBy("Cluster", { user });
     expect(names()).toEqual(["ocp-prod-sjc-01", "ocp-prod-iad-02", "ocp-prod-iad-01"]);
-    expect(screen.getByRole("columnheader", { name: /Cluster/ })).toHaveAttribute("aria-sort", "descending");
+    expect(sortDirection("Cluster")).toBe("descending");
 
-    await user.click(header);
+    await sortBy("Cluster", { user });
     expect(names()).toEqual(["ocp-prod-iad-02", "ocp-prod-iad-01", "ocp-prod-sjc-01"]);
   });
 
@@ -129,14 +131,13 @@ describe("sorting", () => {
     const user = userEvent.setup();
     render(<DataTable columns={[{ key: "name", label: "Name" }, { key: "nodes", label: "Nodes" }]}
       rows={rows} rowKey="name" />);
-    await user.click(sortBy("Nodes"));
-    expect(screen.getAllByRole("row").slice(1)
-      .map((r) => within(r).getAllByRole("cell")[1].textContent)).toEqual(["2", "9", "10"]);
+    await sortBy("Nodes", { user });
+    expect(cellTexts("Nodes")).toEqual(["2", "9", "10"]);
   });
 
   it("sorts timestamps by their instant, not by their spelling", async () => {
     const { user } = setup();
-    await user.click(sortBy("Last synced"));
+    await sortBy("Last synced", { user });
     expect(names()).toEqual(["ocp-prod-sjc-01", "ocp-prod-iad-02", "ocp-prod-iad-01"]);
   });
 
@@ -150,16 +151,15 @@ describe("sorting", () => {
     ];
     const user = userEvent.setup();
     render(<DataTable columns={columns} rows={ROWS} rowKey="name" />);
-    await user.click(sortBy("State"));
+    await sortBy("State", { user });
     expect(names()[0]).toBe("ocp-prod-iad-02");
   });
 
   it("puts the blanks last whichever way the column is sorted", async () => {
     const { user } = setup();
-    const header = sortBy("Note");
-    await user.click(header);
+    await sortBy("Note", { user });
     expect(names().at(-1)).toBe("ocp-prod-iad-02");
-    await user.click(header);
+    await sortBy("Note", { user });
     expect(names().at(-1)).toBe("ocp-prod-iad-02");
   });
 
@@ -174,13 +174,13 @@ describe("sorting", () => {
 describe("filtering", () => {
   it("narrows on a column's own text filter", async () => {
     const { user } = setup();
-    await user.type(screen.getByLabelText("Filter by Cluster"), "sjc");
+    await filterColumn("Cluster", "sjc", { user });
     await settlesTo(["ocp-prod-sjc-01"]);
   });
 
   it("offers a select filter built from the values actually in the column", async () => {
     const { user } = setup();
-    const select = screen.getByLabelText("Filter by Hub") as HTMLSelectElement;
+    const select = within(columnHeader("Hub")).getByRole("combobox") as HTMLSelectElement;
     expect([...select.options].map((o) => o.value)).toEqual(["", "hub-east", "hub-west"]);
     await user.selectOptions(select, "hub-west");
     expect(names()).toEqual(["ocp-prod-sjc-01"]);
@@ -188,35 +188,35 @@ describe("filtering", () => {
 
   it("matches a select filter on the text a rendered cell shows", async () => {
     const { user } = setup();
-    await user.selectOptions(screen.getByLabelText("Filter by Status"), "warning");
+    await filterColumn("Status", "warning", { user });
     expect(names()).toEqual(["ocp-prod-iad-02"]);
   });
 
   it("searches every column at once", async () => {
     const { user } = setup();
-    await user.type(screen.getByLabelText("Search this table"), "hub-east");
+    await user.type(searchBox(), "hub-east");
     await settlesTo(["ocp-prod-iad-02", "ocp-prod-iad-01"]);
   });
 
   it("says the rows are there but filtered out rather than that there are none", async () => {
     const { user } = setup();
-    await user.type(screen.getByLabelText("Search this table"), "ocp-dev");
+    await user.type(searchBox(), "ocp-dev");
     expect(await screen.findByText("No rows match the filters.")).toBeInTheDocument();
   });
 
   it("counts what is on screen against what there is", async () => {
     const { user } = setup();
-    await user.selectOptions(screen.getByLabelText("Filter by Hub"), "hub-east");
+    await filterColumn("Hub", "hub-east", { user });
     expect(await screen.findByText("2 of 3")).toBeInTheDocument();
   });
 
   it("clears the filters, the search and the sort back to the view's default", async () => {
     const { user } = setup({ initialSort: { key: "name", dir: "asc" } });
-    await user.selectOptions(screen.getByLabelText("Filter by Hub"), "hub-west");
-    await user.click(sortBy("Nodes"));
+    await filterColumn("Hub", "hub-west", { user });
+    await sortBy("Nodes", { user });
     await user.click(await screen.findByRole("button", { name: "Clear" }));
     expect(names()).toEqual(["ocp-prod-iad-01", "ocp-prod-iad-02", "ocp-prod-sjc-01"]);
-    expect(screen.getByLabelText("Filter by Hub")).toHaveValue("");
+    expect(within(columnHeader("Hub")).getByRole("combobox")).toHaveValue("");
   });
 
   it("draws no filter row at all when no column asked for one", () => {
@@ -233,7 +233,7 @@ describe("filtering", () => {
     ];
     const user = userEvent.setup();
     render(<DataTable columns={columns} rows={ROWS} rowKey="name" />);
-    await user.type(screen.getByLabelText("Filter by Nodes"), "4 nodes");
+    await filterColumn("Nodes", "4 nodes", { user });
     await settlesTo(["ocp-prod-sjc-01"]);
   });
 
@@ -243,9 +243,8 @@ describe("filtering", () => {
     const user = userEvent.setup();
     render(<DataTable rowKey="name" rows={rows}
       columns={[{ key: "name", label: "App" }, { key: "envs", label: "Envs", filter: "text" }]} />);
-    await user.type(screen.getByLabelText("Filter by Envs"), "stage");
-    await waitFor(() => expect(screen.queryByRole("cell", { name: "catalog" })).toBeNull());
-    expect(screen.getByRole("cell", { name: "checkout" })).toBeInTheDocument();
+    await filterColumn("Envs", "stage", { user });
+    await waitFor(() => expect(cellTexts("App")).toEqual(["checkout"]));
   });
 });
 
@@ -256,39 +255,111 @@ describe("paging", () => {
   const many: PageRow[] =
     Array.from({ length: 12 }, (_, i) => ({ name: `ocp-prod-iad-${i}`, hub: "hub-east" }));
   const pageColumns: Column<PageRow>[] =
-    [{ key: "name", label: "Cluster" }, { key: "hub", label: "Hub" }];
+    [{ key: "name", label: "Cluster" }, { key: "hub", label: "Hub", filter: "select" }];
 
-  it("renders only a page of rows and says how many there are", () => {
+  it("hands React only a page of rows at a time", () => {
     render(<DataTable columns={pageColumns} rows={many} rowKey="name" pageSize={5} />);
-    expect(screen.getAllByRole("row")).toHaveLength(6);      // header plus five
-    expect(screen.getByText("5 of 12 shown")).toBeInTheDocument();
+    expect(gridRows()).toHaveLength(5);
+    expect(screen.getByText("1–5 of 12")).toBeInTheDocument();
   });
 
-  it("shows another page, and then all of them", async () => {
+  it("moves through the pages, and the last one is short", async () => {
     const user = userEvent.setup();
     render(<DataTable columns={pageColumns} rows={many} rowKey="name" pageSize={5} />);
-    await user.click(screen.getByRole("button", { name: "Show 5 more" }));
-    expect(screen.getAllByRole("row")).toHaveLength(11);
-    await user.click(screen.getByRole("button", { name: "Show all 12" }));
-    expect(screen.getAllByRole("row")).toHaveLength(13);
-    expect(screen.queryByRole("button", { name: /Show all/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    expect(cellTexts("Cluster")).toEqual(
+      ["ocp-prod-iad-5", "ocp-prod-iad-6", "ocp-prod-iad-7", "ocp-prod-iad-8", "ocp-prod-iad-9"]);
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    expect(cellTexts("Cluster")).toEqual(["ocp-prod-iad-10", "ocp-prod-iad-11"]);
+    expect(screen.getByRole("button", { name: "Go to next page" })).toBeDisabled();
+  });
+
+  it("draws no pager at all when everything fits on one page", () => {
+    render(<DataTable columns={pageColumns} rows={many} rowKey="name" pageSize={50} />);
+    expect(screen.queryByRole("button", { name: "Go to next page" })).toBeNull();
+  });
+
+  it("pages at the grid's own limit rather than failing on a page it refuses", () => {
+    // The community grid throws above 100 rows a page, so a view that asks for
+    // more gets a table that pages rather than a table that is not there.
+    const lots = Array.from({ length: 120 },
+      (_, i) => ({ name: `ocp-prod-iad-${i}`, hub: "hub-east" }));
+    render(<DataTable columns={pageColumns} rows={lots} rowKey="name" pageSize={500} />);
+    expect(gridRows()).toHaveLength(100);
+    expect(screen.getByText("1–100 of 120")).toBeInTheDocument();
   });
 
   it("starts over at one page when what is being asked for changes", async () => {
     const user = userEvent.setup();
     render(<DataTable columns={pageColumns} rows={many} rowKey="name" pageSize={5}
       id="paging.test" />);
-    await user.click(screen.getByRole("button", { name: "Show 5 more" }));
-    await user.type(screen.getByLabelText("Search this table"), "ocp");
-    expect(await screen.findByText("5 of 12 shown")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    await user.type(searchBox(), "ocp");
+    expect(await screen.findByText("1–5 of 12")).toBeInTheDocument();
+  });
+});
+
+describe("exporting", () => {
+  // The download goes through an object URL and an anchor, so the test holds
+  // both: the blob is what was written, the anchor is what it was called.
+  const captureDownload = () => {
+    const blobs: Blob[] = [];
+    const anchors: HTMLAnchorElement[] = [];
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+      blobs.push(blob as Blob);
+      return "blob:odl-test";
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function noNavigation(this: HTMLAnchorElement) { anchors.push(this); });
+    return { blobs, anchors };
+  };
+
+  it("writes every row the filters left, and none of the ones they took out", async () => {
+    const { blobs, anchors } = captureDownload();
+    const { user } = setup({ id: "clusters" });
+    await filterColumn("Hub", "hub-east", { user });
+    await screen.findByText("2 of 3");
+
+    await user.click(screen.getByRole("button", { name: "Export CSV" }));
+
+    expect(anchors[0].download).toBe("clusters.csv");
+    const lines = (await blobs[0].text()).split("\r\n");
+    expect(lines[0]).toBe("Cluster,Hub,Status,Nodes,Last synced,Note");
+    expect(lines[2]).toBe("ocp-prod-iad-01,hub-east,healthy,6,2026-09-20T20:59:11+00:00,clean");
+    expect(lines.slice(1).map((l) => l.split(",")[0]))
+      .toEqual(["ocp-prod-iad-02", "ocp-prod-iad-01"]);
+    expect(lines).toHaveLength(3);
+  });
+
+  it("writes every page, not the page on screen, in the order the table sorted them", async () => {
+    const { blobs } = captureDownload();
+    const many = Array.from({ length: 12 },
+      (_, i) => ({ name: `ocp-prod-iad-${i}`, hub: "hub-east" }));
+    const user = userEvent.setup();
+    render(<DataTable rowKey="name" rows={many} pageSize={5} id="paging.export"
+      columns={[{ key: "name", label: "Cluster" }, { key: "hub", label: "Hub" }]} />);
+    expect(gridRows()).toHaveLength(5);
+    await sortBy("Cluster", { user });
+
+    await user.click(screen.getByRole("button", { name: "Export CSV" }));
+
+    const lines = (await blobs[0].text()).split("\r\n");
+    expect(lines.slice(1)).toHaveLength(12);
+    expect(lines.slice(1).map((l) => l.split(",")[0]))
+      .toEqual(many.map((r) => r.name));     // 0 to 11, which is the ascending sort
+  });
+
+  it("leaves the export off a table that fetched nothing at all", () => {
+    render(<DataTable columns={COLUMNS} rows={[]} empty="No clusters." />);
+    expect(screen.queryByRole("button", { name: "Export CSV" })).toBeNull();
   });
 });
 
 describe("persistence", () => {
   it("remembers the sort, the filters and the search under the table's id", async () => {
     const { user, unmount } = setup({ id: "clusters" });
-    await user.click(sortBy("Cluster"));
-    await user.selectOptions(screen.getByLabelText("Filter by Hub"), "hub-east");
+    await sortBy("Cluster", { user });
+    await filterColumn("Hub", "hub-east", { user });
     await screen.findByText("2 of 3");
     unmount();
 
@@ -298,9 +369,8 @@ describe("persistence", () => {
 
   it("keeps a cleared sort cleared rather than falling back to the default", async () => {
     const { user, unmount } = setup({ id: "clusters", initialSort: { key: "name", dir: "asc" } });
-    const header = sortBy("Cluster");
-    await user.click(header);      // desc
-    await user.click(header);      // cleared
+    await sortBy("Cluster", { user });      // desc
+    await sortBy("Cluster", { user });      // cleared
     unmount();
 
     render(<DataTable columns={COLUMNS} rows={ROWS} rowKey="name" id="clusters"
@@ -330,7 +400,7 @@ describe("persistence", () => {
 
   it("remembers nothing at all for a table with no id", async () => {
     const { user, unmount } = setup();
-    await user.click(sortBy("Cluster"));
+    await sortBy("Cluster", { user });
     unmount();
     setup();
     expect(names()).toEqual(["ocp-prod-iad-02", "ocp-prod-iad-01", "ocp-prod-sjc-01"]);

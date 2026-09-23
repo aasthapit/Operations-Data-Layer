@@ -9,6 +9,10 @@ import { closestElement, currentUrl, renderView } from "../test/harness";
 import { BLAST_RADIUS, OPERATOR_VERSIONS, VERSIONS } from "../test/fixtures/fleet";
 import { OLM_OPERATORS } from "../test/fixtures/insights";
 
+/** A data row of a table. The grid draws divs, so a row is what carries the
+ * role rather than a `<tr>`. */
+const GRID_ROW = '[role="row"]';
+
 vi.mock("../api", async () => {
   const { createApiMock } = await import("../test/apiMock");
   return { api: createApiMock(), BASE: "" };
@@ -125,30 +129,30 @@ describe("the report", () => {
 
   it("counts what the change would touch", async () => {
     openReport();
-    const stats = closestElement(await screen.findByText("Clusters impacted"), ".stats");
-    expect(within(stats).getByText("Clusters impacted").nextSibling).toHaveTextContent("2");
-    expect(within(stats).getByText("Applications").nextSibling).toHaveTextContent("3");
-    expect(within(stats).getByText("Critical apps").nextSibling).toHaveTextContent("1");
-    expect(within(stats).getByText("Teams").nextSibling).toHaveTextContent("2");
-    expect(within(stats).getByText("Workloads").nextSibling).toHaveTextContent("2");
+    expect((await screen.findByText("Clusters impacted")).nextSibling).toHaveTextContent("2");
+    expect(screen.getByText("Applications").nextSibling).toHaveTextContent("3");
+    expect(screen.getByText("Critical apps").nextSibling).toHaveTextContent("1");
+    expect(screen.getByText("Teams").nextSibling).toHaveTextContent("2");
+    expect(screen.getByText("Workloads").nextSibling).toHaveTextContent("2");
   });
 
   it("lists the clusters with why each one matched", async () => {
-    const { container } = openReport();
-    await screen.findByText("Impacted clusters");
-    // the impacted-cluster card is identified by where it sits on the page,
-    // not by a role or a name - the DOM shape is what scopes this lookup
-    const clusters = container.querySelector("#blast-clusters, .card.flush") as HTMLElement;
-    const row = closestElement(within(clusters).getByText("ocp-stage-iad-01"), "tr");
+    openReport();
+    // each card is a landmark named after its heading, so the lookup is scoped
+    // by name rather than by where the card sits on the page
+    const clusters = await screen.findByRole("region", { name: "Impacted clusters" });
+    const row = closestElement(within(clusters).getByText("ocp-stage-iad-01"), GRID_ROW);
     expect(within(row).getByText("ocp_version 4.16.7")).toBeInTheDocument();
     expect(within(row).getByText("critical")).toBeInTheDocument();
   });
 
   it("lists the applications riding on those clusters", async () => {
     openReport();
-    const row = closestElement(await screen.findByText("checkout"), "tr");
+    const row = closestElement(await screen.findByText("checkout"), GRID_ROW);
     expect(within(row).getByText("payments")).toBeInTheDocument();
-    expect(within(row).getByText("2")).toHaveAttribute("title",
+    // the clusters behind the count are the tooltip, and the tooltip is the
+    // cell's accessible name
+    expect(within(row).getByText("2")).toHaveAttribute("aria-label",
       "ocp-prod-iad-02, ocp-stage-iad-01");
   });
 
@@ -170,12 +174,12 @@ describe("the report", () => {
 
   it("shows the spread by environment, by hub and over the platform", async () => {
     openReport();
-    const spread = closestElement(await screen.findByText("By environment"), ".card");
-    expect(closestElement(within(spread).getByText("prod"), "div")).toHaveTextContent("prod 1");
-    expect(closestElement(within(spread).getByText("stage"), "div")).toHaveTextContent("stage 1");
+    const spread = await screen.findByRole("region", { name: "Spread" });
+    expect(closestElement(within(spread).getByText("prod"), "li")).toHaveTextContent("prod 1");
+    expect(closestElement(within(spread).getByText("stage"), "li")).toHaveTextContent("stage 1");
     expect(within(spread).getByText("By hub")).toBeInTheDocument();
     expect(closestElement(
-      within(spread).getByText("hub-east"), "div")).toHaveTextContent("hub-east 2");
+      within(spread).getByText("hub-east"), "li")).toHaveTextContent("hub-east 2");
     expect(within(spread).getByText("openshift-ingress")).toBeInTheDocument();
   });
 
@@ -189,10 +193,8 @@ describe("the report", () => {
 
   it("opens a cluster from the impacted list", async () => {
     const user = userEvent.setup();
-    const { container } = openReport();
-    await screen.findByText("Impacted clusters");
-    // as above: the card is found by its place in the page
-    const clusters = container.querySelector(".card.flush") as HTMLElement;
+    openReport();
+    const clusters = await screen.findByRole("region", { name: "Impacted clusters" });
     await user.click(within(clusters).getByText("ocp-prod-iad-02"));
     expect(currentUrl()).toBe("/clusters/ocp-prod-iad-02");
   });

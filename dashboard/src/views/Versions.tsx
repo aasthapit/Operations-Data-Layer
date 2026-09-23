@@ -1,7 +1,10 @@
+import { Box, Link, Stack } from "@mui/material";
 import { api } from "../api";
 import type { OperatorVersionsResponse } from "../api/types";
 import { useFetch } from "../hooks";
-import { Pill, ErrorBanner, DataTable, SkeletonLines, SkeletonTable } from "../components";
+import {
+  Card, Dot, Mono, Muted, Pill, Tag, ErrorBanner, DataTable, SkeletonLines, SkeletonTable,
+} from "../components";
 import type { Column } from "../components";
 
 /** One operator's spread across the fleet, as `/api/versions/operators` sends it. */
@@ -34,34 +37,43 @@ export default function Versions({ onOpen, onBlast }: VersionsProps) {
   const maxCount = data ? Math.max(...data.versions.map((v) => v.count), 1) : 1;
 
   return (
-    <div className="grid" style={{ gap: 20 }}>
-      <div className="card">
-        <h3>OCP version distribution</h3>
+    <Stack spacing={2.5}>
+      <Card title="OCP version distribution">
         {!data ? <SkeletonLines rows={4} height={44} /> : data.versions.map((v) => (
-          <div key={v.version} style={{ marginBottom: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-              <span className="mono">{v.version} <span className="muted">· {v.count} cluster{v.count > 1 ? "s" : ""}</span></span>
-              <a onClick={() => onBlast(v.version)} style={{ cursor: "pointer", fontSize: 12.5 }}>blast radius →</a>
-            </div>
-            <div className="hbar" style={{ height: 22, background: "var(--bg-elev-2)" }}>
-              <span className="healthy" style={{ width: `${(v.count / maxCount) * 100}%`, background: "var(--accent)" }} />
-            </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+          <Box key={v.version} sx={{ mb: 1.75 }}>
+            <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.5 }}>
+              <Mono>{v.version} <Muted>· {v.count} cluster{v.count > 1 ? "s" : ""}</Muted></Mono>
+              <Link component="button" type="button" onClick={() => onBlast(v.version)} sx={{ fontSize: 12.5 }}>
+                blast radius →
+              </Link>
+            </Box>
+            {/* How much of the fleet sits on this version, against the version
+                that has the most: a share, not a percentage of anything. */}
+            <Box sx={{
+              height: 22, borderRadius: "6px", overflow: "hidden", bgcolor: "background.subtle",
+            }}>
+              <Box sx={{
+                height: "100%", width: `${(v.count / maxCount) * 100}%`, bgcolor: "primary.main",
+              }} />
+            </Box>
+            <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap", mt: 0.75 }}>
               {v.clusters.map((c) => (
-                <span key={c.name} className="tag clickable" style={{ cursor: "pointer" }} onClick={() => onOpen(c.name)}>
-                  <span className={`dot-s ${c.status}`} style={{ marginRight: 4 }} />{c.name}
-                </span>
+                <Tag key={c.name} onClick={() => onOpen(c.name)}>
+                  <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
+                    <Dot status={c.status} />{c.name}
+                  </Box>
+                </Tag>
               ))}
-            </div>
-          </div>
+            </Box>
+          </Box>
         ))}
-      </div>
+      </Card>
 
-      <div className="card" style={{ padding: 0 }}>
-        <div style={{ padding: "18px 18px 0" }}>
-          <h3>Operator version spread</h3>
-          <p className="dim" style={{ marginTop: -6 }}>Operators reporting more than one version across the fleet are drifting - usually a partial rollout.</p>
-        </div>
+      <Card
+        flush
+        title="Operator version spread"
+        description="Operators reporting more than one version across the fleet are drifting - usually a partial rollout."
+      >
         {ops.error && !ops.data ? <ErrorBanner error={ops.error} /> : !ops.data ? <SkeletonTable columns={3} rows={5} /> : (
           <DataTable
             id="versions.operators"
@@ -72,7 +84,7 @@ export default function Versions({ onOpen, onBlast }: VersionsProps) {
             empty="All operators are on a single version across the fleet."
           />
         )}
-      </div>
-    </div>
+      </Card>
+    </Stack>
   );
 }
