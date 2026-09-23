@@ -33,7 +33,9 @@ const open = (at = "/query") => renderView(
   ({ route, nav }) => (route.path === "/query" ? <Query route={route} nav={nav} /> : null),
   { at });
 
-const sql = () => document.querySelector(".q-sql").textContent;
+// The SQL the page is about to run, which it shows in a <pre> rather than in
+// a control - so there is no role or label to ask for.
+const sql = () => (document.querySelector(".q-sql") as HTMLElement | null)?.textContent;
 
 describe("opening the page", () => {
   it("starts on clusters, with the columns people came for, already run", async () => {
@@ -527,8 +529,11 @@ describe("a shared link", () => {
   it("opens on the query the link carries and runs it", async () => {
     // A link minted by the page itself: custom SQL over clusters.
     const { encodeState, normalizeState } = await import("../query/builder");
-    const encoded = encodeState(normalizeState({
-      table: "clusters", mode: "sql", sql: "SELECT name FROM clusters LIMIT 5", limit: 200 }));
+    const state = normalizeState({
+      table: "clusters", mode: "sql", sql: "SELECT name FROM clusters LIMIT 5", limit: 200 });
+    // normalizeState refuses a state with no table, and this one names one.
+    if (!state) throw new Error("the builder refused the state this link is made of");
+    const encoded = encodeState(state);
     open(`/query?q=${encodeURIComponent(encoded)}`);
     await waitFor(() => expect(screen.getByLabelText("SQL"))
       .toHaveValue("SELECT name FROM clusters LIMIT 5"));

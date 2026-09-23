@@ -5,7 +5,7 @@ import * as cache from "./cache";
 beforeEach(() => cache.invalidate());
 afterEach(() => { vi.useRealTimers(); cache.invalidate(); });
 
-const later = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+const later = (ms: number) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 describe("peek and put", () => {
   it("returns undefined for a url nothing has been stored under", () => {
@@ -48,14 +48,15 @@ describe("search", () => {
   it("hands the newest matching response to the picker first", () => {
     cache.put("/api/clusters?hub=hub-east", { clusters: [{ name: "ocp-prod-iad-01" }] });
     cache.put("/api/clusters?hub=hub-west", { clusters: [{ name: "ocp-prod-sjc-01" }] });
-    const seen = [];
-    cache.search("/api/clusters", (data) => { seen.push(data.clusters[0].name); return null; });
+    const seen: string[] = [];
+    cache.search<{ clusters: Array<{ name: string }> }>("/api/clusters",
+      (data) => { seen.push(data.clusters[0].name); return null; });
     expect(seen).toEqual(["ocp-prod-sjc-01", "ocp-prod-iad-01"]);
   });
 
   it("returns the first hit the picker names", () => {
     cache.put("/api/clusters", { clusters: [{ name: "ocp-prod-iad-02" }] });
-    const hit = cache.search("/api/clusters",
+    const hit = cache.search<{ clusters: Array<{ name: string }> }>("/api/clusters",
       (data) => data.clusters.find((c) => c.name === "ocp-prod-iad-02"));
     expect(hit).toEqual({ name: "ocp-prod-iad-02" });
   });
@@ -114,11 +115,11 @@ describe("request", () => {
   });
 
   it("does not cache a response that was already on the wire when a refresh landed", async () => {
-    let settle;
+    let settle: ((value: unknown) => void) | undefined;
     const { promise, release } = cache.request("/api/clusters",
       () => new Promise((resolve) => { settle = resolve; }));
     cache.invalidate();                 // the refresh happens mid-flight
-    settle({ count: 5 });
+    settle?.({ count: 5 });
     await expect(promise).resolves.toEqual({ count: 5 });
     release();
     expect(cache.peek("/api/clusters")).toBeUndefined();
@@ -145,26 +146,26 @@ describe("request", () => {
   });
 
   it("aborts the fetch once the last caller has released it", async () => {
-    let signal;
+    let signal: AbortSignal | undefined;
     const { promise, release } = cache.request("/api/clusters", (s) => {
       signal = s;
       return new Promise(() => {});
     });
-    expect(signal.aborted).toBe(false);
+    expect(signal?.aborted).toBe(false);
     release();
     await later(90);
-    expect(signal.aborted).toBe(true);
+    expect(signal?.aborted).toBe(true);
     expect(promise).toBeInstanceOf(Promise);
   });
 
   it("keeps the fetch alive across the remount React does in strict mode", async () => {
-    let signal;
-    const fetcher = (s) => { signal = s; return new Promise(() => {}); };
+    let signal: AbortSignal | undefined;
+    const fetcher = (s?: AbortSignal) => { signal = s; return new Promise(() => {}); };
     const first = cache.request("/api/clusters", fetcher);
     first.release();                                  // unmount
     const second = cache.request("/api/clusters", fetcher);   // and straight back
     await later(90);
-    expect(signal.aborted).toBe(false);
+    expect(signal?.aborted).toBe(false);
     second.release();
   });
 });

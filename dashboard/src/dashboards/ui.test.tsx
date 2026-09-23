@@ -74,7 +74,9 @@ describe("Modal", () => {
 
     await user.click(screen.getByRole("button", { name: "×" }));
     await user.keyboard("{Escape}");
-    await user.click(document.querySelector(".db-scrim"));
+    // the scrim is the modal's own backdrop: it carries no role or name,
+    // because clicking it is the shape of the dialog rather than a control
+    await user.click(document.querySelector(".db-scrim") as HTMLElement);
     expect(onClose).toHaveBeenCalledTimes(3);
   });
 

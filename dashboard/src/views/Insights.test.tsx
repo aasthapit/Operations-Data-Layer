@@ -5,7 +5,7 @@ import Insights from "./Insights";
 import * as cache from "../cache";
 import { answer, fails } from "../test/apiMock";
 import type { ApiMock } from "../test/apiMock";
-import { currentUrl, renderView } from "../test/harness";
+import { closestElement, currentUrl, renderView } from "../test/harness";
 import { clustersResponse } from "../test/fixtures/fleet";
 import {
   CERTIFICATES, CLUSTER_ADMINS, EVENTS, IMAGES, MACHINE_CONFIG_POOLS, OLM_OPERATORS,
@@ -56,7 +56,7 @@ describe("the section strip", () => {
 describe("certificates", () => {
   it("lists what is expiring, worst first, with subject and issuer", async () => {
     open("certificates");
-    const row = (await screen.findByText("router-certs-default")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("router-certs-default"), "tr");
     expect(within(row).getByText("expired")).toBeInTheDocument();
     expect(within(row).getByText("expired 4d ago")).toBeInTheDocument();
     expect(within(row).getByText("CN=*.apps.ocp-stage-iad-01.acme.example")).toBeInTheDocument();
@@ -90,7 +90,7 @@ describe("certificates", () => {
   it("opens the cluster a certificate is on", async () => {
     const user = userEvent.setup();
     open("certificates");
-    const row = (await screen.findByText("checkout-tls")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("checkout-tls"), "tr");
     await user.click(within(row).getByText("ocp-prod-iad-02"));
     expect(currentUrl()).toBe("/clusters/ocp-prod-iad-02");
   });
@@ -107,7 +107,7 @@ describe("pod issues", () => {
     open("pods");
     expect(await screen.findByText("Pod issues (2)")).toBeInTheDocument();
     expect(screen.getByText("1 CrashLoopBackOff · 1 Unschedulable")).toBeInTheDocument();
-    const row = screen.getByText("checkout-api-7d9f8b6c4-2xk9p").closest<HTMLElement>("tr");
+    const row = closestElement(screen.getByText("checkout-api-7d9f8b6c4-2xk9p"), "tr");
     expect(within(row).getByText("19")).toBeInTheDocument();
     expect(within(row).getByText("ReplicaSet/checkout-api-7d9f8b6c4")).toBeInTheDocument();
   });
@@ -131,7 +131,7 @@ describe("pod issues", () => {
 describe("quotas", () => {
   it("shows every resource in a quota against its hard limit", async () => {
     open("quotas");
-    const row = (await screen.findByText("checkout-quota")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("checkout-quota"), "tr");
     expect(within(row).getByText("94%")).toBeInTheDocument();
     expect(within(row).getByText("requests.cpu")).toBeInTheDocument();
     expect(within(row).getByText("8500m / 9 (94%)")).toBeInTheDocument();
@@ -142,7 +142,7 @@ describe("quotas", () => {
 describe("OLM operators", () => {
   it("shows version drift, unhealthy installs and pending upgrades per package", async () => {
     open("olm");
-    const row = (await screen.findByText("elasticsearch-operator")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("elasticsearch-operator"), "tr");
     expect(within(row).getByText("OpenShift Elasticsearch Operator")).toBeInTheDocument();
     expect(within(row).getByText("5.8.6 (1), 5.8.4 (1)")).toBeInTheDocument();
     expect(within(row).getByText("warning")).toBeInTheDocument();
@@ -154,7 +154,7 @@ describe("OLM operators", () => {
     open("olm");
     await user.click(await screen.findByText("elasticsearch-operator"));
     expect(await screen.findByText("elasticsearch-operator.v5.8.4")).toBeInTheDocument();
-    const install = screen.getByText("elasticsearch-operator.v5.8.4").closest<HTMLElement>("tr");
+    const install = closestElement(screen.getByText("elasticsearch-operator.v5.8.4"), "tr");
     expect(within(install).getByText("Failed · InstallCheckFailed")).toBeInTheDocument();
     expect(within(install).getByText("5.8.6")).toBeInTheDocument();
   });
@@ -170,7 +170,7 @@ describe("OLM operators", () => {
 describe("machine config pools", () => {
   it("lists the pools that are not settled, worst first", async () => {
     open("mcp");
-    const row = (await screen.findByText("rendered-worker-6b2c1a")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("rendered-worker-6b2c1a"), "tr");
     expect(within(row).getByText("degraded")).toBeInTheDocument();
     expect(within(row).getByText(/unexpected on-disk state/)).toBeInTheDocument();
     expect(await screen.findByText("Machine config pools (2)")).toBeInTheDocument();
@@ -180,11 +180,12 @@ describe("machine config pools", () => {
 describe("storage", () => {
   it("shows each class with the claims riding on it", async () => {
     open("storage");
-    const classes = (await screen.findByRole("heading", { name: "Storage classes" }))
-      .closest<HTMLElement>(".card");
+    const classes = closestElement(
+      await screen.findByRole("heading", { name: "Storage classes" }), ".card");
     // The name cell also carries the "default" tag when the class is the
     // cluster's default one, which gp3-csi is in the fixture.
-    const row = within(classes).getByRole("cell", { name: "gp3-csi default" }).closest<HTMLElement>("tr");
+    const row = closestElement(
+      within(classes).getByRole("cell", { name: "gp3-csi default" }), "tr");
     expect(within(row).getByText("ebs.csi.aws.com")).toBeInTheDocument();
     expect(within(row).getByText("1024.0 GiB")).toBeInTheDocument();
     // clusters, pvcs, bound, pending
@@ -194,7 +195,7 @@ describe("storage", () => {
 
   it("puts the pending claims first and says what is not mounted", async () => {
     open("storage");
-    const row = (await screen.findByText("checkout-data")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("checkout-data"), "tr");
     expect(within(row).getByText("pending")).toBeInTheDocument();
     expect(within(row).getByText("not mounted")).toBeInTheDocument();
     expect(screen.getByText("Persistent volume claims (2)")).toBeInTheDocument();
@@ -204,8 +205,8 @@ describe("storage", () => {
 describe("routes", () => {
   it("shows which cluster and namespace serves a hostname", async () => {
     open("routes");
-    const row = (await screen.findByText("checkout.apps.ocp-prod-iad-02.acme.example/"))
-      .closest<HTMLElement>("tr");
+    const row = closestElement(
+      await screen.findByText("checkout.apps.ocp-prod-iad-02.acme.example/"), "tr");
     expect(within(row).getByText("checkout:8080")).toBeInTheDocument();
     expect(within(row).getByText("edge · Redirect")).toBeInTheDocument();
     expect(within(row).getByText("admitted")).toBeInTheDocument();
@@ -213,8 +214,8 @@ describe("routes", () => {
 
   it("says none where a route terminates no TLS", async () => {
     open("routes");
-    const row = (await screen.findByText("checkout.apps.ocp-stage-iad-01.acme.example"))
-      .closest<HTMLElement>("tr");
+    const row = closestElement(
+      await screen.findByText("checkout.apps.ocp-stage-iad-01.acme.example"), "tr");
     expect(within(row).getByText("none")).toBeInTheDocument();
     expect(within(row).getByText("rejected")).toBeInTheDocument();
   });
@@ -232,7 +233,7 @@ describe("events", () => {
     open("events");
     expect(await screen.findByText("Warning events (2)")).toBeInTheDocument();
     expect(screen.getByText("1 FailedScheduling · 1 BackOff")).toBeInTheDocument();
-    const row = screen.getByText("Pod/prometheus-k8s-1").closest<HTMLElement>("tr");
+    const row = closestElement(screen.getByText("Pod/prometheus-k8s-1"), "tr");
     expect(within(row).getByText("default-scheduler")).toBeInTheDocument();
     expect(within(row).getByText("18")).toBeInTheDocument();
   });
@@ -247,8 +248,8 @@ describe("events", () => {
 describe("images", () => {
   it("groups by image and counts the workloads carrying each one", async () => {
     open("images");
-    const row = (await screen.findByRole("cell", { name: "quay.io/acme/checkout:1.9.2" }))
-      .closest<HTMLElement>("tr");
+    const row = closestElement(
+      await screen.findByRole("cell", { name: "quay.io/acme/checkout:1.9.2" }), "tr");
     const cells = within(row).getAllByRole("cell").map((c) => c.textContent);
     expect(cells.slice(0, 3)).toEqual(["quay.io/acme/checkout:1.9.2", "2", "2"]);
     expect(await screen.findByText("Images (2)")).toBeInTheDocument();
@@ -282,7 +283,7 @@ describe("images", () => {
 describe("config references", () => {
   it("shows which workloads reference a secret, and how", async () => {
     open("references");
-    const row = (await screen.findByText("checkout-db")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("checkout-db"), "tr");
     expect(within(row).getByText("Deployment/checkout-api")).toBeInTheDocument();
     expect(within(row).getByText("CronJob/checkout-reconcile")).toBeInTheDocument();
     expect(within(row).getByText("via envFrom")).toBeInTheDocument();
@@ -307,7 +308,7 @@ describe("config references", () => {
 describe("cluster admins", () => {
   it("names every subject holding cluster-admin and where", async () => {
     open("access");
-    const row = (await screen.findByText("sre-oncall")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("sre-oncall"), "tr");
     expect(within(row).getByText("Group")).toBeInTheDocument();
     expect(within(row).getByText("sre-oncall-admin")).toBeInTheDocument();
     expect(within(row).getByText("ocp-stage-iad-01")).toBeInTheDocument();
@@ -316,7 +317,7 @@ describe("cluster admins", () => {
 
   it("names the namespace a service account lives in", async () => {
     open("access");
-    const row = (await screen.findByText("pipeline")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("pipeline"), "tr");
     expect(within(row).getByText("(openshift-gitops)")).toBeInTheDocument();
   });
 

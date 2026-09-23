@@ -57,6 +57,9 @@ export default function AddToDashboard({
   const ready = !!chosen && title.trim() && (!cloning || isSlug(newId));
 
   const add = async () => {
+    // The button is disabled until `ready`, which includes having chosen a
+    // dashboard - this is that condition said where it can be read.
+    if (!chosen) return;
     setBusy(true);
     setProblem("");
     try {

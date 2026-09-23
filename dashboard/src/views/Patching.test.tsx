@@ -5,7 +5,7 @@ import Patching from "./Patching";
 import * as cache from "../cache";
 import { answer, fails } from "../test/apiMock";
 import type { ApiMock } from "../test/apiMock";
-import { currentUrl, renderView } from "../test/harness";
+import { closestElement, currentUrl, parentOf, renderView } from "../test/harness";
 import { PATCH_JOB, PATCH_JOBS, PATCH_REPORT } from "../test/fixtures/platform";
 
 vi.mock("../api", async () => {
@@ -28,7 +28,7 @@ const open = (at = "/patching", id?: string) => renderView(
 describe("the report", () => {
   it("counts the jobs, the ones that finished and the ones that need a person", async () => {
     open();
-    const stats = (await screen.findByText("Jobs", { selector: ".label" })).closest<HTMLElement>(".stats");
+    const stats = closestElement(await screen.findByText("Jobs", { selector: ".label" }), ".stats");
     expect(within(stats).getByText("Jobs", { selector: ".label" }).nextSibling)
       .toHaveTextContent("5");
     expect(within(stats).getByText("Completed").nextSibling).toHaveTextContent("2");
@@ -60,7 +60,7 @@ describe("the report", () => {
 describe("the job list", () => {
   it("draws a row per job with its change record, approval and progress", async () => {
     open();
-    const row = (await screen.findByText("patch-2026-09-20-a")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("patch-2026-09-20-a"), "tr");
     expect(within(row).getByText("CHG0041233")).toBeInTheDocument();
     expect(within(row).getByText("m.okafor")).toBeInTheDocument();
     expect(within(row).getByText("4.16.9")).toBeInTheDocument();
@@ -70,7 +70,7 @@ describe("the job list", () => {
 
   it("says an unapproved job is pending rather than leaving the cell blank", async () => {
     open();
-    const row = (await screen.findByText("patch-2026-09-18-b")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("patch-2026-09-18-b"), "tr");
     expect(within(row).getByText("pending")).toBeInTheDocument();
   });
 
@@ -99,7 +99,7 @@ describe("one job", () => {
 
   it("names it, with its status and how it did against the threshold", async () => {
     openJob();
-    const head = (await screen.findByRole("heading", { name: "patch-2026-09-20-a" })).parentElement;
+    const head = parentOf(await screen.findByRole("heading", { name: "patch-2026-09-20-a" }));
     expect(within(head).getByText("paused")).toHaveClass("pill", "warning");
     expect(within(head).getByText("60% success (threshold 80%)")).toBeInTheDocument();
   });
@@ -107,7 +107,9 @@ describe("one job", () => {
   it("shows who asked, who approved and what it was aiming at", async () => {
     const { container } = openJob();
     await screen.findByText("Change record");
-    const facts = container.querySelector<HTMLElement>(".kv");
+    // the change record is a list of plain spans: it has no role or name of
+    // its own, so the DOM shape is what scopes these lookups
+    const facts = container.querySelector(".kv") as HTMLElement;
     expect(within(facts).getByText("CHG0041233")).toBeInTheDocument();
     expect(within(facts).getByText("a.sthapit")).toBeInTheDocument();
     expect(within(facts).getByText("m.okafor (approved)")).toBeInTheDocument();
@@ -116,7 +118,7 @@ describe("one job", () => {
 
   it("lists the per-cluster outcome, with a dash where there is no number", async () => {
     openJob();
-    const row = (await screen.findByText("ocp-dev-iad-01")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("ocp-dev-iad-01"), "tr");
     expect(within(row).getByText("skipped")).toBeInTheDocument();
     expect(within(row).getByText("? → —")).toBeInTheDocument();
     expect(within(row).getByText("— → —")).toBeInTheDocument();
@@ -124,7 +126,7 @@ describe("one job", () => {
 
   it("shows a cluster that was patched, from and to", async () => {
     openJob();
-    const row = (await screen.findByText("ocp-prod-iad-01")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("ocp-prod-iad-01"), "tr");
     expect(within(row).getByText("passed")).toBeInTheDocument();
     expect(within(row).getByText("4.16.7 → 4.16.9")).toBeInTheDocument();
     expect(within(row).getByText("97 → 96")).toBeInTheDocument();

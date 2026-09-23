@@ -6,6 +6,8 @@ import Generate from "./Generate";
 import * as cache from "../cache";
 import { answer, fails, notFound } from "../test/apiMock";
 import type { ApiMock } from "../test/apiMock";
+import type { UserEvent } from "@testing-library/user-event";
+import type { AgentEvent } from "../agent/client";
 import { currentUrl, renderView } from "../test/harness";
 
 vi.mock("../api", async () => {
@@ -75,7 +77,7 @@ const FULL_RUN = [
   { type: "RUN_FINISHED", result: { turns: 2, tool_calls: 2, elapsed_ms: 18400 } },
 ];
 
-function script(events, { hang = false } = {}) {
+function script(events: AgentEvent[], { hang = false } = {}) {
   runAgent.mockImplementation(async ({ onEvent, signal }) => {
     for (const event of events) {
       if (signal?.aborted) return;
@@ -202,7 +204,7 @@ describe("a run", () => {
 });
 
 describe("saving what was generated", () => {
-  const generate = async (user) => {
+  const generate = async (user: UserEvent) => {
     script(FULL_RUN);
     open();
     await user.click(await screen.findByRole("button", { name: /Review production/ }));

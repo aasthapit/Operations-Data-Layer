@@ -8,6 +8,7 @@ import type { ApiMock } from "../test/apiMock";
 import {
   COLLECTOR_TIMINGS, MANIFEST, MANIFEST_AVAILABILITY,
 } from "../test/fixtures/platform";
+import { closestElement } from "../test/harness";
 
 vi.mock("../api", async () => {
   const { createApiMock } = await import("../test/apiMock");
@@ -36,8 +37,8 @@ function open() {
 
 // Three tables on this page carry a row per resource kind, so every lookup is
 // scoped to the card it belongs to.
-const card = async (heading) =>
-  (await screen.findByRole("heading", { name: heading })).closest<HTMLElement>(".card");
+const card = async (heading: string) =>
+  closestElement(await screen.findByRole("heading", { name: heading }), ".card");
 
 describe("what the manifest declares", () => {
   it("counts the resources that are switched on, and names the file they come from", async () => {
@@ -70,8 +71,8 @@ describe("what the manifest declares", () => {
 
   it("draws a row per declared resource, saying what each one is for", async () => {
     open();
-    const row = within(await card("Resources")).getByRole("cell", { name: "routes" })
-      .closest<HTMLElement>("tr");
+    const row = closestElement(
+      within(await card("Resources")).getByRole("cell", { name: "routes" }), "tr");
     expect(within(row).getByText("Route")).toBeInTheDocument();
     expect(within(row).getByText("route.openshift.io/v1")).toBeInTheDocument();
     expect(within(row).getByText("namespaced · limit 2000")).toBeInTheDocument();
@@ -81,8 +82,8 @@ describe("what the manifest declares", () => {
 
   it("says which resources are switched off", async () => {
     open();
-    const row = within(await card("Resources"))
-      .getByRole("cell", { name: "clusterserviceversions" }).closest<HTMLElement>("tr");
+    const row = closestElement(
+      within(await card("Resources")).getByRole("cell", { name: "clusterserviceversions" }), "tr");
     expect(within(row).getByText("disabled")).toHaveClass("chip", "disabled");
   });
 
@@ -97,16 +98,16 @@ describe("what the manifest declares", () => {
 describe("availability per cluster", () => {
   it("draws a column per cluster and a row per resource", async () => {
     open();
-    const row = within(await card("Availability per cluster"))
-      .getByRole("cell", { name: "routes" }).closest<HTMLElement>("tr");
+    const row = closestElement(
+      within(await card("Availability per cluster")).getByRole("cell", { name: "routes" }), "tr");
     expect(within(row).getByText("24")).toBeInTheDocument();
     expect(within(row).getByText("n/a")).toBeInTheDocument();
   });
 
   it("says 403 where RBAC denied the read, with the reason in the title", async () => {
     open();
-    const row = within(await card("Availability per cluster"))
-      .getByRole("cell", { name: "clusterserviceversions" }).closest<HTMLElement>("tr");
+    const row = closestElement(within(await card("Availability per cluster"))
+      .getByRole("cell", { name: "clusterserviceversions" }), "tr");
     const denied = within(row).getByText("403");
     expect(denied).toHaveAttribute("title",
       "clusterserviceversions.operators.coreos.com is forbidden");
@@ -150,8 +151,8 @@ describe("where the collector's time goes", () => {
 
   it("draws a row per cluster with what its collection cost", async () => {
     open();
-    const row = within(await card("Collector timing"))
-      .getByRole("cell", { name: "ocp-prod-sjc-01" }).closest<HTMLElement>("tr");
+    const row = closestElement(
+      within(await card("Collector timing")).getByRole("cell", { name: "ocp-prod-sjc-01" }), "tr");
     expect(within(row).getByText("hub-west")).toBeInTheDocument();
     expect(within(row).getByText("901")).toBeInTheDocument();
     expect(within(row).getByText("21 / 9")).toBeInTheDocument();

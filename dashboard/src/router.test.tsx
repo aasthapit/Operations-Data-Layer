@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { buildUrl, setQuery, useQueryFilters, useRoute } from "./router";
 
-const at = (path) => window.history.replaceState({ odl: 0 }, "", path);
+const at = (path: string) => window.history.replaceState({ odl: 0 }, "", path);
 
 describe("buildUrl", () => {
   it("leaves a path with no query untouched", () => {
@@ -102,7 +102,7 @@ describe("useRoute", () => {
 });
 
 describe("useQueryFilters", () => {
-  const filters = (keys) => renderHook(() => {
+  const filters = (keys: string[]) => renderHook(() => {
     const route = useRoute();
     return useQueryFilters(route, keys);
   });

@@ -5,7 +5,7 @@ import Applications from "./Applications";
 import * as cache from "../cache";
 import { answer, fails } from "../test/apiMock";
 import type { ApiMock } from "../test/apiMock";
-import { currentUrl, renderView } from "../test/harness";
+import { closestElement, currentUrl, parentOf, renderView } from "../test/harness";
 import { APPLICATIONS, APPLICATION_DETAIL } from "../test/fixtures/insights";
 
 vi.mock("../api", async () => {
@@ -28,7 +28,7 @@ const open = (at = "/applications", app?: string) => renderView(
 describe("the list", () => {
   it("draws a row per application with its ownership and its health", async () => {
     open();
-    const row = (await screen.findByText("checkout")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("checkout"), "tr");
     expect(within(row).getByText("payments")).toBeInTheDocument();
     expect(within(row).getByText("critical")).toBeInTheDocument();
     expect(within(row).getByText("warning")).toBeInTheDocument();
@@ -39,7 +39,7 @@ describe("the list", () => {
 
   it("names the first few clusters an application runs on, and how many more", async () => {
     open();
-    const row = (await screen.findByText("checkout")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("checkout"), "tr");
     expect(within(row).getByText(/ocp-prod-iad-02, ocp-stage-iad-01/)).toBeInTheDocument();
   });
 
@@ -50,7 +50,7 @@ describe("the list", () => {
 
   it("says usage is not available rather than showing a zero", async () => {
     open();
-    const row = (await screen.findByText("(unassigned)")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("(unassigned)"), "tr");
     expect(within(row).getAllByText("n/a")).toHaveLength(2);
   });
 
@@ -112,7 +112,7 @@ describe("the list", () => {
 describe("one application", () => {
   it("names it, with its status, tier and owner", async () => {
     const { container } = open("/applications/checkout", "checkout");
-    const head = (await screen.findByRole("heading", { name: "checkout" })).parentElement;
+    const head = parentOf(await screen.findByRole("heading", { name: "checkout" }));
     expect(within(head).getByText("warning")).toHaveClass("pill");
     expect(within(head).getByText("critical")).toHaveClass("tag");
     expect(within(head).getByText("LOB payments")).toBeInTheDocument();
@@ -121,7 +121,7 @@ describe("one application", () => {
 
   it("lists every placement with the cluster it is on", async () => {
     open("/applications/checkout", "checkout");
-    const row = (await screen.findByText("checkout-prod")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("checkout-prod"), "tr");
     expect(within(row).getByText("ocp-prod-iad-02")).toBeInTheDocument();
     expect(within(row).getByText("4.16.7")).toBeInTheDocument();
     expect(within(row).getByText("12/14")).toBeInTheDocument();
@@ -164,7 +164,7 @@ describe("one application", () => {
         status: "" }).url;
       cache.put(listUrl, APPLICATIONS);
       open("/applications/checkout", "checkout");
-      const head = (await screen.findByRole("heading", { name: "checkout" })).parentElement;
+      const head = parentOf(await screen.findByRole("heading", { name: "checkout" }));
       expect(within(head).getByText("warning")).toHaveClass("pill");
     });
 });

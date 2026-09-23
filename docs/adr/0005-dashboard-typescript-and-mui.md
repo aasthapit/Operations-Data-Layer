@@ -107,3 +107,102 @@ The data layer gained four (`tests/test_openapi_export.py`) and stands at **758 
 
 **Suite time**: 9.22 s before, 9.07 s after (`vitest run`, warm).
 `tsc --noEmit` adds about 1.4 s to the gate.
+
+### Phase 2 - components, views, and `strict: true`
+
+Three workers, in order: 2a took the shared components, 2b the shell and the views, 2c turned strict on and cleared what it found.
+2a and 2b landed together as one commit because neither is separately runnable: a view is not converted until the components it draws with are.
+
+**Files converted (50 moved with `git mv`, plus `main.jsx` -> `main.tsx`, which git records as a rewrite rather than a rename).**
+
+| Group | Files |
+|---|---|
+| 2a - shared components | `Chart`, `ChartControls`, `DataTable`, `ResultTable`, `components`, and the five under `dashboards/` (`Panel`, `VariablesBar`, `AddToDashboard`, `editor`, `ui`) |
+| 2b - shell and views | `App`, `main`, and all fourteen under `views/` |
+| Their tests | the twenty-five `.test.jsx` beside them, as `.test.tsx` |
+| 2c - moved | `src/api.ts` -> `src/api/index.ts` (and its test beside it) |
+
+Nothing was renamed: every component, prop and export kept its name, so the diff is types and the guards the types asked for.
+
+**`tsc --noEmit` errors under `strict: true`: 544 before, 0 after.**
+The top five codes, and what each one turned out to be:
+
+| Code | Count | What it was |
+|---|---|---|
+| `TS2345` (argument not assignable) | 221 | 197 of them one shape: `within(row)` where `row` came from `.closest()` or `.parentElement`, which answer `null` |
+| `TS7005` (implicitly `any`) | 104 | `let calls;` / `let runtime;` in the tests - a module or a call log declared before it is assigned |
+| `TS18047` (possibly `null`) | 61 | the real nullability, mostly `useState<T | null>` read by an updater |
+| `TS7006` (parameter implicitly `any`) | 60 | test helpers and stubs: `(groupBy) => ...` answering an endpoint by argument |
+| `TS18048` (possibly `undefined`) | 43 | optional API fields - `Workload.containers`, which only arrives with `detail=true` |
+
+414 of the 544 were in the suite and 130 in the app.
+The split is the useful number: the app was already written defensively, and what strict found there was where the defence was missing rather than where it was verbose.
+
+**What the strict switch actually caught**, as opposed to made noisier:
+
+- `PanelChart.series` was `string | undefined`; `Chart.normalizeChart` writes `null` when no column separates the series, which is what is stored and handed back.
+  `undefined` would have meant "no such field", which is a different state and would have re-run the auto-detection.
+- `QueryResult.rows` was `QueryValue[][]` - a scalar per cell.
+  A DuckDB JSON, STRUCT, LIST or MAP column survives the JSON round trip as a nested value, which `ResultTable`'s `Cell` has always drawn as its JSON and `Chart` has always classified as the unchartable "other" kind, both with tests.
+  The interface was the thing that was wrong; it is now `QueryRow[]` (`unknown[][]`), and `Chart.Row` and `ResultTable.TableResult` both read that one type instead of each declaring their own.
+- `useFetch` declared `fn: () => Loadable<T>`, but half the views ask conditionally (`isNew ? null : definitionDescriptor(id)`) and the hook has always read a missing descriptor as "no key, no request".
+  The signature now says `| null`.
+- `ClusterDetail`'s namespace count added `application + platform` straight, and both are `null` for a cluster the collector could not reach.
+- `Chart`'s stacked-band builder read `running.get(t)` as a number; the map is seeded with every stamp, so a miss and a zero are the same thing - now said with `?? 0` rather than assumed.
+
+**Structural changes a reviewer should look at.**
+
+- `src/api.ts` -> `src/api/index.ts`.
+  `import { api } from "../api"` now resolves into the directory, so the file/directory ambiguity beside `api/types.ts` and `api/schema.ts` is gone.
+  No import path changed.
+- `dashboards/Panel.tsx`: `onEdit`, `onRemove` and `onMove` are optional.
+  Each control is drawn only when `editing` is on *and* its handler is there, so a read-only caller leaves them out instead of passing three no-ops - which is what `READ_ONLY_PANEL` in `views/Generate.tsx` was, and it is deleted.
+- `dashboards/model.ts`: `fieldErrors(error: unknown)`, because every caller is a `catch` clause and `useUnknownInCatchVariables` comes with strict.
+  `forSave` returns a declared `SaveBody` rather than `Record<string, unknown>`.
+- `test/harness.tsx`: `makeNav` is annotated `: Nav` against `router.ts`'s interface, and the local `Nav = ReturnType<typeof makeNav>` alias is gone.
+  A harness that drifted from the interface the views are written against would otherwise hand them a stand-in the app would never build.
+- `test/harness.tsx` gained `closestElement(from, selector)` and `parentOf(from)`: they throw with the selector and the element they started from.
+  Those two replaced the 79 nullable DOM walks - 73 `.closest<HTMLElement>(...)` and 6 `.parentElement` - that the 197 `TS2345`s came from, rather than 197 non-null assertions.
+- `DataTable`: `activeFilters` carries the resolved `Column` rather than the key, and the sort resolves its column once.
+  A filter or sort naming a column the table no longer has is simply not one, said once instead of proven at every row.
+- `agent/useAgentRun.test.ts`: the `asActivity` cast is replaced by `firstOfKind(transcript, kind)` and `activityAt(transcript, index)`, which narrow through the discriminant.
+  A cast would have let a test read `.status` off a note and pass.
+
+**One non-null assertion in the whole tree**, in `hooks.ts`: the cache's fetcher reads `reqRef.current!`, and the invariant is named in the comment - the key is the descriptor's own url, so a key exists only when the descriptor does, and the `if (!key)` above has already returned when it did not.
+No `@ts-ignore` and no `@ts-expect-error` anywhere.
+Every remaining `any` carries a `// why:`; they are all the same shape - a document off the wire, out of `localStorage` or out of an older build, read field by field by the function that owns it (`normalizeState`, `normalizeDefinition`, `applyOp`, `reduce`, `summarize`).
+
+**Convention, so Phases 3 and 4 do not rediscover it**: every module-level column list is annotated `const COLUMNS: Column<Row>[] = [...]`.
+Without the annotation `Column<Row = any>` swallows the row type and `filter`, `align` and `headerClassName` widen to `string`, which stops fitting the props; with it, the literal unions hold and a column that reads a field the row does not have is an error where it is written.
+`Column<Row>[]` rather than `Array<Column<Row>>`, consistently.
+
+**Tests changed, and why** (none deleted, none skipped):
+
+- `views/*.test.tsx`, `DataTable.test.tsx` - the 73 `.closest()` and 6 `.parentElement` lookups now go through the harness helpers.
+  Same elements, same assertions.
+- `Chart.test.tsx` - `container.querySelector("svg")` goes through a local `svgOf` that throws when there is no chart; `resolveSpec(...)` results are read with `?.`, since the function answers `null` for a result that cannot be charted and that is what several of these tests assert.
+- `dashboards/runtime.test.ts` - the two drafts handed to `draftRunDescriptor` are built with `normalizeDefinition`, which is what the editor holds; they were partial objects before.
+  The fixture-definition assertion reads `toMatchObject` because `definitionDescriptor` answers `unknown` on purpose.
+- `agent/client.test.ts` - `after.dashboard.panels[0].title` became `toMatchObject`, because `AgentState.dashboard` is an open record by design.
+- `ChartControls.test.tsx` - `setup` normalises the partial chart choice before rendering, which is what the Query page does; the controls are never handed a partial.
+- `api/index.test.ts` - the fetch stub's recorded `init` is a declared shape, and the JSON bodies are read through a `bodyOf(n)` that says which call carried none.
+- Seven `container.querySelector(...)` lookups where the DOM shape *is* the assertion (a usage bar's fill, a `.kv` change record, two blast-radius cards, the modal scrim, the `.q-sql` pre, the dialog's warning line) narrow with `as HTMLElement` and a comment saying why there is no role or label to ask for.
+
+**Bundle**: `dist/assets/*.js` 402.47 kB raw / **119.88 kB gzip** before 2c, 403.10 kB raw / **120.10 kB gzip** after (+0.22 kB gzip - the guards, `|| []` and `?? 0`, that strict asked for; types erase).
+CSS unchanged at 30.86 kB / 6.65 kB gzip.
+
+**Tests**: **898 in 35 files**, unchanged across the whole of Phase 2.
+
+**Coverage** (the gate is statements and lines >= 70%):
+
+| | After Phase 1 | After Phase 2 |
+|---|---|---|
+| Statements | 89.11% (3881/4355) | 88.94% (3918/4405) |
+| Branches | 82.78% (3496/4223) | 81.95% (3569/4355) |
+| Functions | 86.29% (1429/1656) | 86.47% (1438/1663) |
+| Lines | 90.98% (3178/3493) | 90.91% (3234/3557) |
+
+The denominators grew by the guards; branches fall 0.8 points because a `|| []` on a field the fixtures always send is a branch the suite cannot take.
+
+**Suite time**: 6.7 s (`vitest run`, warm), 14.8 s with `--coverage`.
+`tsc --noEmit` takes about 3.0 s under strict, up from 1.4 s with it off.

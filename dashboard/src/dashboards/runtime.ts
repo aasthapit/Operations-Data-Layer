@@ -143,9 +143,11 @@ function optionsFrom(result: BatchEntry | undefined | null): VariableOptions {
 // running a definition here
 // --------------------------------------------------------------------------- //
 // Same response shape as POST /run, so the view does not know which path it got.
-// why: `definition` is a stored document, a fixture or an unsaved draft, and
-// normalizeDefinition is exactly what turns it into a Definition.
-export async function runLocally(definition: any, given: Params,
+//
+// `definition` is `unknown` because it is a stored document, a fixture or an
+// unsaved draft, and normalizeDefinition is exactly what turns any of those
+// into a Definition - nothing here reads a field before that has happened.
+export async function runLocally(definition: unknown, given: Params,
   signal?: AbortSignal): Promise<DashboardRun> {
   const def = normalizeDefinition(definition);
   const params = effectiveParams(def, given);
@@ -223,6 +225,11 @@ Loadable<{ dashboards: DashboardListEntry[] }> {
   return api.dashboards();
 }
 
+// `unknown` rather than `DashboardDefinition`, and deliberately: the API
+// declares no response model for this route, so what comes back is a stored
+// document of whatever vintage it was written in. Every caller runs it through
+// `normalizeDefinition`, and saying `unknown` here is what makes that
+// unavoidable rather than optional.
 export function definitionDescriptor(id: string, { fixture }: DescriptorOptions = {}):
 Loadable<unknown> {
   if (fixture) {

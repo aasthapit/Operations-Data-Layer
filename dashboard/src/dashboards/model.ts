@@ -218,11 +218,42 @@ export function emptyPanel(title = "New panel"): Panel {
   };
 }
 
-// What is sent back on a PUT: the stored shape, without the fields the server
-// owns (a clone must not claim to be built in, or to have been saved already).
-/** What is sent on a PUT. It is deliberately not a `Definition`: the fields the
- * server owns are left out, and the optional ones are only present when set. */
-export function forSave(def: Definition): Record<string, unknown> {
+/** One variable as a PUT carries it: the optional fields are absent rather
+ * than empty, which is what the API stores. */
+export interface SaveVariable {
+  name: string;
+  label: string;
+  type: VariableType;
+  sql?: string;
+  multi?: true;
+  required?: true;
+  default?: VariableValue;
+}
+
+/** One panel as a PUT carries it. */
+export interface SavePanel {
+  id: string;
+  title: string;
+  description?: string;
+  sql: string;
+  chart: ChartSpec;
+  w: number;
+  h: number;
+  limit?: number;
+}
+
+/** The body of a PUT. It is deliberately not a `Definition`: the fields the
+ * server owns - `builtin`, `updated_at`, `updated_by` - are left out, so a
+ * clone cannot claim to be built in or to have been saved already. */
+export interface SaveBody {
+  id: string;
+  title: string;
+  description: string;
+  variables: SaveVariable[];
+  panels: SavePanel[];
+}
+
+export function forSave(def: Definition): SaveBody {
   return {
     id: def.id,
     title: def.title,
@@ -429,13 +460,15 @@ export function validateDefinition(def: Definition): FieldError[] {
 // A 400 from the API, flattened to the same {path, message} shape. The dashboard
 // plane answers with a field path; FastAPI's own validation answers with a loc
 // array. Both are understood, and anything else becomes one unkeyed error.
-export function fieldErrors(
-  error: Pick<ApiError, "detail"> & { message?: string } | null | undefined,
-): FieldError[] {
+// `error` is `unknown` because every caller is a `catch` clause, and what was
+// thrown there is genuinely unknown - a fetch rejection, an ApiError the API
+// layer built, or anything a future caller throws.
+export function fieldErrors(error: unknown): FieldError[] {
+  const thrown = error as Partial<ApiError> | null | undefined;
   // why: `detail` is whatever the API put in the body - a list of field errors
   // from the dashboards plane, a FastAPI validation list, a string, or an
   // object nobody has seen before. Every branch below is a shape test.
-  const detail = error?.detail as any;
+  const detail = thrown?.detail as any;
   const out: FieldError[] = [];
   const push = (path: unknown, message: unknown) => {
     if (message) out.push({ path: String(path ?? ""), message: String(message) });
@@ -444,7 +477,7 @@ export function fieldErrors(
     for (const d of detail) {
       if (!d || typeof d !== "object") continue;
       const path = Array.isArray(d.loc)
-        ? d.loc.filter((x) => x !== "body").join(".")
+        ? d.loc.filter((x: unknown) => x !== "body").join(".")
         : (d.field ?? d.path ?? "");
       push(path, d.msg || d.message || d.error);
     }
@@ -452,7 +485,7 @@ export function fieldErrors(
     if (detail.field || detail.path) push(detail.field || detail.path, detail.error || detail.message || detail.msg);
     else for (const [k, v] of Object.entries(detail)) if (typeof v === "string") push(k, v);
   }
-  if (!out.length && error) push("", error.message || String(error));
+  if (!out.length && error) push("", thrown?.message || String(error));
   return out;
 }
 
@@ -479,11 +512,15 @@ export const panelChartHeight = (h: unknown): number =>
 // table it knows - so a panel opens there as custom SQL over `clusters`, with
 // the variables already substituted. What the user sees is the query that ran.
 export function queryLinkState(sql: unknown, chart: unknown): string {
-  return encodeState(normalizeState({
+  const state = normalizeState({
     table: "clusters",
     mode: "sql",
     sql: String(sql || ""),
     chart: normalizeChart(chart),
     limit: 200,
-  }));
+  });
+  // normalizeState only refuses a state with no table, and the table is
+  // written two lines up - but "" is already what every caller treats as "no
+  // link", so saying it is cheaper than asserting the refusal cannot happen.
+  return state ? encodeState(state) : "";
 }

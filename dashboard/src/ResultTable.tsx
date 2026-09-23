@@ -8,7 +8,7 @@ import { useMemo } from "react";
 import type { ReactNode } from "react";
 import { DataTable, Pill } from "./components";
 import type { Column } from "./components";
-import type { QueryResult } from "./api/types";
+import type { QueryResult, QueryRow } from "./api/types";
 
 const STATUS_WORD = /^[a-z][a-z-]{1,19}$/;
 
@@ -16,14 +16,14 @@ const STATUS_WORD = /^[a-z][a-z-]{1,19}$/;
  * What a table can be drawn from: a query result that ran. A batch entry that
  * failed carries `error` and the SQL it tried instead, and never gets here.
  *
- * `rows` is wider than `QueryResult["rows"]` on purpose. The hand-written API
- * types say a cell is a scalar, but a DuckDB JSON, STRUCT or LIST column comes
- * back as a nested object - which `Cell` has always drawn as its JSON, and
- * which the suite covers. The narrower interface is the thing that is wrong.
+ * Everything but `columns` and `rows` is optional because a dashboard panel
+ * hands over a `BatchEntry`, which carries only what the batch answered with.
+ * The rows are `QueryRow[]` - the same type `QueryResult` and `Chart` use, so
+ * a nested DuckDB value is one shape across the app rather than three.
  */
 export type TableResult = Omit<Partial<QueryResult>, "columns" | "rows"> & {
   columns: string[];
-  rows: unknown[][];
+  rows: QueryRow[];
 };
 
 /** The two places a result cell can navigate to. It is spelled out rather than
@@ -114,7 +114,7 @@ export default function ResultTable({
   const rows = useMemo<ResultRow[]>(
     () => (result ? result.rows.map((values, i) => ({ i, values })) : []), [result]);
 
-  const columns = useMemo<Array<Column<ResultRow>>>(() => {
+  const columns = useMemo<Column<ResultRow>[]>(() => {
     if (!result) return [];
     return result.columns.map((name, i) => {
       // A column whose every present value is a number is a measure: right-align

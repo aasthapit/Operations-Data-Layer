@@ -5,7 +5,7 @@ import Metrics from "./Metrics";
 import * as cache from "../cache";
 import { answer, fails } from "../test/apiMock";
 import type { ApiMock } from "../test/apiMock";
-import { currentUrl, renderView } from "../test/harness";
+import { closestElement, currentUrl, renderView } from "../test/harness";
 import {
   CAPACITY_BY_CLUSTER, CAPACITY_BY_HUB, METRICS_HEALTH, METRICS_HEALTH_DOWN, TOP_NAMESPACES,
   TOP_NODES,
@@ -30,9 +30,9 @@ beforeEach(() => {
   cache.invalidate();
   answer(api, {
     metricsHealth: METRICS_HEALTH,
-    topNamespaces: (by) => (by === "memory" ? memoryNamespaces : TOP_NAMESPACES),
+    topNamespaces: (by: string) => (by === "memory" ? memoryNamespaces : TOP_NAMESPACES),
     topNodes: TOP_NODES,
-    capacity: (groupBy) => (groupBy === "hub" ? CAPACITY_BY_HUB : CAPACITY_BY_CLUSTER),
+    capacity: (groupBy: string) => (groupBy === "hub" ? CAPACITY_BY_HUB : CAPACITY_BY_CLUSTER),
   });
 });
 
@@ -112,7 +112,7 @@ describe("the top lists", () => {
 describe("capacity headroom", () => {
   it("shows used against allocatable, and the headroom left, per cluster", async () => {
     open();
-    const row = (await screen.findByText("ocp-prod-iad-02")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("ocp-prod-iad-02"), "tr");
     expect(within(row).getByText("80.9")).toBeInTheDocument();
     expect(within(row).getByText(/\/ 91.5 · 88.4%/)).toBeInTheDocument();
     expect(within(row).getByText("10.6")).toBeInTheDocument();

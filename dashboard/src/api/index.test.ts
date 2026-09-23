@@ -1,27 +1,70 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "./api";
+import { api } from "./index";
+import type { ApiError } from "./index";
 
-// Every helper in api.js goes through one fetch, so the tests read that call
+// Every helper in api.ts goes through one fetch, so the tests read that call
 // and answer it: what is asserted is the URL that was built, the body that was
 // sent and the error that comes back out.
-let calls;
 
-function answer(status, body, { text = false } = {}) {
+/** The init the helpers build: a method, JSON headers, a JSON string body and
+ * sometimes an abort signal. It is spelled out rather than taken as
+ * `RequestInit` because the assertions read `body` as the JSON text it always
+ * is, which `BodyInit` would not let them do. */
+interface CallInit {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  signal?: AbortSignal | null;
+}
+
+/** One fetch, as the stub recorded it. */
+interface Call {
+  url: string;
+  init: CallInit;
+}
+
+/** Only the four members of a Response that `api.ts` touches. A whole Response
+ * would have to be constructed for every case; what matters is that `ok`, the
+ * status and the two body readers behave as the real one does. */
+interface FakeResponse {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  json: () => Promise<unknown>;
+  text: () => Promise<string>;
+}
+
+const STATUS_TEXT: Record<number, string> = {
+  200: "OK", 400: "Bad Request", 404: "Not Found", 409: "Conflict",
+  503: "Service Unavailable",
+};
+
+let calls: Call[];
+
+function answer(status: number, body: unknown, { text = false } = {}): FakeResponse {
   return {
     ok: status >= 200 && status < 300,
     status,
-    statusText: { 200: "OK", 400: "Bad Request", 404: "Not Found", 409: "Conflict",
-      503: "Service Unavailable" }[status] || "",
+    statusText: STATUS_TEXT[status] || "",
     json: async () => body,
-    text: async () => (text ? body : JSON.stringify(body)),
+    text: async () => (text ? String(body) : JSON.stringify(body)),
   };
 }
 
-function respond(handler) {
-  vi.stubGlobal("fetch", vi.fn((url, init) => {
+function respond(handler: (url: string, init: CallInit) => FakeResponse) {
+  vi.stubGlobal("fetch", vi.fn((url: string, init: CallInit = {}) => {
     calls.push({ url, init });
     return Promise.resolve(handler(url, init));
   }));
+}
+
+/** The JSON body of the nth recorded call. A write that carried none is a
+ * failure of the helper under test, so it is said here rather than becoming an
+ * "undefined is not valid JSON" three frames away. */
+function bodyOf(n: number): unknown {
+  const body = calls[n]?.init?.body;
+  if (typeof body !== "string") throw new Error(`fetch #${n} carried no JSON body`);
+  return JSON.parse(body);
 }
 
 beforeEach(() => { calls = []; });
@@ -84,10 +127,10 @@ describe("a GET descriptor", () => {
 
   it("throws an error carrying the status, so a 404 can be told from a 500", async () => {
     respond(() => answer(404, "no such endpoint", { text: true }));
-    const error = await api.agent().then(() => null, (e) => e);
-    expect(error.status).toBe(404);
-    expect(error.message).toContain("404 Not Found");
-    expect(error.message).toContain("no such endpoint");
+    const error = await api.agent().then(() => null, (e: unknown) => e as ApiError);
+    expect(error?.status).toBe(404);
+    expect(error?.message).toContain("404 Not Found");
+    expect(error?.message).toContain("no such endpoint");
   });
 });
 
@@ -119,7 +162,7 @@ describe("sendJson", () => {
     expect(calls[0].url).toBe("/api/dashboards/hub%20review");
     expect(calls[0].init.method).toBe("PUT");
     expect(calls[0].init.headers).toEqual({ "content-type": "application/json" });
-    expect(JSON.parse(calls[0].init.body)).toEqual({ id: "hub-review", panels: [] });
+    expect(bodyOf(0)).toEqual({ id: "hub-review", panels: [] });
   });
 
   it("sends a DELETE with no body at all", async () => {
@@ -151,9 +194,9 @@ describe("sendJson", () => {
   it("omits the row limit when none was asked for", async () => {
     respond(() => answer(200, {}));
     await api.runSql("SELECT 1");
-    expect(JSON.parse(calls[0].init.body)).toEqual({ sql: "SELECT 1" });
+    expect(bodyOf(0)).toEqual({ sql: "SELECT 1" });
     await api.runSql("SELECT 1", 50);
-    expect(JSON.parse(calls[1].init.body)).toEqual({ sql: "SELECT 1", limit: 50 });
+    expect(bodyOf(1)).toEqual({ sql: "SELECT 1", limit: 50 });
   });
 });
 
@@ -169,7 +212,7 @@ describe("runDashboard", () => {
     respond(() => answer(200, { results: {} }));
     await api.runDashboard("hub-review", { hub: "hub-east" }).load();
     expect(calls[0].url).toBe("/api/dashboards/hub-review/run");
-    expect(JSON.parse(calls[0].init.body)).toEqual({ params: { hub: "hub-east" } });
+    expect(bodyOf(0)).toEqual({ params: { hub: "hub-east" } });
   });
 
   it("spells an array and a nested object into the key in a stable order", () => {
@@ -247,19 +290,19 @@ describe("the endpoint table", () => {
   it("fetches each read from the url it carries", async () => {
     respond(() => answer(200, { ok: true }));
     await Promise.all(READS.map(([build]) => build().load()));
-    expect(calls.map((c) => c.url)).toEqual(READS.map(([, url]) => url));
+    expect(calls.map((c: Call) => c.url)).toEqual(READS.map(([, url]) => url));
   });
 
   it("sends each write to its own endpoint", async () => {
     respond(() => answer(200, { ok: true }));
     await api.queryBatch([{ id: "p", sql: "SELECT 1" }], { hub: "hub-east" });
     expect(calls[0].url).toBe("/api/query/batch");
-    expect(JSON.parse(calls[0].init.body))
+    expect(bodyOf(0))
       .toEqual({ queries: [{ id: "p", sql: "SELECT 1" }], params: { hub: "hub-east" } });
 
     await api.askQuery("how many clusters?", 50);
     expect(calls[1].url).toBe("/api/query/ask");
-    expect(JSON.parse(calls[1].init.body))
+    expect(bodyOf(1))
       .toEqual({ question: "how many clusters?", limit: 50 });
   });
 });

@@ -2,7 +2,16 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ChartControls, { chartNoneText } from "./ChartControls";
-import { inferFields, resolveSpec } from "./Chart";
+import { inferFields, normalizeChart, resolveSpec } from "./Chart";
+import type { ChartChoice, Row } from "./Chart";
+
+/** A result as these tests write one, in the wire shape /api/query/sql
+ * answers with. */
+interface Result {
+  columns: string[];
+  types: string[];
+  rows: Row[];
+}
 
 const HOURS = ["2026-09-20T18:00:00+00:00", "2026-09-20T19:00:00+00:00"];
 
@@ -21,12 +30,16 @@ const BY_STATUS = {
   rows: [["healthy", 2], ["warning", 1], ["critical", 1]],
 };
 
-function setup(source, chart) {
+// A test names only the fields its case is about; the app always hands the
+// controls a whole choice (the Query page's state is normalised on the way in),
+// so the same normaliser fills in the rest here.
+function setup(source: Result, chart: Partial<ChartChoice>) {
+  const choice = normalizeChart(chart);
   const fields = inferFields(source.columns, source.types, source.rows);
-  const spec = resolveSpec(fields, source.rows, chart);
+  const spec = resolveSpec(fields, source.rows, choice);
   const onChange = vi.fn();
   const user = userEvent.setup();
-  render(<ChartControls fields={fields} spec={spec} chart={chart} onChange={onChange} />);
+  render(<ChartControls fields={fields} spec={spec} chart={choice} onChange={onChange} />);
   return { onChange, user, spec };
 }
 

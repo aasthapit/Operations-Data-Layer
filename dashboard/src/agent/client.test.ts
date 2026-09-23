@@ -151,7 +151,7 @@ describe("runAgent", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const controller = new AbortController();
-    const events = [];
+    const events: AgentEvent[] = [];
     const run = runAgent({
       messages: [{ id: "m1", role: "user", content: "Review hub-east" }],
       state: {}, threadId: "t", runId: "r", fixture: true, signal: controller.signal,
@@ -159,7 +159,7 @@ describe("runAgent", () => {
     });
     await run;
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(events[0].type).toBe("RUN_STARTED");
+    expect(events[0]?.type).toBe("RUN_STARTED");
   });
 });
 
@@ -226,7 +226,9 @@ describe("applyPatch", () => {
   it("descends into an array element on the way to a field", () => {
     const after = applyPatch(state(),
       [{ op: "replace", path: "/dashboard/panels/0/title", value: "Renamed" }]);
-    expect(after.dashboard.panels[0].title).toBe("Renamed");
+    // `dashboard` is an open record on purpose - nothing in the client reads
+    // inside it - so the assertion is over the shape rather than through it.
+    expect(after.dashboard).toMatchObject({ panels: [{ title: "Renamed" }] });
   });
 
   it("refuses an array index that is not a number or does not exist", () => {

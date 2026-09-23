@@ -252,7 +252,7 @@ export default function DataTable<Row>({
   pageSize = 100,    // rows rendered before "Show more"; sort and filter still see them all
 }: DataTableProps<Row>) {
   const cols = useMemo(
-    () => (columns || []).filter(Boolean) as Array<Column<Row>>, [columns]);
+    () => (columns || []).filter(Boolean) as Column<Row>[], [columns]);
   const all = useMemo(() => rows || [], [rows]);
 
   const [state, setState] = useState<TableState>(() => loadState(id, cols, initialSort));
@@ -285,8 +285,16 @@ export default function DataTable<Row>({
     return out;
   }, [cols, all]);
 
+  // The filters that are on, each already carrying the column it names rather
+  // than the key. Resolving here rather than in the row loop means the lookup
+  // happens once per filter instead of once per filter per row, and it is what
+  // lets the loop below read `col` without asking whether it is there: a filter
+  // whose column this table no longer has is not an active filter.
   const activeFilters = useMemo(
-    () => Object.entries(state.filters).filter(([k, v]) => v && byKey.has(k)),
+    () => Object.entries(state.filters).flatMap(([k, v]) => {
+      const col = byKey.get(k);
+      return v && col ? [[col, v] as const] : [];
+    }),
     [state.filters, byKey]
   );
   const query = state.q.trim().toLowerCase();
@@ -295,8 +303,7 @@ export default function DataTable<Row>({
     let out = all;
     if (query || activeFilters.length) {
       out = out.filter((row) => {
-        for (const [k, v] of activeFilters) {
-          const col = byKey.get(k);
+        for (const [col, v] of activeFilters) {
           const text = cellText(col, row);
           if (col.filter === "select") {
             if (text !== v) return false;
@@ -308,11 +315,14 @@ export default function DataTable<Row>({
         return true;
       });
     }
-    const sort = state.sort && byKey.get(state.sort.key) ? state.sort : null;
-    if (sort) {
-      const col = byKey.get(sort.key);
-      const dir = sort.dir === "desc" ? -1 : 1;
-      const valueOf = (row: Row) => (col.sortValue ? col.sortValue(row) : field(row, col.key));
+    // Same resolution as the filters: a sort naming a column this table does
+    // not have is not a sort, and carrying the column rather than the key is
+    // what says so once instead of at every comparison.
+    const sortCol = state.sort ? byKey.get(state.sort.key) : undefined;
+    if (state.sort && sortCol) {
+      const dir = state.sort.dir === "desc" ? -1 : 1;
+      const valueOf = (row: Row) =>
+        (sortCol.sortValue ? sortCol.sortValue(row) : field(row, sortCol.key));
       out = [...out].sort((ra, rb) => {
         const a = valueOf(ra);
         const b = valueOf(rb);

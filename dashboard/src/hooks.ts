@@ -35,7 +35,12 @@ export interface Fetched<T> {
 // views asking for the same thing share one response and one in-flight fetch.
 // The fetch is aborted when the last hook waiting on it unmounts or moves to a
 // different key, so a burst of clicks cannot paint an old response over a new one.
-export function useFetch<T = unknown>(fn: () => Loadable<T>, deps: unknown[] = []): Fetched<T> {
+// `fn` may answer with nothing: half the views ask conditionally ("the detail
+// request, but only once there is a name"), and the hook has always read that
+// as "no key, no request, no loading state". Saying `| null` here is what makes
+// those call sites type-check as what they are rather than as mistakes.
+export function useFetch<T = unknown>(fn: () => Loadable<T> | null,
+  deps: unknown[] = []): Fetched<T> {
   const fnRef = useRef(fn);
   fnRef.current = fn;
 
@@ -56,7 +61,12 @@ export function useFetch<T = unknown>(fn: () => Loadable<T>, deps: unknown[] = [
     if (!key) return undefined;
     let live = true;
     setState((s) => (s.loading && s.key === key ? s : { ...s, key, loading: true, stale: s.data != null }));
-    const { promise, release } = cache.request(key, (signal) => reqRef.current.load(signal));
+    // why: `key` is the descriptor's own url, so a key exists only when `fn`
+    // returned a descriptor - and the `if (!key)` above has already left when
+    // it did not. The ref is read when the fetch starts rather than captured,
+    // so a re-render with the same url but a fresh descriptor loads through
+    // the current one.
+    const { promise, release } = cache.request(key, (signal) => reqRef.current!.load(signal));
     promise.then(
       (data) => { if (live) setState({ key, data: data as T, error: null, loading: false, stale: false }); },
       (error: ApiError) => {

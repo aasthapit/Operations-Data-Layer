@@ -202,7 +202,7 @@ describe("refreshing the fleet", () => {
 describe("a view that crashes", () => {
   it("shows what broke instead of blanking the app", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const swallow = (e) => e.preventDefault();
+    const swallow = (e: ErrorEvent) => e.preventDefault();
     window.addEventListener("error", swallow);
     // A response the Overview reads straight into: no counts at all.
     answer(api, { overview: { hubs: [] } });

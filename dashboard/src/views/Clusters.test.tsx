@@ -5,7 +5,7 @@ import Clusters from "./Clusters";
 import * as cache from "../cache";
 import { answer, fails } from "../test/apiMock";
 import type { ApiMock } from "../test/apiMock";
-import { currentUrl, renderView } from "../test/harness";
+import { closestElement, currentUrl, renderView } from "../test/harness";
 import { CLUSTERS, clustersResponse } from "../test/fixtures/fleet";
 
 vi.mock("../api", async () => {
@@ -46,7 +46,7 @@ const open = (at = "/clusters", onOpen = vi.fn()) => ({
 describe("the table", () => {
   it("draws a row per cluster with what the fleet view is about", async () => {
     open();
-    const row = (await screen.findByText("ocp-prod-iad-02")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("ocp-prod-iad-02"), "tr");
     expect(within(row).getByText("warning")).toBeInTheDocument();
     expect(within(row).getByText("hub-east")).toBeInTheDocument();
     expect(within(row).getByText("us-east-1 / iad1")).toBeInTheDocument();
@@ -57,13 +57,13 @@ describe("the table", () => {
 
   it("shows where a cluster is upgrading to", async () => {
     open();
-    const row = (await screen.findByText("ocp-stage-iad-01")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("ocp-stage-iad-01"), "tr");
     expect(within(row).getByText("→ 4.16.7 (62%)")).toBeInTheDocument();
   });
 
   it("says usage is not available for a cluster serving no metrics", async () => {
     open();
-    const row = (await screen.findByText("ocp-dev-iad-01")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("ocp-dev-iad-01"), "tr");
     expect(within(row).getAllByText("n/a")).toHaveLength(2);
   });
 
@@ -141,7 +141,7 @@ describe("the filters", () => {
   });
 
   it("says so when the filters match nothing", async () => {
-    answer(api, { clusters: (params) => (params && params.hub === "hub-east"
+    answer(api, { clusters: (params: { hub?: string }) => (params && params.hub === "hub-east"
       ? clustersResponse(CLUSTERS) : clustersResponse([])) });
     open("/clusters?hub=hub-nowhere");
     expect(await screen.findByText("No clusters match these filters.")).toBeInTheDocument();

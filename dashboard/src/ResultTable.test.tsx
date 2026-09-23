@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ResultTable, { Cell, linkKindFor } from "./ResultTable";
+import type { CellProps } from "./ResultTable";
 
 const nav = () => ({ openCluster: vi.fn(), openApp: vi.fn() });
 
@@ -36,7 +37,7 @@ describe("linkKindFor", () => {
 });
 
 describe("Cell", () => {
-  const draw = (props) => render(<Cell {...props} />);
+  const draw = (props: CellProps) => render(<Cell {...props} />);
 
   it("draws a missing value as a dash rather than as nothing", () => {
     const { container } = draw({ name: "reason", value: null });

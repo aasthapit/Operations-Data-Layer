@@ -5,7 +5,7 @@ import Overview from "./Overview";
 import * as cache from "../cache";
 import { answer, fails } from "../test/apiMock";
 import type { ApiMock } from "../test/apiMock";
-import { currentUrl, renderView } from "../test/harness";
+import { closestElement, currentUrl, renderView } from "../test/harness";
 import {
   INSIGHTS_SUMMARY, OVERVIEW, OVERVIEW_SWEEPING, SUMMARY_BY_HUB, SUMMARY_BY_REGION,
 } from "../test/fixtures/fleet";
@@ -23,7 +23,7 @@ beforeEach(() => {
   cache.invalidate();
   answer(api, {
     overview: OVERVIEW,
-    summary: (groupBy) => (groupBy === "region" ? SUMMARY_BY_REGION : SUMMARY_BY_HUB),
+    summary: (groupBy: string) => (groupBy === "region" ? SUMMARY_BY_REGION : SUMMARY_BY_HUB),
     insightsSummary: INSIGHTS_SUMMARY,
   });
 });
@@ -35,7 +35,7 @@ describe("the fleet numbers", () => {
   it("shows what the overview counted, and the application count from insights", async () => {
     open();
     const stats = await screen.findByText("Clusters");
-    const row = stats.closest<HTMLElement>(".stats");
+    const row = closestElement(stats, ".stats");
     expect(within(row).getByText("5")).toBeInTheDocument();       // clusters_total
     expect(within(row).getByText("Healthy").nextSibling).toHaveTextContent("2");
     expect(within(row).getByText("Critical").nextSibling).toHaveTextContent("1");
@@ -88,10 +88,10 @@ describe("needs attention", () => {
 describe("the hubs table", () => {
   it("draws a row per hub with its status and its last error", async () => {
     open();
-    const east = (await screen.findByRole("cell", { name: "hub-east" })).closest<HTMLElement>("tr");
+    const east = closestElement(await screen.findByRole("cell", { name: "hub-east" }), "tr");
     expect(within(east).getByText("healthy")).toBeInTheDocument();
     expect(within(east).getByText("4")).toBeInTheDocument();
-    const west = screen.getByRole("cell", { name: "hub-west" }).closest<HTMLElement>("tr");
+    const west = closestElement(screen.getByRole("cell", { name: "hub-west" }), "tr");
     expect(within(west).getByText("critical")).toBeInTheDocument();
     expect(within(west).getByText(/i\/o timeout/)).toBeInTheDocument();
   });
@@ -105,8 +105,8 @@ describe("the hubs table", () => {
 describe("fleet health", () => {
   it("draws a card per group with its rollup and its counts", async () => {
     open();
-    const east = (await screen.findByText("hub-east", { selector: ".gc-name" }))
-      .closest<HTMLElement>(".group-card");
+    const east = closestElement(
+      await screen.findByText("hub-east", { selector: ".gc-name" }), ".group-card");
     expect(within(east).getByText("critical")).toBeInTheDocument();
     expect(within(east).getByText("4")).toBeInTheDocument();
     expect(within(east).getByText("clusters")).toBeInTheDocument();
@@ -115,8 +115,8 @@ describe("fleet health", () => {
 
   it("says cluster rather than clusters for a group of one", async () => {
     open();
-    const west = (await screen.findByText("hub-west", { selector: ".gc-name" }))
-      .closest<HTMLElement>(".group-card");
+    const west = closestElement(
+      await screen.findByText("hub-west", { selector: ".gc-name" }), ".group-card");
     expect(within(west).getByText("cluster")).toBeInTheDocument();
     expect(within(west).getByText("applications")).toBeInTheDocument();
     expect(within(west).queryByText(/ns unassigned/)).toBeNull();

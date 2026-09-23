@@ -41,6 +41,11 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: "src/test/setup.ts",
+    // A shared CI runner is slower and noisier than a laptop: two tests that
+    // pass in well under a second here were seen hitting the 5 s default under
+    // CPU contention. The budget is generous so a slow machine cannot turn a
+    // passing test red; a genuine hang still fails.
+    testTimeout: 20000,
     include: ["src/**/*.test.{js,jsx,ts,tsx}"],
     restoreMocks: true,
     coverage: {

@@ -243,7 +243,7 @@ describe("queryValue and the variable helpers", () => {
 
   it("finds a variable by name and answers null for one that is not declared", () => {
     const def = normalizeDefinition({ id: "d", variables: [{ name: "hub" }] });
-    expect(variableByName(def, "hub").name).toBe("hub");
+    expect(variableByName(def, "hub")?.name).toBe("hub");
     expect(variableByName(def, "region")).toBeNull();
   });
 });
@@ -402,10 +402,10 @@ describe("queryLinkState", () => {
     const encoded = queryLinkState("SELECT name FROM clusters WHERE hub_name = 'hub-east'",
       { type: "bars", x: "name", y: ["health_score"] });
     const state = decodeState(encoded);
-    expect(state.mode).toBe("sql");
-    expect(state.table).toBe("clusters");
-    expect(state.sql).toBe("SELECT name FROM clusters WHERE hub_name = 'hub-east'");
-    expect(state.chart.type).toBe("bars");
-    expect(state.limit).toBe(200);
+    expect(state?.mode).toBe("sql");
+    expect(state?.table).toBe("clusters");
+    expect(state?.sql).toBe("SELECT name FROM clusters WHERE hub_name = 'hub-east'");
+    expect(state?.chart.type).toBe("bars");
+    expect(state?.limit).toBe(200);
   });
 });

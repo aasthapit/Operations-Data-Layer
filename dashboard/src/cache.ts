@@ -52,7 +52,9 @@ export function put(url: string | null | undefined, data: unknown): void {
 }
 
 export function drop(url: string | null | undefined): void {
-  entries.delete(url);
+  // A hook with no key calls this on "reload" like any other, so "drop
+  // nothing" is a real case rather than a caller mistake.
+  if (url) entries.delete(url);
 }
 
 // Newest cached response first, so a view can borrow a summary it has not

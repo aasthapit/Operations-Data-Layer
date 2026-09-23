@@ -5,7 +5,8 @@ import { useFetch } from "./hooks";
 
 // A descriptor in the shape api.js hands out: a url the cache keys on, and a
 // load() that takes the abort signal.
-const descriptor = (url, load) => ({ url, load });
+const descriptor = <T,>(url: string, load: (signal?: AbortSignal) => Promise<T>) =>
+  ({ url, load });
 
 beforeEach(() => cache.invalidate());
 afterEach(() => cache.invalidate());
@@ -36,15 +37,15 @@ describe("useFetch", () => {
     const { result } = renderHook(() => useFetch(
       () => descriptor("/api/agent", async () => { throw failure; }), []));
     await waitFor(() => expect(result.current.error).toBe(failure));
-    expect(result.current.error.status).toBe(404);
+    expect(result.current.error?.status).toBe(404);
     expect(result.current.loading).toBe(false);
   });
 
   it("does not report a request that was aborted as a failure", async () => {
     const { result, unmount } = renderHook(() => useFetch(
       () => descriptor("/api/clusters",
-        (signal) => new Promise((_, reject) => {
-          signal.addEventListener("abort",
+        (signal?: AbortSignal) => new Promise<never>((_, reject) => {
+          signal?.addEventListener("abort",
             () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
         })), []));
     unmount();

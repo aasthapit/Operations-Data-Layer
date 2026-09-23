@@ -73,7 +73,7 @@ describe("identifiers and literals", () => {
 
 describe("schema helpers", () => {
   it("finds a table and answers null for one this snapshot does not have", () => {
-    expect(tableOf(schema, "clusters").name).toBe("clusters");
+    expect(tableOf(schema, "clusters")?.name).toBe("clusters");
     expect(tableOf(schema, "pods")).toBeNull();
     expect(tableOf(null, "clusters")).toBeNull();
   });
@@ -119,7 +119,7 @@ describe("availableColumns", () => {
     const cluster = columns.filter((c) => c.source === "cluster").map((c) => c.id);
     expect(cluster).toContain("cluster_hub_name");
     expect(cluster).not.toContain("cluster_name");     // that is the base table's own column
-    expect(columns.find((c) => c.id === "cluster_hub_name").expr).toBe('c."hub_name"');
+    expect(columns.find((c) => c.id === "cluster_hub_name")?.expr).toBe('c."hub_name"');
   });
 
   it("answers nothing for a table this snapshot does not have", () => {
@@ -311,9 +311,12 @@ describe("buildSql", () => {
   });
 
   it("writes each operator the way DuckDB reads it", () => {
-    const where = (filter) => buildSql(schema, state("clusters", {
-      filters: [{ id: "f1", value: "", value2: "", ...filter }], sorts: [],
-    })).sql.split("WHERE ")[1].split("\n")[0];
+    // Every call names a column and an operator; the rest of the filter is
+    // whatever the case needs.
+    const where = (filter: Pick<Filter, "column" | "op"> & Partial<Filter>) =>
+      buildSql(schema, state("clusters", {
+        filters: [{ id: "f1", value: "", value2: "", ...filter }], sorts: [],
+      })).sql.split("WHERE ")[1].split("\n")[0];
 
     expect(where({ column: "region", op: "isnull" })).toBe('t."region" IS NULL');
     expect(where({ column: "region", op: "notnull" })).toBe('t."region" IS NOT NULL');
@@ -338,7 +341,7 @@ describe("buildSql", () => {
   });
 
   it("escapes the wildcards a user typed, so they match as text", () => {
-    const where = (value) => buildSql(schema, state("clusters", {
+    const where = (value: string) => buildSql(schema, state("clusters", {
       filters: [{ id: "f1", column: "name", op: "contains", value, value2: "" }], sorts: [],
     })).sql;
     expect(where("checkout")).toContain("ILIKE '%checkout%'");
@@ -405,8 +408,8 @@ describe("normalizeState", () => {
       filters: [{ column: "region", op: "regex", value: 7 }],
       group: { enabled: true, by: ["region"], aggs: [{ fn: "median", column: "health_score" }] },
     });
-    expect(normalized.filters[0]).toEqual({ id: "f0", column: "region", op: "eq", value: "", value2: "" });
-    expect(normalized.group.aggs[0]).toEqual({ id: "a0", fn: "count", column: "health_score", alias: "" });
+    expect(normalized?.filters[0]).toEqual({ id: "f0", column: "region", op: "eq", value: "", value2: "" });
+    expect(normalized?.group.aggs[0]).toEqual({ id: "a0", fn: "count", column: "health_score", alias: "" });
   });
 
   it("keeps only the fields it understands and falls back for the rest", () => {
@@ -415,12 +418,12 @@ describe("normalizeState", () => {
         { dir: "asc" }], filterJoin: "XOR", mode: "sideways", limit: "not a number",
       chart: { type: "sankey" },
     });
-    expect(normalized.columns).toEqual(["name"]);
-    expect(normalized.sorts).toEqual([{ column: "name", dir: "asc" }]);
-    expect(normalized.filterJoin).toBe("AND");
-    expect(normalized.mode).toBe("builder");
-    expect(normalized.limit).toBe(200);
-    expect(normalized.chart.type).toBe("auto");
+    expect(normalized?.columns).toEqual(["name"]);
+    expect(normalized?.sorts).toEqual([{ column: "name", dir: "asc" }]);
+    expect(normalized?.filterJoin).toBe("AND");
+    expect(normalized?.mode).toBe("builder");
+    expect(normalized?.limit).toBe(200);
+    expect(normalized?.chart.type).toBe("auto");
   });
 
   it("keeps a state that is already in this build's shape", () => {
@@ -487,8 +490,8 @@ describe("sharing a query", () => {
   it("round-trips a state through the link it is shared as", () => {
     const original = state("clusters", { mode: "sql", sql: "SELECT name FROM clusters" });
     const decoded = decodeState(encodeState(original));
-    expect(decoded.table).toBe("clusters");
-    expect(decoded.sql).toBe("SELECT name FROM clusters");
+    expect(decoded?.table).toBe("clusters");
+    expect(decoded?.sql).toBe("SELECT name FROM clusters");
   });
 
   it("produces a link that is safe in a query string", () => {

@@ -9,6 +9,8 @@ import { currentUrl, renderView } from "../test/harness";
 import {
   CAPACITY_WATCH, DASHBOARD_LIST, HUB_REVIEW, HUB_REVIEW_RUN,
 } from "../test/fixtures/dashboards";
+import type { DashboardDefinition } from "../api/types";
+import type { Params } from "../dashboards/model";
 
 vi.mock("../api", async () => {
   const { createApiMock } = await import("../test/apiMock");
@@ -18,19 +20,20 @@ vi.mock("../api", async () => {
 // table-backed stand-in rather than the real client.
 const { api } = await import("../api") as unknown as { api: ApiMock };
 
-const stored = { "hub-review": HUB_REVIEW, "capacity-watch": CAPACITY_WATCH };
+const stored: Record<string, DashboardDefinition> =
+  { "hub-review": HUB_REVIEW, "capacity-watch": CAPACITY_WATCH };
 
 beforeEach(() => {
   vi.clearAllMocks();
   cache.invalidate();
   answer(api, {
     dashboards: DASHBOARD_LIST,
-    dashboard: (id) => {
+    dashboard: (id: string) => {
       const def = stored[id];
       if (!def) throw Object.assign(new Error("404 Not Found"), { status: 404 });
       return def;
     },
-    runDashboard: (id, params) => ({ ...HUB_REVIEW_RUN,
+    runDashboard: (id: string, params: Params) => ({ ...HUB_REVIEW_RUN,
       dashboard: stored[id] || HUB_REVIEW,
       params: { hub: "hub-east", ...params } }),
     saveDashboard: { ok: true },

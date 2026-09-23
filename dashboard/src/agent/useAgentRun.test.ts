@@ -14,10 +14,30 @@ vi.mock("./client", async (importOriginal) => ({
 const { runAgent } = await import("./client");
 const runAgentMock = vi.mocked(runAgent);
 
-// The transcript is a union, and these say which arm a test is looking at.
-const asActivity = (item: TranscriptItem | undefined) => item as ActivityItem;
-const resultOf = (item: TranscriptItem | undefined) =>
-  asActivity(item).result as Record<string, unknown>;
+// The transcript is a discriminated union, and these two are how a test says
+// which arm it is looking at. They narrow rather than assert: a `find` whose
+// predicate is `i.kind === "activity"` still answers the whole union, which is
+// how a test ends up quietly reading `.status` off a note and passing.
+
+/** The first entry of a kind, as that kind. */
+function firstOfKind<K extends TranscriptItem["kind"]>(
+  transcript: readonly TranscriptItem[], kind: K,
+): Extract<TranscriptItem, { kind: K }> | undefined {
+  return transcript.find((i): i is Extract<TranscriptItem, { kind: K }> => i.kind === kind);
+}
+
+/** The entry at `index`, when it is an activity. Throws when it is not, which
+ * is a clearer failure than reading `undefined.status`. */
+function activityAt(transcript: readonly TranscriptItem[], index: number): ActivityItem {
+  const item = transcript[index];
+  if (!item || item.kind !== "activity") {
+    throw new Error(`transcript[${index}] is ${item ? item.kind : "missing"}, not an activity`);
+  }
+  return item;
+}
+
+/** What a tool call answered with, as the record the agent sends. */
+const resultOf = (item: ActivityItem) => item.result as Record<string, unknown>;
 
 // Play a list of events as one run, then resolve the way a finished stream does.
 function script(events: AgentEvent[],
@@ -122,9 +142,9 @@ describe("the events", () => {
       { type: "STATE_DELTA", delta: [{ op: "remove", path: "/dashboard/nothing" }] }]);
     const { result } = run();
     await act(async () => { result.current.send("go"); });
-    const note = result.current.transcript.find((i) => i.kind === "note");
-    expect(note.text).toContain("A change could not be applied");
-    expect(note.tone).toBe("error");
+    const note = firstOfKind(result.current.transcript, "note");
+    expect(note?.text).toContain("A change could not be applied");
+    expect(note?.tone).toBe("error");
   });
 
   it("assembles a streamed message from its deltas", async () => {
@@ -145,9 +165,9 @@ describe("the events", () => {
     const { result } = run();
     act(() => { result.current.send("go"); });
     await waitFor(() => {
-      const activity = result.current.transcript.find((i) => i.kind === "activity");
-      expect(activity.label).toBe('Adding panel "Clusters on "');
-      expect(activity.status).toBe("streaming");
+      const activity = firstOfKind(result.current.transcript, "activity");
+      expect(activity?.label).toBe('Adding panel "Clusters on "');
+      expect(activity?.status).toBe("streaming");
     });
     act(() => { result.current.stop(); });
     await waitFor(() => expect(result.current.running).toBe(false));
@@ -157,11 +177,11 @@ describe("the events", () => {
     script([SNAPSHOT, ...ADD_PANEL]);
     const { result } = run();
     await act(async () => { result.current.send("go"); });
-    const activity = asActivity(result.current.transcript.find((i) => i.kind === "activity"));
+    const activity = activityAt(result.current.transcript, 1);
     expect(activity.status).toBe("done");
     expect(activity.args).toEqual({ title: "Clusters on {{hub}}", w: 6 });
     expect(activity.label).toBe('Adding panel "Clusters on {{hub}}"');
-    expect((activity.result as { row_count: number }).row_count).toBe(4);
+    expect(resultOf(activity).row_count).toBe(4);
   });
 
   it("still shows a call whose arguments the model stopped writing mid-way", async () => {
@@ -173,7 +193,7 @@ describe("the events", () => {
     ]);
     const { result } = run();
     await act(async () => { result.current.send("go"); });
-    const activity = asActivity(result.current.transcript[1]);
+    const activity = activityAt(result.current.transcript, 1);
     expect(activity.args).toBeNull();
     expect(activity.label).toBe('Updating panel "Pod issues"');
     expect(activity.result).toEqual({ text: "not json either" });
@@ -189,8 +209,9 @@ describe("the events", () => {
     ]);
     const { result } = run();
     await act(async () => { result.current.send("go"); });
-    expect(asActivity(result.current.transcript[1]).status).toBe("error");
-    expect(resultOf(result.current.transcript[1]).error).toBe("unknown table 'pods'");
+    const failed = activityAt(result.current.transcript, 1);
+    expect(failed.status).toBe("error");
+    expect(resultOf(failed).error).toBe("unknown table 'pods'");
   });
 
   it("names each tool call in the words a person would use", async () => {
@@ -205,7 +226,7 @@ describe("the events", () => {
     ]);
     const { result } = run();
     await act(async () => { result.current.send("go"); });
-    expect(result.current.transcript.slice(1).map((i) => asActivity(i).label)).toEqual([
+    expect(result.current.transcript.map((_, i) => (i === 0 ? null : activityAt(result.current.transcript, i).label)).slice(1)).toEqual([
       "Removing panel", 'Adding variable "hub"', "Previewing a query",
       "Setting the title", "something_new", "Adding panel",
     ]);
@@ -231,8 +252,8 @@ describe("the events", () => {
     script([{ type: "RUN_ERROR", message: "the model refused", code: "model_error" }]);
     const { result } = run();
     await act(async () => { result.current.send("go"); });
-    expect(result.current.error.message).toBe("the model refused");
-    expect(result.current.error.code).toBe("model_error");
+    expect(result.current.error?.message).toBe("the model refused");
+    expect(result.current.error?.code).toBe("model_error");
     expect(result.current.transcript.at(-1)).toMatchObject({ kind: "note", tone: "error" });
     expect(result.current.running).toBe(false);
   });
@@ -260,9 +281,9 @@ describe("stopping and failing", () => {
     await waitFor(() => expect(result.current.running).toBe(true));
     act(() => { result.current.stop(); });
     await waitFor(() => expect(result.current.running).toBe(false));
-    const activity = asActivity(result.current.transcript.find((i) => i.kind === "activity"));
-    expect(activity.status).toBe("error");
-    expect((activity.result as { error: string }).error)
+    const activity = firstOfKind(result.current.transcript, "activity");
+    expect(activity?.status).toBe("error");
+    expect(activity && resultOf(activity).error)
       .toBe("The run stopped before this finished.");
     expect(result.current.transcript.at(-1)).toMatchObject({ text: "Stopped.", tone: "muted" });
   });
@@ -271,7 +292,7 @@ describe("stopping and failing", () => {
     script([SNAPSHOT], { fail: new Error("network error") });
     const { result } = run();
     await act(async () => { result.current.send("go"); });
-    expect(result.current.error.message).toBe("network error");
+    expect(result.current.error?.message).toBe("network error");
     expect(result.current.transcript.at(-1))
       .toMatchObject({ kind: "note", text: "network error" });
   });
@@ -335,8 +356,8 @@ describe("persistence", () => {
     first.unmount();
 
     const second = run();
-    const activity = second.result.current.transcript.find((i) => i.kind === "activity");
-    expect(activity.status).toBe("error");
+    const activity = firstOfKind(second.result.current.transcript, "activity");
+    expect(activity?.status).toBe("error");
     expect(second.result.current.running).toBe(false);
   });
 

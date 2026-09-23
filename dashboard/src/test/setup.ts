@@ -7,6 +7,12 @@
 // with the URL it was about to call, so a test that forgot to mock an endpoint
 // fails saying which one rather than hanging or silently rendering a spinner.
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
+
+// findBy* and waitFor default to 1 s, which a loaded runner can exceed while
+// a view awaits two fixtures in sequence; 4 s keeps a hang visible while giving
+// a slow machine room. Tests assert on outcomes, never on how long they took.
+configure({ asyncUtilTimeout: 4000 });
 import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
 
@@ -132,8 +138,9 @@ for (const [name, value] of stubs) {
 // --------------------------------------------------------------------------- //
 // Nothing in this suite talks to a real API. A test that needs a response
 // stubs `global.fetch` itself (or mocks `../api`); anything else lands here.
-function unmockedFetch(input) {
-  const url = typeof input === "string" ? input : input?.url || String(input);
+function unmockedFetch(input: RequestInfo | URL) {
+  const url = typeof input === "string" ? input
+    : (input as Request)?.url || String(input);
   return Promise.reject(new Error(
     `unmocked fetch: ${url} - stub global.fetch or vi.mock the api module in this test`));
 }

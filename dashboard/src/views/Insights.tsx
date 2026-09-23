@@ -284,7 +284,10 @@ function Quotas({ nav }: SectionProps) {
           {q.resources.map((r) => (
             <span key={r.resource}>
               <span className="mono">{r.resource}</span>{" "}
-              <span className={r.percent >= 90 ? "" : "src"} style={r.percent >= 90 ? { color: "var(--warning)" } : {}}>
+              {/* a quota the collector could not read has no percentage, and
+                  no percentage is not a breach */}
+              <span className={(r.percent ?? 0) >= 90 ? "" : "src"}
+                style={(r.percent ?? 0) >= 90 ? { color: "var(--warning)" } : {}}>
                 {r.used} / {r.hard} ({r.percent}%)
               </span>
             </span>

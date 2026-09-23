@@ -855,9 +855,25 @@ export interface InventoryResponse {
 // the query plane - app/api/query.py, docs/nl-query.md
 // --------------------------------------------------------------------------- //
 
-/** A cell. DuckDB types survive as JSON, so a TIMESTAMP arrives as a string;
- * `column_types` is what says which. */
+/** A scalar cell. DuckDB types survive as JSON, so a TIMESTAMP arrives as a
+ * string; `column_types` is what says which.
+ *
+ * This is what a *variable* can be set to, not what a result cell is - see
+ * `QueryRow`. */
 export type QueryValue = string | number | boolean | null;
+
+/** One row of a query result: the values positioned by column.
+ *
+ * `unknown[]` and not `QueryValue[][]`: DuckDB's nested types survive the JSON
+ * round trip as nested values, so a JSON, STRUCT, LIST or MAP column arrives as
+ * an object or an array rather than a scalar. `QueryValue[][]` was the narrower
+ * claim and it was the wrong one - `ResultTable`'s `Cell` has always drawn a
+ * nested value as its JSON and `Chart` has always classified one as the
+ * unchartable "other" kind, both with tests. Everything that reads a result
+ * cell (`Chart.Row`, `ResultTable.TableResult`) uses this one type, so the
+ * narrowing happens where a value is actually read rather than being assumed
+ * at the boundary. */
+export type QueryRow = unknown[];
 
 /** `QueryResult.as_dict()` in `app/query/service.py`. */
 export interface QueryResult {
@@ -865,7 +881,7 @@ export interface QueryResult {
   columns: string[];
   /** DuckDB's own names: VARCHAR, BIGINT, DOUBLE, TIMESTAMP, BOOLEAN. */
   column_types: string[];
-  rows: QueryValue[][];
+  rows: QueryRow[];
   row_count: number;
   truncated: boolean;
   elapsed_ms: number;
@@ -936,7 +952,11 @@ export interface PanelChart {
   type?: string;
   x?: string;
   y?: string | string[];
-  series?: string;
+  /** Null, not absent, when no column separates the series: that is what
+   * `Chart.normalizeChart` writes and therefore what is stored and handed
+   * back. `undefined` would mean "the field is not there", which is a
+   * different state - `resolveSpec` reads a null as "the user made no pick". */
+  series?: string | null;
   stack?: boolean;
   [field: string]: unknown;
 }

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import DataTable from "./DataTable";
 import type { Column, DataTableProps } from "./DataTable";
 import { Pill } from "./components";
+import { closestElement } from "./test/harness";
 
 /** One realistic row: what the clusters endpoint sends, narrowed to the fields
  * these tables draw. */
@@ -28,7 +29,7 @@ const ROWS: Cluster[] = [
     synced: "2026-09-20T20:41:11+00:00", note: "clean" },
 ];
 
-const COLUMNS: Array<Column<Cluster>> = [
+const COLUMNS: Column<Cluster>[] = [
   { key: "name", label: "Cluster", filter: "text" },
   { key: "hub", label: "Hub", filter: "select" },
   { key: "status", label: "Status", filter: "select", render: (r) => <Pill status={r.status} /> },
@@ -50,11 +51,11 @@ const names = () => screen.getAllByRole("row").slice(1)
 
 // The header cell's own button: its arrow is aria-hidden, so its accessible
 // name is just the column label.
-const sortBy = (label) => screen.getByRole("button", { name: label });
+const sortBy = (label: string) => screen.getByRole("button", { name: label });
 
 // The column filters and the search box are debounced, so what is on screen
 // settles a moment after the last keystroke.
-const settlesTo = (expected) => waitFor(() => expect(names()).toEqual(expected));
+const settlesTo = (expected: string[]) => waitFor(() => expect(names()).toEqual(expected));
 
 describe("rendering", () => {
   it("draws a row per record and a header per column", () => {
@@ -65,9 +66,9 @@ describe("rendering", () => {
 
   it("renders a cell through its render function and a missing value as nothing", () => {
     setup();
-    const healthyRow = screen.getByText("ocp-prod-iad-01").closest("tr");
+    const healthyRow = closestElement(screen.getByText("ocp-prod-iad-01"), "tr");
     expect(within(healthyRow).getByText("healthy")).toHaveClass("pill", "healthy");
-    const warningRow = screen.getByText("ocp-prod-iad-02").closest("tr");
+    const warningRow = closestElement(screen.getByText("ocp-prod-iad-02"), "tr");
     expect(within(warningRow).getAllByRole("cell").at(-1)).toBeEmptyDOMElement();
   });
 
@@ -140,9 +141,11 @@ describe("sorting", () => {
   });
 
   it("sorts on the value a column declares rather than on what it shows", async () => {
-    const columns = [
+    // The order a status sorts in, which is not the order it reads in.
+    const RANK: Record<string, number> = { critical: 0, warning: 1, healthy: 2 };
+    const columns: Column<Cluster>[] = [
       { key: "name", label: "Cluster" },
-      { key: "state", label: "State", sortValue: (r) => ({ critical: 0, warning: 1, healthy: 2 })[r.status],
+      { key: "state", label: "State", sortValue: (r) => RANK[r.status],
         render: (r) => <Pill status={r.status} /> },
     ];
     const user = userEvent.setup();
@@ -223,7 +226,7 @@ describe("filtering", () => {
   });
 
   it("filters on a column's declared filter text rather than on what it renders", async () => {
-    const columns: Array<Column<Cluster>> = [
+    const columns: Column<Cluster>[] = [
       { key: "name", label: "Cluster" },
       { key: "nodes", label: "Nodes", filter: "text",
         filterValue: (r) => `${r.nodes} nodes`, render: () => <span>-</span> },
@@ -247,8 +250,13 @@ describe("filtering", () => {
 });
 
 describe("paging", () => {
-  const many = Array.from({ length: 12 }, (_, i) => ({ name: `ocp-prod-iad-${i}`, hub: "hub-east" }));
-  const pageColumns = [{ key: "name", label: "Cluster" }, { key: "hub", label: "Hub" }];
+  // Paging is about how many rows reach the DOM, so a row here is only as much
+  // of a cluster as the two columns draw.
+  type PageRow = Pick<Cluster, "name" | "hub">;
+  const many: PageRow[] =
+    Array.from({ length: 12 }, (_, i) => ({ name: `ocp-prod-iad-${i}`, hub: "hub-east" }));
+  const pageColumns: Column<PageRow>[] =
+    [{ key: "name", label: "Cluster" }, { key: "hub", label: "Hub" }];
 
   it("renders only a page of rows and says how many there are", () => {
     render(<DataTable columns={pageColumns} rows={many} rowKey="name" pageSize={5} />);

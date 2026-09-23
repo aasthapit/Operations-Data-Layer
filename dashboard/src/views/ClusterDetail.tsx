@@ -42,7 +42,7 @@ const SECTIONS: Array<[key: string, label: string]> = [
 ];
 
 export default function ClusterDetail({ name, tab, nav }: ClusterDetailProps) {
-  const section = SECTIONS.some(([k]) => k === tab) ? tab : "overview";
+  const section = tab && SECTIONS.some(([k]) => k === tab) ? tab : "overview";
   const { data: c, error } = useFetch(() => api.cluster(name), [name]);
 
   // The cluster list the user came from is still cached, so the header - name,
@@ -53,8 +53,14 @@ export default function ClusterDetail({ name, tab, nav }: ClusterDetailProps) {
 
   if (error && !c) return <ErrorBanner error={error} />;
 
-  const counts: Record<string, number | undefined> = c ? {
-    namespaces: c.namespaces.application + c.namespaces.platform,
+  // A cluster the collector could not reach reports null rather than zero for
+  // most of these, and `SubTab` already draws no badge for a count that is not
+  // there - so the nulls are carried through rather than flattened.
+  const counts: Record<string, number | null | undefined> = c ? {
+    // The two namespace counts are summed, so one of them being absent must
+    // not take the other with it: this is the arithmetic the page has always
+    // done, now written where a null can be seen.
+    namespaces: (c.namespaces.application || 0) + (c.namespaces.platform || 0),
     workloads: c.workloads,
     nodes: c.nodes.total,
     issues: c.pod_issues,
@@ -351,7 +357,8 @@ const WORKLOAD_COLUMNS: Column<Workload>[] = [
     render: (w) => (
       <>
         {w.replicas.ready}/{w.replicas.desired}
-        {w.replicas.updated < w.replicas.desired && <span className="muted"> · {w.replicas.updated} updated</span>}
+        {(w.replicas.updated ?? 0) < (w.replicas.desired ?? 0)
+          && <span className="muted"> · {w.replicas.updated} updated</span>}
       </>
     ),
   },
@@ -360,7 +367,14 @@ const WORKLOAD_COLUMNS: Column<Workload>[] = [
     sortValue: (w) => w.images.join(", "),
     render: (w) => w.images.join(", "),
   },
-  { key: "config_refs", label: "Config refs", className: "muted", sortValue: (w) => w.config_refs.length, render: (w) => w.config_refs.length },
+  {
+    key: "config_refs", label: "Config refs", className: "muted",
+    // `config_refs`, `containers`, `labels` and `node_selector` only arrive
+    // with detail=true (which this table always asks for), so the type has
+    // them optional and every read here says what an absent one counts as.
+    sortValue: (w) => w.config_refs?.length ?? 0,
+    render: (w) => w.config_refs?.length ?? 0,
+  },
   { key: "service_account", label: "SA", className: "muted", filter: "select" },
   { key: "created_at", label: "Age", className: "muted", render: (w) => fmtAge(w.created_at) },
 ];
@@ -403,24 +417,24 @@ function WorkloadsSection({ name }: { name: string }) {
 function WorkloadDetail({ w }: { w: Workload }) {
   return (
     <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 16, padding: "6px 4px" }}>
-      {w.containers.map((c) => (
+      {(w.containers || []).map((c) => (
         <div key={c.name} className="card" style={{ padding: 12 }}>
           <h3 style={{ marginBottom: 8 }}>container {c.name}</h3>
           <div className="kv" style={{ fontSize: 12.5 }}>
             <span className="k">Image</span><span className="mono">{c.image}</span>
-            <span className="k">Requests</span><span className="mono">{Object.entries(c.requests).map(([k, v]) => `${k}=${v}`).join(" ") || "—"}</span>
-            <span className="k">Limits</span><span className="mono">{Object.entries(c.limits).map(([k, v]) => `${k}=${v}`).join(" ") || "—"}</span>
+            <span className="k">Requests</span><span className="mono">{Object.entries(c.requests || {}).map(([k, v]) => `${k}=${v}`).join(" ") || "—"}</span>
+            <span className="k">Limits</span><span className="mono">{Object.entries(c.limits || {}).map(([k, v]) => `${k}=${v}`).join(" ") || "—"}</span>
             <span className="k">Env</span>
             <span className="env-list">
-              {c.env.length === 0 && <span className="muted">none</span>}
-              {c.env.map((e) => (
+              {(c.env || []).length === 0 && <span className="muted">none</span>}
+              {(c.env || []).map((e) => (
                 <span key={e.name}><span className="mono">{e.name}</span> <span className="src">
                   {e.from?.kind === "literal" ? "= (value scrubbed)"
                     : e.from?.kind === "field" ? `← field ${e.from.path}`
                     : e.from?.kind ? `← ${e.from.kind} ${e.from.name}${e.from.key ? `/${e.from.key}` : ""}` : ""}
                 </span></span>
               ))}
-              {c.env_from.map((e, i) => <span key={i}><span className="src">envFrom ← {e.kind} {e.name}</span></span>)}
+              {(c.env_from || []).map((e, i) => <span key={i}><span className="src">envFrom ← {e.kind} {e.name}</span></span>)}
             </span>
           </div>
         </div>
@@ -428,13 +442,13 @@ function WorkloadDetail({ w }: { w: Workload }) {
       <div className="card" style={{ padding: 12 }}>
         <h3 style={{ marginBottom: 8 }}>References</h3>
         <div className="env-list">
-          {w.config_refs.map((r, i) => <span key={i}><span className="muted">{r.kind}</span> <span className="mono">{r.name}</span> <span className="src">via {r.via}</span></span>)}
-          {w.config_refs.length === 0 && <span className="muted">none</span>}
+          {(w.config_refs || []).map((r, i) => <span key={i}><span className="muted">{r.kind}</span> <span className="mono">{r.name}</span> <span className="src">via {r.via}</span></span>)}
+          {(w.config_refs || []).length === 0 && <span className="muted">none</span>}
         </div>
         <div className="kv" style={{ fontSize: 12.5, marginTop: 10 }}>
-          <span className="k">Labels</span><span className="mono wrap">{Object.entries(w.labels).map(([k, v]) => `${k}=${v}`).join(" ") || "—"}</span>
+          <span className="k">Labels</span><span className="mono wrap">{Object.entries(w.labels || {}).map(([k, v]) => `${k}=${v}`).join(" ") || "—"}</span>
           <span className="k">Strategy</span><span>{w.strategy || "—"}</span>
-          <span className="k">Node selector</span><span className="mono">{Object.entries(w.node_selector).map(([k, v]) => `${k}=${v}`).join(" ") || "—"}</span>
+          <span className="k">Node selector</span><span className="mono">{Object.entries(w.node_selector || {}).map(([k, v]) => `${k}=${v}`).join(" ") || "—"}</span>
         </div>
       </div>
     </div>
@@ -756,24 +770,26 @@ export function summarize(r: { key: string; summary?: ResourceSummary | null }):
   // knows its own kind's fields, and the alternative is seventeen interfaces
   // that only this function would ever read. Adding `response_model` to the
   // handler (ADR-0005's follow-up) is what would make them generated instead.
+  // The same goes for the `any` on the callbacks over the nested lists: those
+  // items are as undeclared as the summary that carries them.
   const s = (r.summary || {}) as Record<string, any>;
   switch (r.key) {
     case "routes": return `${s.host}${s.path || ""} → ${s.service} · tls ${s.tls_termination || "none"}`;
-    case "services": return `${s.type} ${s.cluster_ip || ""} · ${(s.ports || []).map((p) => `${p.port}→${p.target}`).join(", ")}${s.load_balancer?.length ? " · lb " + s.load_balancer.join(",") : ""}`;
+    case "services": return `${s.type} ${s.cluster_ip || ""} · ${(s.ports || []).map((p: any) => `${p.port}→${p.target}`).join(", ")}${s.load_balancer?.length ? " · lb " + s.load_balancer.join(",") : ""}`;
     case "configmaps":
-    case "secrets": return `${s.type ? s.type + " · " : ""}${s.key_count} keys (${(s.keys || []).map((k) => k.key).join(", ")}) · ${fmtBytes(s.total_bytes)}${s.certificates ? ` · cert ${s.certificates[0].subject} exp ${fmtTime(s.certificates[0].not_after)}` : ""}`;
+    case "secrets": return `${s.type ? s.type + " · " : ""}${s.key_count} keys (${(s.keys || []).map((k: any) => k.key).join(", ")}) · ${fmtBytes(s.total_bytes)}${s.certificates ? ` · cert ${s.certificates[0].subject} exp ${fmtTime(s.certificates[0].not_after)}` : ""}`;
     case "persistentvolumeclaims": return `${s.storage_class || "(no class)"} · ${fmtBytes(s.requested_bytes)}${s.capacity_bytes ? ` (${fmtBytes(s.capacity_bytes)} bound)` : ""} · ${(s.access_modes || []).join(",")}${s.mounted_by?.length ? ` · mounted by ${s.mounted_by.join(", ")}` : " · not mounted"}`;
     case "persistentvolumes": return `${s.storage_class || ""} · ${fmtBytes(s.capacity_bytes)} · ${s.csi_driver || "in-tree"} · claim ${s.claim || "—"} · ${s.reclaim_policy}`;
-    case "resourcequotas": return `${(s.resources || []).map((q) => `${q.resource} ${q.used}/${q.hard} (${q.percent}%)`).join(" · ")}`;
+    case "resourcequotas": return `${(s.resources || []).map((q: any) => `${q.resource} ${q.used}/${q.hard} (${q.percent}%)`).join(" · ")}`;
     case "networkpolicies": return `${(s.policy_types || []).join(",")} · ${s.ingress_rules} ingress / ${s.egress_rules} egress rules`;
-    case "horizontalpodautoscalers": return `${s.target} · ${s.current_replicas ?? "?"} of ${s.min_replicas}-${s.max_replicas} · ${(s.metrics || []).map((m) => `${m.resource} ${m.target_percent ?? m.target_value}`).join(", ")}`;
+    case "horizontalpodautoscalers": return `${s.target} · ${s.current_replicas ?? "?"} of ${s.min_replicas}-${s.max_replicas} · ${(s.metrics || []).map((m: any) => `${m.resource} ${m.target_percent ?? m.target_value}`).join(", ")}`;
     case "cronjobs": return `${s.schedule} · ${s.suspended ? "suspended" : "active"} · last ${s.last_schedule ? fmtTime(s.last_schedule) : "never"} · ${(s.images || []).join(", ")}`;
     case "ingresses": return `${(s.hosts || []).join(", ")} · class ${s.class || "—"}`;
     case "clusterserviceversions": return `${s.package} ${s.version} · ${s.phase}${s.reason ? ` (${s.reason})` : ""} · ${s.provider || ""}`;
     case "subscriptions": return `${s.package} · ${s.channel} · installed ${s.installed_csv}${s.upgrade_pending ? ` → ${s.current_csv}` : ""}`;
     case "machineconfigpools": return `${s.updated}/${s.machine_count} updated · ${s.ready} ready · ${s.degraded} degraded${s.paused ? " · paused" : ""}${s.message ? ` · ${s.message}` : ""}`;
     case "storageclasses": return `${s.provisioner} · ${s.binding_mode} · ${s.reclaim_policy}${s.default ? " · default" : ""}`;
-    case "clusterrolebindings": return `${s.role} → ${(s.subjects || []).map((x) => `${x.kind}/${x.name}`).join(", ")}`;
+    case "clusterrolebindings": return `${s.role} → ${(s.subjects || []).map((x: any) => `${x.kind}/${x.name}`).join(", ")}`;
     case "events": return `${s.reason}: ${s.involved?.kind}/${s.involved?.name} ×${s.count} · ${s.message}`;
     default: return JSON.stringify(s);
   }

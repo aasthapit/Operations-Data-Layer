@@ -15,6 +15,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, RefObject,
 } from "react";
 import { fmtBytes, fmtCores } from "./components";
+import type { QueryRow } from "./api/types";
 
 // --------------------------------------------------------------------------- //
 // limits
@@ -28,10 +29,12 @@ const SERIES_PICK_CAP = 24;  // a column with more values than this is not a ser
 // what a chart is drawn from
 // --------------------------------------------------------------------------- //
 /** A result row as the query plane sends it: values positioned by column, read
- * through a `Field`'s index. It is `unknown[]` rather than `QueryValue[]`
- * because a DuckDB STRUCT, LIST or JSON column arrives as a nested object -
- * which is exactly the case the "other" kind exists to refuse to chart. */
-export type Row = unknown[];
+ * through a `Field`'s index.
+ *
+ * Re-exported under the name the chart code reads best rather than redeclared:
+ * `QueryRow` in `api/types.ts` is the one definition of a result row, and
+ * `ResultTable` reads the same one. */
+export type Row = QueryRow;
 
 /** The two ways a row is read. Every value leaves here either narrowed to a
  * number or explicitly missing, so nothing downstream guesses. */
@@ -733,7 +736,9 @@ function buildLineModel(fields: Field[], rows: Row[], spec: Spec): LineModel | n
         const p = nearestPoint(s.points, t, Math.max(s.tol, MINUTE));
         const v = p && p.v != null ? p.v : carried;
         carried = v;
-        const base = running.get(t);
+        // `running` is seeded with every stamp above, so a miss and a zero
+        // are the same number - which is what `?? 0` says.
+        const base = running.get(t) ?? 0;
         running.set(t, base + v);
         return { t, base, top: base + v, v: p && p.v != null ? p.v : null };
       });
@@ -924,9 +929,14 @@ function linePath(points: readonly PathPoint[]): string {
 }
 
 // The area under a single line, one closed shape per run of real values.
+/** A point that has a value. The area under a line is made of runs of these,
+ * so the gaps are gone by the time a run is built rather than re-checked at
+ * every read of `y`. */
+type SolidPoint = { x: number; y: number };
+
 function areaPath(points: readonly PathPoint[], baseY: number): string {
   let d = "";
-  let run: PathPoint[] = [];
+  let run: SolidPoint[] = [];
   const flush = () => {
     if (run.length > 1) {
       d += `M${run[0].x.toFixed(1)},${baseY.toFixed(1)}`;
@@ -936,7 +946,7 @@ function areaPath(points: readonly PathPoint[], baseY: number): string {
     run = [];
   };
   for (const p of points) {
-    if (p.y == null) flush(); else run.push(p);
+    if (p.y == null) flush(); else run.push({ x: p.x, y: p.y });
   }
   flush();
   return d;
@@ -989,10 +999,10 @@ function LineChart({ model, height }: LineChartProps) {
       : 0;
     const plotW = Math.max(40, width - left - Math.max(10, labelWidth));
     const plotH = Math.max(40, height - PAD_TOP - AXIS_H);
-    const xScale = (t) => left + (model.xMax === model.xMin
+    const xScale = (t: number) => left + (model.xMax === model.xMin
       ? plotW / 2
       : ((t - model.xMin) / (model.xMax - model.xMin)) * plotW);
-    const yScale = (v) => PAD_TOP + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
+    const yScale = (v: number) => PAD_TOP + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
     const time = timeTicks(model.xMin, model.xMax, Math.max(2, Math.floor(plotW / 80)));
     return {
       left, plotW, plotH, xScale, yScale, yTicks, yLabels, labelled, labelWidth,
@@ -1035,15 +1045,26 @@ function LineChart({ model, height }: LineChartProps) {
   const baseY = yScale(0);
   let lastLabelEnd = -Infinity;
 
-  const hovered = hoverT == null ? [] : model.series.map((s) => {
-    // A stacked series always has a band, so `?.` here is a type-level
-    // statement rather than a new case: there is no band to miss.
-    const p = model.stacked
-      ? s.band?.find((b) => b.t === hoverT)
-      : nearestPoint(s.points, hoverT, s.tol);
-    const top = p && p.v != null ? (model.stacked && "top" in p ? p.top : p.v) : null;
-    return { series: s, point: p && p.v != null ? p : null, top };
-  });
+  // What each series is showing at the hovered stamp: the sample itself (only
+  // when it has a value - a gap is "—" rather than a dot), and the y it is
+  // drawn at, which is the band's top when the model is stacked and the value
+  // itself when it is not. `top` is null exactly when `point` is, so the dot
+  // and the tooltip row agree without either re-deciding.
+  const hovered: Array<{ series: LineSeries; point: LinePoint | null; top: number | null }> =
+    hoverT == null ? [] : model.series.map((s) => {
+      // A stacked model always has bands; `|| []` says so to the compiler
+      // rather than adding a case the drawing would have to handle.
+      const band = model.stacked ? (s.band || []).find((b) => b.t === hoverT) : null;
+      if (model.stacked) {
+        return band && band.v != null
+          ? { series: s, point: band, top: band.top }
+          : { series: s, point: null, top: null };
+      }
+      const p = nearestPoint(s.points, hoverT, s.tol);
+      return p && p.v != null
+        ? { series: s, point: p, top: p.v }
+        : { series: s, point: null, top: null };
+    });
 
   return (
     <div className="chart-plot" ref={wrap}>
@@ -1088,17 +1109,23 @@ function LineChart({ model, height }: LineChartProps) {
         </g>
 
         {model.stacked
-          ? model.series.map((s) => (
-            // a 1px inset top and bottom is the surface gap between bands: the
-            // separation is air, never a stroke around the fill
-            <path
-              key={s.key}
-              d={`${s.band.map((b, i) => `${i ? "L" : "M"}${xScale(b.t).toFixed(1)},${(yScale(b.top) + 1).toFixed(1)}`).join("")}`
-                + `${[...s.band].reverse().map((b) => `L${xScale(b.t).toFixed(1)},${(yScale(b.base) - 1).toFixed(1)}`).join("")}Z`}
-              fill={s.color}
-              fillOpacity="0.62"
-            />
-          ))
+          ? model.series.map((s) => {
+            // Only a stacked model has bands, and this is the stacked branch -
+            // the fallback is what says so to the compiler rather than a
+            // second case the drawing has to handle.
+            const band = s.band || [];
+            return (
+              // a 1px inset top and bottom is the surface gap between bands:
+              // the separation is air, never a stroke around the fill
+              <path
+                key={s.key}
+                d={`${band.map((b, i) => `${i ? "L" : "M"}${xScale(b.t).toFixed(1)},${(yScale(b.top) + 1).toFixed(1)}`).join("")}`
+                  + `${[...band].reverse().map((b) => `L${xScale(b.t).toFixed(1)},${(yScale(b.base) - 1).toFixed(1)}`).join("")}Z`}
+                fill={s.color}
+                fillOpacity="0.62"
+              />
+            );
+          })
           : model.series.map((s) => {
             const pts = s.points.map((p) => ({ x: xScale(p.t), y: p.v == null ? null : yScale(p.v) }));
             return (
@@ -1115,7 +1142,7 @@ function LineChart({ model, height }: LineChartProps) {
           <g>
             <line className="chart-crosshair" x1={xScale(hoverT)} x2={xScale(hoverT)}
               y1={PAD_TOP} y2={PAD_TOP + plotH} strokeWidth="1" shapeRendering="crispEdges" />
-            {hovered.map((h) => (h.point == null ? null : (
+            {hovered.map((h) => (h.point == null || h.top == null ? null : (
               <circle key={h.series.key} className="chart-dot" cx={xScale(h.point.t)}
                 cy={yScale(h.top)} r="4.5" fill={h.series.color} strokeWidth="2" />
             )))}
@@ -1124,13 +1151,16 @@ function LineChart({ model, height }: LineChartProps) {
 
         {/* end labels ride the lines only where they will not collide */}
         {labelled && model.series.map((s) => {
+          // `find` already answered "the last point that has a value", so the
+          // two reads below are of a number - the extra null test is what says
+          // that where the compiler can see it.
           const last = [...s.points].reverse().find((p) => p.v != null);
-          if (!last) return null;
+          if (!last || last.v == null) return null;
           const y = yScale(last.v);
           const clash = model.series.some((o) => {
             if (o === s) return false;
             const p = [...o.points].reverse().find((q) => q.v != null);
-            return p && Math.abs(yScale(p.v) - y) < 13;
+            return p != null && p.v != null && Math.abs(yScale(p.v) - y) < 13;
           });
           if (clash) return null;
           return (
@@ -1202,8 +1232,8 @@ function BarChart({ model, height }: BarChartProps) {
     : vertical;
   const { ticks, lo, hi } = scale;
   const zero = Math.max(lo, Math.min(0, hi));
-  const vx = (v) => left + ((v - lo) / (hi - lo || 1)) * plotW;
-  const vy = (v) => PAD_TOP + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
+  const vx = (v: number) => left + ((v - lo) / (hi - lo || 1)) * plotW;
+  const vy = (v: number) => PAD_TOP + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
 
   const onKey = useCallback((e: ReactKeyboardEvent<SVGSVGElement>) => {
     const last = model.items.length - 1;
@@ -1293,7 +1323,7 @@ function BarChart({ model, height }: BarChartProps) {
 
   const picked = hover ? Number(hover.split(":")[0]) : null;
   const item = picked == null ? null : model.items[picked];
-  const tip: Tip | null = !item ? null : {
+  const tip: Tip | null = !item || picked == null ? null : {
     x: horizontal
       ? Math.min(vx(Math.max(...item.values.filter((v): v is number => v != null), zero)), width - 4)
       : originX + picked * band + band / 2,

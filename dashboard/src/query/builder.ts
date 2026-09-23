@@ -64,6 +64,12 @@ export interface BuilderColumn {
 
 export type FilterOp = keyof typeof OPS;
 
+/** Whether a stored or shared state's `op` is one this build understands.
+ * A state outlives the build that wrote it, so an operator that has since been
+ * renamed falls back to `eq` rather than reaching the SQL writer. */
+export const isFilterOp = (v: unknown): v is FilterOp =>
+  typeof v === "string" && Object.prototype.hasOwnProperty.call(OPS, v);
+
 export interface Filter {
   id: string;
   column: string;
@@ -287,7 +293,10 @@ export function availableColumns(schema: QuerySchema, state: BuilderState): Buil
     id: c.name,
     label: c.name,
     column: c.name,
-    type: c.type,
+    // A schema old enough not to name a column's type still yields a usable
+    // column: `kindOf` falls back to text, and "" is what the control row
+    // shows beside the name.
+    type: c.type || "",
     kind: kindOf(c.type),
     description: c.description || "",
     source: "base",
@@ -305,7 +314,7 @@ export function availableColumns(schema: QuerySchema, state: BuilderState): Buil
       id,
       label: id,
       column: c.name,
-      type: c.type,
+      type: c.type || "",
       kind: kindOf(c.type),
       description: c.description || "",
       source: "cluster",
@@ -480,7 +489,8 @@ const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 // why: `raw` is whatever came out of a URL, of localStorage or of an older
 // build of this page - untrusted by construction, which is the whole point of
 // this function. Every field is read through asString / asArray / a coercion,
-// so nothing untyped escapes past the return.
+// so nothing untyped escapes past the return - and the `any` on the callbacks
+// below is the same document one level down, read the same way.
 export function normalizeState(raw: any): BuilderState | null {
   if (!raw || typeof raw !== "object") return null;
   const table = asString(raw.table);
@@ -493,7 +503,7 @@ export function normalizeState(raw: any): BuilderState | null {
     filters: asArray(raw.filters).map((f: any, i) => ({
       id: typeof f?.id === "string" ? f.id : `f${i}`,
       column: asString(f?.column),
-      op: OPS[asString(f?.op)] ? f.op : "eq",
+      op: isFilterOp(f?.op) ? f.op : "eq",
       value: asString(f?.value),
       value2: asString(f?.value2),
     })),
@@ -526,7 +536,7 @@ export function normalizeState(raw: any): BuilderState | null {
 export function pruneState(schema: QuerySchema, state: BuilderState): BuilderState {
   if (!tableOf(schema, state.table)) return state;
   const ids = new Set(availableColumns(schema, state).map((c) => c.id));
-  const keep = (id) => ids.has(id);
+  const keep = (id: string) => ids.has(id);
   // A sort may name an aggregate ("rows"), which is not a table column, so it
   // is judged against what ORDER BY can actually name for this query.
   const sortable = new Set(sortableColumns(schema, state).map((c) => c.id));
@@ -841,6 +851,9 @@ export function loadSaved(): SavedQuery[] {
     const raw = window.localStorage.getItem(SAVED_KEY);
     const list = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(list)) return [];
+    // why: as normalizeState - an entry is whatever an older build wrote into
+    // localStorage, so the filter is the shape test and normalizeState is what
+    // turns the rest into a state (or refuses it, and the entry is dropped).
     return list
       .filter((q: any) => q && typeof q.name === "string" && q.state)
       .map((q: any) => ({ name: q.name, savedAt: q.savedAt || null, state: normalizeState(q.state) }))

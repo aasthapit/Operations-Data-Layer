@@ -41,10 +41,16 @@ export interface PanelProps {
    * answer rather than this one. */
   busy?: boolean;
   onOpenQuery: () => void;
-  onEdit: () => void;
-  onRemove: () => void;
+  /** The three editing affordances. They are optional because the panel is
+   * drawn read-only in more places than it is drawn editable - the generative
+   * dashboard preview, for one - and a caller that cannot edit should be able
+   * to say so by leaving them out rather than by passing three no-ops. Each
+   * control is drawn only when `editing` is on *and* its handler is there, so
+   * there is never a button that does nothing. */
+  onEdit?: () => void;
+  onRemove?: () => void;
   /** -1 is up the grid, 1 is down it. */
-  onMove: (delta: number) => void;
+  onMove?: (delta: number) => void;
   first?: boolean;
   last?: boolean;
 }
@@ -58,17 +64,20 @@ export default function Panel({
     () => (result && result.columns ? inferFields(result.columns, result.column_types, result.rows) : []),
     [result]);
   const spec = useMemo(
-    () => (fields.length ? resolveSpec(fields, result.rows, panel.chart) : null),
+    () => (fields.length ? resolveSpec(fields, result?.rows, panel.chart) : null),
     [fields, result, panel.chart]);
 
   const error = result && result.error ? String(result.error) : null;
   const unset = error ? unsetVariableIn(error) : null;
-  const rows = result && !error ? result.row_count : null;
+  // The entry only when it carries an answer: a refusal has no row count, no
+  // elapsed time and nothing to draw, and naming that once here is what keeps
+  // the header from re-deciding it.
+  const ran = result && !error ? result : null;
 
   const items: Array<MenuItem | false | undefined> = [
     { label: "Open in Query", onSelect: onOpenQuery },
-    editing && { label: "Edit", onSelect: onEdit },
-    editing && { label: "Remove", onSelect: onRemove, danger: true },
+    editing && onEdit && { label: "Edit", onSelect: onEdit },
+    editing && onRemove && { label: "Remove", onSelect: onRemove, danger: true },
   ];
 
   return (
@@ -91,14 +100,14 @@ export default function Panel({
           )}
         </h4>
         <div className="db-panel-tools">
-          {rows != null && (
+          {ran?.row_count != null && (
             <span className="db-panel-meta">
-              {rows.toLocaleString()} {rows === 1 ? "row" : "rows"}
-              {result.elapsed_ms != null ? ` · ${result.elapsed_ms} ms` : ""}
-              {result.truncated ? " · truncated" : ""}
+              {ran.row_count.toLocaleString()} {ran.row_count === 1 ? "row" : "rows"}
+              {ran.elapsed_ms != null ? ` · ${ran.elapsed_ms} ms` : ""}
+              {ran.truncated ? " · truncated" : ""}
             </span>
           )}
-          {editing && (
+          {editing && onMove && (
             <span className="db-move">
               <button type="button" className="q-mini" disabled={first}
                 title="Move up" aria-label={`Move ${title} up`}
@@ -125,7 +134,7 @@ export default function Panel({
         ) : error ? (
           <div className="db-panel-error">
             <div>{error}</div>
-            {result.sql && <pre className="q-sql mono">{substituteSql(result.sql, params)}</pre>}
+            {result?.sql && <pre className="q-sql mono">{substituteSql(result.sql, params)}</pre>}
           </div>
         ) : !result ? (
           loading ? <SkeletonTable columns={4} rows={Math.max(3, panel.h * 2)} dense />

@@ -18,7 +18,7 @@ import type { AgentAvailabilityResponse, BatchEntry } from "../api/types";
 import { invalidate } from "../cache";
 import { useFetch } from "../hooks";
 import type { Fetched } from "../hooks";
-import type { Nav, RouteApi } from "../router";
+import type { Nav, QueryValues, RouteApi } from "../router";
 import { SkeletonTable } from "../components";
 import Panel from "../dashboards/Panel";
 import VariablesBar from "../dashboards/VariablesBar";
@@ -155,21 +155,6 @@ function usePanelRun(definition: Definition, params: Params) {
   return { ...run, reload: useCallback(() => setNonce((n) => n + 1), []) };
 }
 
-// The grid here is read-only: the agent writes the panels, the person edits
-// them by asking for a change, and the only thing a panel's menu offers is
-// "Open in Query". `PanelProps` still declares the three editing callbacks as
-// required even though the component itself only reaches them behind
-// `editing`, so they are passed as the no-ops they would be.
-// TODO (Phase 6 / ADR-0005): make onEdit, onRemove and onMove optional in
-// `dashboards/Panel.tsx` - as `editing`, `busy` and `nav` already are - and
-// delete this.
-const READ_ONLY_PANEL = {
-  editing: false,
-  onEdit: () => {},
-  onRemove: () => {},
-  onMove: () => {},
-};
-
 // --------------------------------------------------------------------------- //
 // the page
 // --------------------------------------------------------------------------- //
@@ -250,7 +235,7 @@ export default function Generate({ route, nav }: GenerateProps) {
       setDialog(false);
       // The variables go with it, so the dashboard opens on the hub that is on
       // screen rather than on whatever its defaults say.
-      const query = {};
+      const query: QueryValues = {};
       for (const v of definition.variables) {
         const text = queryValue(params[v.name]);
         if (text) query[v.name] = text;
@@ -367,9 +352,12 @@ export default function Generate({ route, nav }: GenerateProps) {
           ) : (
             <div className="db-grid">
               {definition.panels.map((panel, i) => (
+                // The grid here is read-only: the agent writes the panels,
+                // the person edits them by asking for a change, and the only
+                // thing a panel's menu offers is "Open in Query". Leaving the
+                // editing callbacks out is what says so.
                 <Panel
                   key={panel.id}
-                  {...READ_ONLY_PANEL}
                   panel={panel}
                   definition={definition}
                   result={run.results[panel.id]}
@@ -418,10 +406,11 @@ function Transcript({ items, running, result }: TranscriptProps) {
   // Follow the stream, the way a terminal does - but only to the bottom, so
   // scrolling up to read an earlier panel is not fought over.
   useEffect(() => {
-    const el = end.current?.parentElement;
-    if (!el) return;
+    const anchor = end.current;
+    const el = anchor?.parentElement;
+    if (!anchor || !el) return;
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (near) end.current.scrollIntoView({ block: "end" });
+    if (near) anchor.scrollIntoView({ block: "end" });
   }, [items, running]);
 
   return (
@@ -460,7 +449,9 @@ function Activity({ item }: { item: ActivityItem }) {
       </span>
       <div className="gen-act-body">
         <div className="gen-act-label">{item.label}</div>
-        {item.status === "error" && result.error && (
+        {/* `error` is the agent's own JSON, so it is coerced rather than
+            trusted to be a string */}
+        {item.status === "error" && !!result.error && (
           <div className="gen-act-error" title={String(result.error)}>{String(result.error)}</div>
         )}
         {item.status === "done" && rows != null && (

@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Mock } from "vitest";
+import type { BatchQuery } from "../api";
+import type { QueryRow } from "../api/types";
+import { normalizeDefinition } from "./model";
 
-// runtime.js remembers which endpoints answered 404 for half a minute, in
+// runtime.ts remembers which endpoints answered 404 for half a minute, in
 // module state - so each test gets a fresh copy of the module and a fresh set
 // of api spies rather than inheriting the last test's conclusions.
 vi.mock("../api", () => ({
@@ -13,20 +17,31 @@ vi.mock("../api", () => ({
   },
 }));
 
-let runtime;
-let api;
+/** The five endpoints the factory above installs, as what it installs: bare
+ * spies. Typing them as the real `api`'s functions would be a lie - the mock
+ * answers each call with whatever the test hands it, and what is under test
+ * here is `runtime`'s fallback chain, not the fetch helpers' signatures. */
+type ApiSpies = Record<
+  "queryBatch" | "runSql" | "runDashboard" | "dashboard" | "dashboards", Mock>;
+
+// The module is re-imported per test, so its type is spelled as the import's.
+let runtime: typeof import("./runtime");
+let api: ApiSpies;
 
 beforeEach(async () => {
   vi.resetModules();
   vi.resetAllMocks();
-  ({ api } = await import("../api"));
+  // why: `vi.mock` above swapped the module's `api` for the spies, which the
+  // static type of "../api" has no way to know.
+  ({ api } = await import("../api") as unknown as { api: ApiSpies });
   runtime = await import("./runtime");
 });
 
 const missing = (status = 404) => Object.assign(new Error(`${status}`), { status });
 const aborted = () => Object.assign(new Error("aborted"), { name: "AbortError" });
 
-const rows = (columns, values) => ({ columns, rows: values, row_count: values.length });
+const rows = (columns: string[], values: QueryRow[]) =>
+  ({ columns, rows: values, row_count: values.length });
 
 describe("runQueries", () => {
   it("answers an empty question without calling the API at all", async () => {
@@ -45,7 +60,7 @@ describe("runQueries", () => {
     const answer = await runtime.runQueries(queries, { hub: "hub-east" });
     expect(api.queryBatch).toHaveBeenCalledWith(queries, { hub: "hub-east" }, undefined);
     expect(answer.generation).toBe(11);
-    expect(answer.snapshot.built_at).toBe("2026-09-20T20:58:11+00:00");
+    expect(answer.snapshot?.built_at).toBe("2026-09-20T20:58:11+00:00");
     expect(answer.results.status.row_count).toBe(1);
   });
 
@@ -150,7 +165,7 @@ describe("runLocally", () => {
     expect(answer.results.status.error).toBe("variable hub is not set");
     expect(answer.results.fleet.row_count).toBe(1);
     // The unrunnable panel is not sent, so only the other one is asked for.
-    expect(api.queryBatch.mock.calls[1][0].map((q) => q.id)).toEqual(["fleet"]);
+    expect(api.queryBatch.mock.calls[1][0].map((q: BatchQuery) => q.id)).toEqual(["fleet"]);
   });
 
   it("refuses a panel whose title names an unset variable, even when its SQL does not", async () => {
@@ -206,7 +221,7 @@ describe("runLocally", () => {
     expect(answer.variables.days).toEqual({ options: [] });
     // One batch, for the panels: an empty set of options queries is not asked.
     expect(api.queryBatch).toHaveBeenCalledTimes(1);
-    expect(api.queryBatch.mock.calls[0][0].map((q) => q.id)).toEqual(["p"]);
+    expect(api.queryBatch.mock.calls[0][0].map((q: BatchQuery) => q.id)).toEqual(["p"]);
   });
 });
 
@@ -225,8 +240,11 @@ describe("descriptors", () => {
   });
 
   it("loads a fixture definition by id and says so when there is no such fixture", async () => {
+    // The descriptor answers `unknown` on purpose - a stored definition is
+    // only a document until normalizeDefinition has read it - so the assertion
+    // reads the field rather than the type claiming it is there.
     const found = await runtime.definitionDescriptor("fixture-hub", { fixture: true }).load();
-    expect(found.title).toBe("Hub overview - {{hub}}");
+    expect(found).toMatchObject({ title: "Hub overview - {{hub}}" });
     await expect(runtime.definitionDescriptor("nope", { fixture: true }).load())
       .rejects.toThrow('No fixture dashboard called "nope".');
   });
@@ -281,8 +299,8 @@ describe("descriptors", () => {
   });
 
   it("keys a draft on what changes its rows, so retitling a panel does not re-query", () => {
-    const draft = { id: "draft", panels: [{ id: "p", sql: "SELECT 1", limit: 50, title: "One" }],
-      variables: [] };
+    const draft = normalizeDefinition({ id: "draft", variables: [],
+      panels: [{ id: "p", sql: "SELECT 1", limit: 50, title: "One" }] });
     const retitled = { ...draft, panels: [{ ...draft.panels[0], title: "Two" }] };
     const rewritten = { ...draft, panels: [{ ...draft.panels[0], sql: "SELECT 2" }] };
     expect(runtime.draftRunDescriptor(draft, {}).url)
@@ -293,8 +311,8 @@ describe("descriptors", () => {
 
   it("runs a draft here, because an unsaved dashboard is nowhere to ask for", async () => {
     api.queryBatch.mockResolvedValue({ results: { p: rows(["a"], [[1]]) } });
-    const draft = { id: "draft", title: "Draft",
-      panels: [{ id: "p", title: "t", sql: "SELECT 1" }], variables: [] };
+    const draft = normalizeDefinition({ id: "draft", title: "Draft", variables: [],
+      panels: [{ id: "p", title: "t", sql: "SELECT 1" }] });
     const answer = await runtime.draftRunDescriptor(draft, {}).load();
     expect(answer.local).toBe(true);
     expect(api.runDashboard).not.toHaveBeenCalled();

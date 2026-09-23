@@ -215,6 +215,9 @@ function reduce(session: Session, event: any): Session {
       });
 
     case "TOOL_CALL_RESULT": {
+      // why: a tool result is the tool's own JSON - a query result, an
+      // error, or text that was not JSON at all. The next two lines are the
+      // shape test, and `result` is carried as `unknown` from there on.
       let content: any = null;
       try { content = JSON.parse(event.content); } catch { content = { text: String(event.content ?? "") }; }
       const failed = !!(content && typeof content === "object" && content.error);

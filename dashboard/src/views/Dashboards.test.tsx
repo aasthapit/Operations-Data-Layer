@@ -5,7 +5,7 @@ import Dashboards from "./Dashboards";
 import * as cache from "../cache";
 import { answer, fails, notFound } from "../test/apiMock";
 import type { ApiMock } from "../test/apiMock";
-import { currentUrl, renderView } from "../test/harness";
+import { closestElement, currentUrl, renderView } from "../test/harness";
 import { DASHBOARD_LIST, HUB_REVIEW } from "../test/fixtures/dashboards";
 
 vi.mock("../api", async () => {
@@ -39,13 +39,13 @@ describe("the list", () => {
 
   it("shows a variable slot in a title as the variable rather than as a gap", async () => {
     open();
-    const card = (await screen.findByText(/Hub review/)).closest<HTMLElement>(".db-card");
+    const card = closestElement(await screen.findByText(/Hub review/), ".db-card");
     expect(within(card).getByText("hub", { selector: ".db-slot" })).toBeInTheDocument();
   });
 
   it("counts the panels and names the variables a dashboard takes", async () => {
     open();
-    const card = (await screen.findByText(/Hub review/)).closest<HTMLElement>(".db-card");
+    const card = closestElement(await screen.findByText(/Hub review/), ".db-card");
     expect(within(card).getByText("2 panels")).toBeInTheDocument();
     expect(within(card).getByText("hub", { selector: ".db-card-vars .tag" }))
       .toBeInTheDocument();
@@ -54,7 +54,7 @@ describe("the list", () => {
   it("says panel rather than panels for one, and says when there is no description",
     async () => {
       open();
-      const card = (await screen.findByText("Capacity watch")).closest<HTMLElement>(".db-card");
+      const card = closestElement(await screen.findByText("Capacity watch"), ".db-card");
       expect(within(card).getByText("1 panel")).toBeInTheDocument();
       expect(within(card).getByText("No description.")).toBeInTheDocument();
       expect(within(card).getByText(/^updated /)).toBeInTheDocument();
@@ -148,7 +148,7 @@ describe("cloning a built-in", () => {
 
   it("is not offered for a dashboard that can simply be edited", async () => {
     open();
-    const card = (await screen.findByText("Capacity watch")).closest<HTMLElement>(".db-card");
+    const card = closestElement(await screen.findByText("Capacity watch"), ".db-card");
     expect(within(card).queryByRole("button", { name: "Clone" })).toBeNull();
   });
 });

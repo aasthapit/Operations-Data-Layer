@@ -3,7 +3,24 @@ import { describe, expect, it } from "vitest";
 import Chart, {
   CHART_TYPES, categoryFields, emptyChart, inferFields, normalizeChart, resolveSpec,
 } from "./Chart";
-import type { Spec } from "./Chart";
+import type { Row, Spec } from "./Chart";
+
+/** A result as these tests write one: the three things a chart is drawn from,
+ * in the wire shape /api/query/sql answers with. */
+interface Result {
+  columns: string[];
+  types: string[];
+  rows: Row[];
+}
+
+/** The chart's own <svg>. The drawing is the subject here, so it is found by
+ * tag rather than by role - and a chart that drew nothing is reported here
+ * rather than at the first read of an attribute. */
+function svgOf(container: HTMLElement): SVGSVGElement {
+  const svg = container.querySelector("svg");
+  if (!svg) throw new Error("the chart drew no <svg>");
+  return svg;
+}
 
 const HOURS = ["2026-09-20T18:00:00+00:00", "2026-09-20T19:00:00+00:00",
   "2026-09-20T20:00:00+00:00"];
@@ -25,7 +42,7 @@ const byStatus = () => ({
   rows: [["healthy", 2], ["warning", 1], ["critical", 1]],
 });
 
-const fieldsOf = (r) => inferFields(r.columns, r.types, r.rows);
+const fieldsOf = (r: Result) => inferFields(r.columns, r.types, r.rows);
 
 describe("inferFields", () => {
   it("reads the kind off the declared column type", () => {
@@ -185,13 +202,13 @@ describe("resolveSpec: what the user asked for", () => {
   it("falls back to an id-shaped number when it is the only number there is", () => {
     const r = { columns: ["hub", "generation"], types: ["VARCHAR", "BIGINT"],
       rows: [["hub-east", 11], ["hub-west", 9]] };
-    expect(resolveSpec(fieldsOf(r), r.rows, { type: "bars" }).y).toEqual(["generation"]);
+    expect(resolveSpec(fieldsOf(r), r.rows, { type: "bars" })?.y).toEqual(["generation"]);
   });
 
   it("uses a time column as a bar category when there is no category column", () => {
     const r = { columns: ["hour", "clusters"], types: ["TIMESTAMP", "BIGINT"],
       rows: [[HOURS[0], 4], [HOURS[1], 5]] };
-    expect(resolveSpec(fieldsOf(r), r.rows, { type: "bars" }).x).toBe("hour");
+    expect(resolveSpec(fieldsOf(r), r.rows, { type: "bars" })?.x).toBe("hour");
   });
 
   it("honours the picked x, series and measures", () => {
@@ -222,7 +239,7 @@ describe("resolveSpec: what the user asked for", () => {
     };
     const spec = resolveSpec(fieldsOf(r), r.rows,
       { type: "line", series: "cluster", y: ["health_score", "cpu_percent"] });
-    expect(spec.y).toEqual(["health_score"]);
+    expect(spec?.y).toEqual(["health_score"]);
   });
 
   it("ignores a pick naming a column this result does not have", () => {
@@ -236,13 +253,13 @@ describe("resolveSpec: what the user asked for", () => {
     const r = timeSeries();
     const spec = resolveSpec(fieldsOf(r), r.rows,
       { type: "line", x: "hour", series: "hour", y: ["hour"] });
-    expect(spec.series).toBe("");
-    expect(spec.y).toEqual(["health_score"]);
+    expect(spec?.series).toBe("");
+    expect(spec?.y).toEqual(["health_score"]);
   });
 
   it("only stacks a line, never bars", () => {
     const bars = byStatus();
-    expect(resolveSpec(fieldsOf(bars), bars.rows, { type: "bars", stack: true }).stack).toBe(false);
+    expect(resolveSpec(fieldsOf(bars), bars.rows, { type: "bars", stack: true })?.stack).toBe(false);
   });
 });
 
@@ -253,7 +270,7 @@ describe("rendering a line chart", () => {
   it("draws one path per series inside a labelled figure", () => {
     const { container } = render(
       <Chart columns={r.columns} columnTypes={r.types} rows={r.rows} spec={spec} />);
-    const svg = container.querySelector("svg");
+    const svg = svgOf(container);
     expect(svg).toHaveAttribute("role", "img");
     expect(svg.getAttribute("aria-label")).toContain("Line chart of health_score over hour");
     expect(svg.getAttribute("aria-label")).toContain("The table below has every value.");
@@ -271,7 +288,7 @@ describe("rendering a line chart", () => {
     const { container } = render(
       <Chart columns={r.columns} columnTypes={r.types} rows={r.rows} spec={spec}
         tableBelow={false} />);
-    expect(container.querySelector("svg").getAttribute("aria-label"))
+    expect(svgOf(container).getAttribute("aria-label"))
       .not.toContain("The table below");
   });
 
@@ -305,7 +322,7 @@ describe("rendering a bar chart", () => {
   it("says in the label what is on each axis and where the values are", () => {
     const { container } = render(
       <Chart columns={r.columns} columnTypes={r.types} rows={r.rows} spec={spec} />);
-    const label = container.querySelector("svg").getAttribute("aria-label");
+    const label = svgOf(container).getAttribute("aria-label");
     expect(label).toContain("Bar chart of clusters by overall_status");
     expect(label).toContain("3 categories, healthy to critical");
   });

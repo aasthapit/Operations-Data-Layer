@@ -218,8 +218,11 @@ export default function Query({ nav, route }: QueryProps) {
   const sqlText = custom ? state.sql : built.sql;
   const maxRows = maxRowsOf(schema);
 
+  // The builder state is null until the schema has been read, and every
+  // updater below is reachable from a control that is only drawn once it is
+  // not - so "no state" is not an update to make, it is nothing to update.
   const patch = useCallback((fields: Partial<BuilderState>) =>
-    setState((s) => ({ ...s, ...fields })), []);
+    setState((s) => (s ? { ...s, ...fields } : s)), []);
 
   const run = useCallback(async (sql: string, limit?: number) => {
     const text = String(sql || "").trim();
@@ -270,13 +273,14 @@ export default function Query({ nav, route }: QueryProps) {
 
   // --- actions -------------------------------------------------------------
   const setTable = (name: string) => {
-    setState((s) => stateForTable(schema, name, { limit: s.limit }));
+    setState((s) => stateForTable(schema, name, { limit: s?.limit }));
     setResult(null);
     setRunError(null);
   };
 
   const toggleClusterContext = (on: boolean) => {
     setState((s) => {
+      if (!s) return s;
       const next = { ...s, clusterContext: on };
       if (!on) return pruneState(schema, next);
       const extra = clusterContextDefaults(schema, next).filter((id) => !s.columns.includes(id));
@@ -287,6 +291,7 @@ export default function Query({ nav, route }: QueryProps) {
   // Renaming an aggregate renames the output column, and a sort naming the old
   // one would quietly be dropped - so the sort follows the rename.
   const updateAgg = (index: number, fields: Partial<Aggregate>) => setState((s) => {
+    if (!s) return s;
     const aggs = s.group.aggs.map((a, j) => (j === index ? { ...a, ...fields } : a));
     const before = aggAlias(s.group.aggs[index]);
     const after = aggAlias(aggs[index]);
@@ -298,6 +303,7 @@ export default function Query({ nav, route }: QueryProps) {
 
   const toggleColumn = (id: string) => {
     setState((s) => {
+      if (!s) return s;
       const has = s.columns.includes(id);
       return { ...s, columns: has ? s.columns.filter((c) => c !== id) : [...s.columns, id] };
     });
@@ -453,8 +459,8 @@ export default function Query({ nav, route }: QueryProps) {
               <input
                 type="checkbox"
                 checked={state.group.enabled}
-                onChange={(e) => setState((s) => keepValidSorts(schema,
-                  { ...s, group: startGrouping(s, e.target.checked) }))}
+                onChange={(e) => setState((s) => (s ? keepValidSorts(schema,
+                  { ...s, group: startGrouping(s, e.target.checked) }) : s))}
               />
               <span>Group rows</span>
             </label>
@@ -549,8 +555,8 @@ export default function Query({ nav, route }: QueryProps) {
           <Section title="Options">
             <label className="q-check">
               <input type="checkbox" checked={state.distinct}
-                onChange={(e) => setState((s) => keepValidSorts(schema,
-                  { ...s, distinct: e.target.checked }))} />
+                onChange={(e) => setState((s) => (s ? keepValidSorts(schema,
+                  { ...s, distinct: e.target.checked }) : s))} />
               <span>Distinct rows</span>
             </label>
             <div className="q-row">

@@ -75,14 +75,14 @@ export default function Overview({ nav, route }: OverviewProps) {
       {sw?.running && (
         <div className="card" style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 12 }}>
           <span className="tag">sweep in progress</span>
-          <span>{sw.done} of {sw.total} clusters collected{sw.failed ? `, ${sw.failed} failed` : ""}</span>
+          <span>{sw.done ?? 0} of {sw.total} clusters collected{sw.failed ? `, ${sw.failed} failed` : ""}</span>
           <div style={{ flex: 1, height: 6, background: "var(--line, #333)", borderRadius: 3, overflow: "hidden" }}>
-            <div style={{ width: `${sw.total ? Math.round((100 * sw.done) / sw.total) : 0}%`, height: "100%", background: "var(--accent, #4f8cff)" }} />
+            <div style={{ width: `${sw.total ? Math.round((100 * (sw.done ?? 0)) / sw.total) : 0}%`, height: "100%", background: "var(--accent, #4f8cff)" }} />
           </div>
           <span className="muted" style={{ fontSize: 12 }}>started {fmtTime(sw.started_at)}</span>
           {(sw.collectors || []).length > 1 && (
             <span className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
-              {sw.collectors.map((c) => `${(c.hubs || []).join(",") || "all"}${c.shard ? " " + c.shard : ""} ${c.done}/${c.total}${c.running ? "" : " done"}`).join(" · ")}
+              {(sw.collectors || []).map((c) => `${(c.hubs || []).join(",") || "all"}${c.shard ? " " + c.shard : ""} ${c.done}/${c.total}${c.running ? "" : " done"}`).join(" · ")}
             </span>
           )}
         </div>

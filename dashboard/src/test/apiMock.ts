@@ -15,9 +15,16 @@ import { vi } from "vitest";
 
 /** What a test puts in the table: the answer itself, or a function called with
  * the arguments the view passed (so it can vary by filter, or throw). */
+// why: the function arm stands for every endpoint at once - `api.clusters` is
+// called with a filter object, `api.summary` with a string, `api.runDashboard`
+// with an id and params - so there is no one signature to write here. A test
+// annotates its own stub's parameters, which is where the shape is known.
 export type Answer = unknown | ((...args: any[]) => unknown);
 
 /** The mock: every endpoint of `api`, plus the table behind them. */
+// why: the mock is assembled by name from the READS / CALLS lists below, so
+// what hangs off each key is only known at run time. A test that wants the
+// spy's call record reaches for it through this and says what it expects.
 export type ApiMock = Record<string, any> & { __answers: Map<string, Answer> };
 
 // Everything api.ts hands back as a request descriptor.
@@ -68,6 +75,9 @@ export function createApiMock(): ApiMock {
       return {
         url: key(name, args),
         load: () => settle(name, args),
+        // why: the descriptor stands in for `Request<T>` for every endpoint
+        // at once, so `T` is not known here - these three just hand the
+        // callbacks to the promise, which is what the real one does.
         then: (ok: any, fail: any) => run().then(ok, fail),
         catch: (fail: any) => run().catch(fail),
         finally: (done: any) => run().finally(done),

@@ -311,7 +311,9 @@ function Matrix({ data, onOpen }: MatrixProps) {
   // header stays the link that opens it.
   const columns: Column<MatrixRow>[] = [
     { key: "resource", label: "Resource", className: "mono", filter: "text" },
-    ...data.clusters.map((c) => ({
+    // The return annotation is what contextually types `row` in the two
+    // callbacks below - inside a `map` there is nothing else to take it from.
+    ...data.clusters.map((c): Column<MatrixRow> => ({
       key: `cluster:${c.name}`,
       label: <span className="link" onClick={() => onOpen(c.name)}>{c.name}</span>,
       sortable: false,

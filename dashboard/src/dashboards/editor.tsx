@@ -51,7 +51,7 @@ export function PanelDrawer({
     () => (preview?.columns ? inferFields(preview.columns, preview.column_types, preview.rows) : []),
     [preview]);
   const spec = useMemo(
-    () => (fields.length ? resolveSpec(fields, preview.rows, draft.chart) : null),
+    () => (fields.length ? resolveSpec(fields, preview?.rows, draft.chart) : null),
     [fields, preview, draft.chart]);
 
   const known = new Set((definition.variables || []).map((v) => v.name));
@@ -84,7 +84,7 @@ export function PanelDrawer({
       }
     } catch (e) {
       setPreview(null);
-      setPreviewError(String(e?.message || e));
+      setPreviewError(String((e as Error)?.message || e));
     } finally {
       setBusy(false);
     }
@@ -137,7 +137,10 @@ export function PanelDrawer({
         </button>
         {preview && !stale && (
           <span className="muted">
-            {preview.row_count.toLocaleString()} rows · {preview.columns.length} columns
+            {/* a preview that ran has both; a batch entry that did not never
+                gets here, because `preview` is only set on success */}
+            {(preview.row_count ?? 0).toLocaleString()} rows
+            {" · "}{(preview.columns || []).length} columns
             {preview.elapsed_ms != null ? ` · ${preview.elapsed_ms} ms` : ""}
           </span>
         )}

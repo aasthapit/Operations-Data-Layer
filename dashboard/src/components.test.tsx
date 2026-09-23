@@ -38,7 +38,7 @@ describe("formatters", () => {
   });
 
   it("reads an age in the largest unit that still has a number in front of it", () => {
-    const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
+    const ago = (seconds: number) => new Date(Date.now() - seconds * 1000).toISOString();
     expect(fmtAge(ago(30))).toBe("1m");
     expect(fmtAge(ago(600))).toBe("10m");
     expect(fmtAge(ago(7200))).toBe("2h");
@@ -88,9 +88,12 @@ describe("status chrome", () => {
   });
 
   it("draws a usage bar with a tone for the threshold it has crossed", () => {
-    const tone = (percent) => {
+    const tone = (percent: number) => {
       const { container, unmount } = render(<UsageBar percent={percent} />);
-      const className = container.querySelector(".usage-bar > span").className;
+      // the bar's fill has no role or name of its own - the class is what the
+      // threshold is expressed in, so the DOM shape is the point here
+      const fill = container.querySelector(".usage-bar > span") as HTMLElement;
+      const { className } = fill;
       unmount();
       return className;
     };
@@ -274,7 +277,7 @@ describe("ErrorBoundary", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     // React re-throws the caught error so the page's own handlers see it; jsdom
     // would print that as an uncaught error in the middle of a passing run.
-    const swallow = (e) => e.preventDefault();
+    const swallow = (e: ErrorEvent) => e.preventDefault();
     window.addEventListener("error", swallow);
     const user = userEvent.setup();
     render(<ErrorBoundary onReset={onReset}><Boom fail /></ErrorBoundary>);

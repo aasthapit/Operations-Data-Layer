@@ -12,7 +12,7 @@
 // BASE is exported because the agent stream is a fetch of its own: it reads a
 // response body rather than a JSON document, so it cannot go through fetchJson -
 // but it must reach the same API as everything else.
-import type { paths } from "./api/schema";
+import type { paths } from "./schema";
 import type {
   AgentAvailabilityResponse,
   ApplicationDetail,
@@ -65,7 +65,7 @@ import type {
   TopNodesResponse,
   UtilizationTimelineResponse,
   VersionsResponse,
-} from "./api/types";
+} from "./types";
 
 export const BASE = import.meta.env.VITE_API_BASE || "";
 

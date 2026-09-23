@@ -30,7 +30,9 @@ interface BarRowProps {
 }
 
 function BarRow({ label, sub, value, max, fmt, color, onClick }: BarRowProps) {
-  const pct = max ? Math.min(100, (value / max) * 100) : 0;
+  // A namespace with no metrics has no bar rather than an empty one: null is
+  // "not measured", and the row still says so through `fmt`.
+  const pct = max && value != null ? Math.min(100, (value / max) * 100) : 0;
   return (
     <div style={{ marginBottom: 9, cursor: onClick ? "pointer" : "default" }} onClick={onClick}>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 3 }}>
@@ -127,7 +129,9 @@ interface TopListProps {
 
 function TopList({ data, onOpen }: TopListProps) {
   const results = data.results || [];
-  const max = Math.max(...results.map((r) => r.value), 1);
+  // The scale is set by what was measured; a namespace that reported nothing
+  // cannot widen it.
+  const max = Math.max(...results.map((r) => r.value ?? 0), 1);
   const fmt = data.unit === "bytes" ? fmtBytes : fmtCores;
   const color = data.unit === "bytes" ? "var(--warning)" : "var(--accent)";
   if (results.length === 0) return <div className="empty">No usage data yet.</div>;

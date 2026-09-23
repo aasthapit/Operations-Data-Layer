@@ -66,7 +66,10 @@ const COLUMNS: Column<ClusterSummary>[] = [
   },
   {
     key: "checks", label: "Checks", className: "nowrap",
-    sortValue: (c) => c.checks.failed * 1000 + c.checks.warned,
+    // An unreachable cluster ran no checks, so its counts are null rather than
+    // zero; a row with nothing to report sorts below one that failed nothing,
+    // which is where it belongs.
+    sortValue: (c) => (c.checks.failed || 0) * 1000 + (c.checks.warned || 0),
     filterValue: (c) => `${c.checks.passed} passed ${c.checks.warned} warned ${c.checks.failed} failed`,
     render: (c) => (
       <>

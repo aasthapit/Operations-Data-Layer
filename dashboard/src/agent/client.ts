@@ -165,6 +165,9 @@ function applyOp(node: any, tokens: string[], op: string, value: unknown, path: 
 // an entry that is not an operation, or an operation this build does not
 // implement, throws instead of being skipped.
 export function applyPatch<T>(state: T, ops: readonly unknown[] | null | undefined): T {
+  // why: the running value is `T` at the top and an arbitrary JSON node one
+  // pointer segment in, which is `applyOp`'s business rather than this loop's.
+  // It leaves here as `T` again, because an op that did not fit threw.
   let next: any = state;
   for (const raw of ops || []) {
     if (!raw || typeof raw !== "object") throw new Error("a patch op must be an object");

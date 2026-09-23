@@ -143,22 +143,29 @@ export default function DashboardView({ id, route, nav }: DashboardViewProps) {
     setDialog(null);
     if (isNew) navigate.current("/dashboards", fixture ? { fixture: "1" } : {});
   };
-  const patchDraft = (fields: Partial<Definition>) => setDraft((d) => ({ ...d, ...fields }));
+  // The draft only exists while the dashboard is being edited, and every
+  // updater below hangs off a control that is only drawn then - so "no draft"
+  // is nothing to update rather than a draft to invent.
+  const patchDraft = (fields: Partial<Definition>) =>
+    setDraft((d) => (d ? { ...d, ...fields } : d));
 
   const applyPanel = (panel: PanelModel) => {
+    const at = editing?.index;
     setDraft((d) => {
+      if (!d || at == null) return d;
       const panels = [...d.panels];
-      if (editing.index < 0) panels.push(panel);
-      else panels[editing.index] = panel;
+      if (at < 0) panels.push(panel);
+      else panels[at] = panel;
       return { ...d, panels };
     });
     setEditing(null);
   };
 
   const removePanel = (index: number) =>
-    setDraft((d) => ({ ...d, panels: d.panels.filter((_, i) => i !== index) }));
+    setDraft((d) => (d ? { ...d, panels: d.panels.filter((_, i) => i !== index) } : d));
 
   const movePanel = (index: number, delta: number) => setDraft((d) => {
+    if (!d) return d;
     const to = index + delta;
     if (to < 0 || to >= d.panels.length) return d;
     const panels = [...d.panels];
@@ -209,6 +216,9 @@ export default function DashboardView({ id, route, nav }: DashboardViewProps) {
   // route change remounts this view - a draft held in state would not survive
   // the trip, and a clone that exists only in one tab is not a clone.
   const cloneTo = async (newId: string) => {
+    // The clone dialog is drawn below the "nothing loaded yet" return, so this
+    // says out loud what that already guarantees.
+    if (!definition) return;
     setSaving(true);
     setErrors([]);
     try {

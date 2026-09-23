@@ -1,12 +1,16 @@
 {
-  // Phase 1 of ADR-0005. `allowJs` is what lets .js/.jsx and .ts/.tsx coexist on
-  // one branch: the modules that have been converted are checked, the ones that
-  // have not are still resolved (so an import from a .tsx into a .jsx module is
-  // a real edge in the graph) but not checked themselves - `checkJs: false`.
+  // ADR-0005. `allowJs` is what let .js/.jsx and .ts/.tsx coexist while the
+  // conversion was in flight: converted modules were checked, the rest were
+  // still resolved (so an import from a .tsx into a .jsx module was a real edge
+  // in the graph) but not checked themselves - `checkJs: false`. Phase 2
+  // finished the conversion, so nothing under `src` is .js any more; the pair
+  // stays because the setting that would actually bite - `checkJs` - is off,
+  // and dropping `allowJs` belongs with the rest of the Phase 3 config sweep.
   //
-  // `strict` and `noImplicitAny` are off here and turned on in Phase 2, so this
-  // phase is a mechanical conversion rather than a conversion plus a thousand
-  // null checks in one reviewable change.
+  // `strict` is on as of Phase 2c: Phases 1 and 2 converted with it off so that
+  // the move to TypeScript was a mechanical, reviewable change rather than a
+  // conversion plus a thousand null checks at once. The explicit
+  // `noImplicitAny: false` that went with it is gone - `strict` implies it.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -18,8 +22,7 @@
 
     "allowJs": true,
     "checkJs": false,
-    "strict": false,
-    "noImplicitAny": false,
+    "strict": true,
     "skipLibCheck": true,
 
     // Vite transpiles file by file, so anything that needs whole-program

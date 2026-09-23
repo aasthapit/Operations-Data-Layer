@@ -6,6 +6,7 @@ import * as cache from "../cache";
 import { answer, fails } from "../test/apiMock";
 import type { ApiMock } from "../test/apiMock";
 import { OPERATOR_VERSIONS, VERSIONS } from "../test/fixtures/fleet";
+import { closestElement, parentOf } from "../test/harness";
 
 vi.mock("../api", async () => {
   const { createApiMock } = await import("../test/apiMock");
@@ -46,8 +47,8 @@ describe("the OCP version distribution", () => {
 
   it("asks for the blast radius of a version", async () => {
     const { onBlast, user } = open();
-    const row = (await screen.findByText("4.15.22")).closest<HTMLElement>("div");
-    await user.click(within(row.parentElement).getByText("blast radius →"));
+    const row = closestElement(await screen.findByText("4.15.22"), "div");
+    await user.click(within(parentOf(row)).getByText("blast radius →"));
     expect(onBlast).toHaveBeenCalledWith("4.15.22");
   });
 
@@ -75,7 +76,7 @@ describe("the operator version spread", () => {
 
   it("names every version in the fleet and how many carry it", async () => {
     open();
-    const row = (await screen.findByText("ingress")).closest<HTMLElement>("tr");
+    const row = closestElement(await screen.findByText("ingress"), "tr");
     expect(within(row).getByText("4.16.7 (4), 4.15.22 (1)")).toBeInTheDocument();
   });
 

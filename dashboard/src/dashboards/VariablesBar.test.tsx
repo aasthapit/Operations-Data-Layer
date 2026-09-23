@@ -1,17 +1,30 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import VariablesBar from "./VariablesBar";
 import { normalizeDefinition } from "./model";
+import type { Params } from "./model";
+import type { VariableOptions } from "./runtime";
 
-const definition = (variables) => normalizeDefinition({ id: "d", title: "D", variables });
+// The variables a test writes are partial documents, not `Variable`s - reading
+// one field by field is what `normalizeDefinition` is for.
+const definition = (variables: unknown[]) =>
+  normalizeDefinition({ id: "d", title: "D", variables });
 
 const HUB_OPTIONS = [
   { value: "hub-east", label: "hub-east" },
   { value: "hub-west", label: "hub-west" },
 ];
 
-const draw = (variables, { params = {}, variablesState = {}, right = null } = {}) => {
+interface DrawOptions {
+  params?: Params;
+  variablesState?: Record<string, VariableOptions>;
+  right?: ReactNode;
+}
+
+const draw = (variables: unknown[],
+  { params = {}, variablesState = {}, right = null }: DrawOptions = {}) => {
   const onChange = vi.fn();
   const user = userEvent.setup();
   render(<VariablesBar definition={definition(variables)} params={params}

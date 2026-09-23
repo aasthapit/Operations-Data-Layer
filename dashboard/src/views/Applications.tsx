@@ -32,7 +32,10 @@ export default function Applications({ app, nav, route }: ApplicationsProps) {
 
   const apps = data?.applications || [];
   const envs = [...new Set(apps.flatMap((a) => a.environments))].sort();
-  const tiers = [...new Set(apps.map((a) => a.tier).filter(Boolean))].sort();
+  // An application with no tier drops out of the filter rather than offering a
+  // blank option: `filter(Boolean)` is what the page has always done, written
+  // as the narrowing it is.
+  const tiers = [...new Set(apps.map((a) => a.tier).filter((t): t is string => !!t))].sort();
   // With a mapping file the owner is a line of business, tier is not known,
   // and each namespace carries its own environment.
   const mapped = data?.source === "mapping";
@@ -163,6 +166,12 @@ const PLACEMENT_COLUMNS: Column<ApplicationPlacement>[] = [
   { key: "memory_used_bytes", label: "Memory", render: (p) => fmtBytes(p.memory_used_bytes) },
 ];
 
+// `containers` and `config_refs` only arrive with detail=true, which this page
+// always asks for - so the type has them optional and these two are where that
+// is read once instead of at six call sites.
+const envOf = (w: Workload) => (w.containers || []).flatMap((c) => c.env || []);
+const refsOf = (w: Workload) => w.config_refs || [];
+
 const WORKLOAD_COLUMNS: Column<Workload>[] = [
   { key: "cluster", label: "Cluster", className: "mono", filter: "text" },
   { key: "kind", label: "Kind", className: "muted", filter: "select" },
@@ -181,11 +190,11 @@ const WORKLOAD_COLUMNS: Column<Workload>[] = [
   },
   {
     key: "env", label: "Env (name ← source)",
-    sortValue: (w) => w.containers.flatMap((c) => c.env).length,
-    filterValue: (w) => w.containers.flatMap((c) => c.env).map((e) => e.name).join(" "),
+    sortValue: (w) => envOf(w).length,
+    filterValue: (w) => envOf(w).map((e) => e.name).join(" "),
     render: (w) => (
       <div className="env-list">
-        {w.containers.flatMap((c) => c.env).map((e) => (
+        {envOf(w).map((e) => (
           <span key={e.name}><span className="mono">{e.name}</span> <span className="src">
             {e.from?.kind === "literal" ? "(literal, scrubbed)" : e.from?.kind === "field" ? `← ${e.from.path}` : e.from ? `← ${e.from.kind} ${e.from.name}/${e.from.key}` : ""}
           </span></span>
@@ -195,9 +204,13 @@ const WORKLOAD_COLUMNS: Column<Workload>[] = [
   },
   {
     key: "config_refs", label: "References", className: "muted wrap",
-    sortValue: (w) => w.config_refs.length,
-    filterValue: (w) => w.config_refs.map((r) => `${r.kind} ${r.name}`).join(", "),
-    render: (w) => <span style={{ fontSize: 12 }}>{w.config_refs.map((r) => `${r.kind} ${r.name} (${r.via})`).join(", ")}</span>,
+    sortValue: (w) => refsOf(w).length,
+    filterValue: (w) => refsOf(w).map((r) => `${r.kind} ${r.name}`).join(", "),
+    render: (w) => (
+      <span style={{ fontSize: 12 }}>
+        {refsOf(w).map((r) => `${r.kind} ${r.name} (${r.via})`).join(", ")}
+      </span>
+    ),
   },
 ];
 
