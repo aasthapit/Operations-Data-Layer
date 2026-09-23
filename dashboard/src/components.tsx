@@ -9,6 +9,7 @@ import {
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import type { SxProps, Theme } from "@mui/material/styles";
+import { MONO_FONT } from "./theme";
 
 // The one table primitive every view uses: sorting, per-column filters, search.
 export { default as DataTable } from "./DataTable";
@@ -48,28 +49,30 @@ export interface PillProps {
 
 // A status, spelled out, on a tint of its own colour.
 //
-// Still one span carrying `pill <status>` rather than a MUI Chip: DataTable and
-// ResultTable render this and their tests - which phases 4 and 5 own and this
-// phase must not edit - assert on exactly this element and these class names.
-// The classes carry no CSS any more (the tint and the type come from the theme
-// below); they are a handle those two files still hold, and a Chip is what this
-// becomes once they land.
+// A MUI Chip now (phase 6): the class names it used to carry were a handle for
+// DataTable's and ResultTable's tests, not CSS (the tint and the type have
+// come from the theme since phase 3), and both files now read the status back
+// off `data-status` instead, which the label text can sit in front of without
+// hiding it from `getByText`.
 export function Pill({ status, children }: PillProps) {
   const s = status || "unknown";
   return (
-    <Box
-      component="span"
-      className={`pill ${s}`}
+    <Chip
+      size="small"
+      data-status={s}
+      label={
+        <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
+          <Dot status={s} />{children ?? s}
+        </Box>
+      }
       sx={{
-        display: "inline-flex", alignItems: "center", gap: 0.75,
-        px: 1.125, py: 0.375, borderRadius: 20,
+        height: "auto", borderRadius: 20,
+        "& .MuiChip-label": { px: 1.125, py: 0.375 },
         fontSize: 12, fontWeight: 600, textTransform: "capitalize",
         bgcolor: (t) => alpha(toneColor(t, s), 0.14),
         color: (t) => toneColor(t, s),
       }}
-    >
-      <Dot status={s} />{children ?? s}
-    </Box>
+    />
   );
 }
 
@@ -77,12 +80,15 @@ export interface DotProps {
   status?: string | null;
 }
 
+// The dot inside a Pill (and, on its own, a legend swatch): a plain coloured
+// circle rather than a second Chip, since it carries no text of its own for a
+// Chip's label or accessible name to hold.
 export function Dot({ status }: DotProps) {
   const s = status || "unknown";
   return (
     <Box
       component="span"
-      className={`dot-s ${s}`}
+      data-status={s}
       sx={{
         width: 8, height: 8, borderRadius: "50%", display: "inline-block", flex: "none",
         bgcolor: (t) => toneColor(t, s),
@@ -805,8 +811,10 @@ export const fmtDays = (d: number | null | undefined): string => {
 };
 
 /** The monospace face the app uses wherever a value has to line up with the one
- * above it - an image digest, a SQL fragment, a version. */
-export const MONO_FONT = '"SF Mono", ui-monospace, "Menlo", monospace';
+ * above it - an image digest, a SQL fragment, a version. Defined in `theme.ts`
+ * now (phase 6: it is also what the grid's `.mono` cell class reads) and
+ * re-exported here so nothing that already imports it from this file moves. */
+export { MONO_FONT };
 
 export interface ErrorBoundaryProps {
   children?: ReactNode;

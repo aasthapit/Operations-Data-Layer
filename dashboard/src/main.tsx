@@ -1,7 +1,8 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import "./styles.css";
+// No stylesheet import: phase 6 retired styles.css, the pre-mount paint moved
+// into index.html and everything else has been the MUI theme since phase 3.
 
 // index.html carries <div id="root">, so the mount point exists by
 // construction. Saying so here is what keeps this file free of a runtime branch

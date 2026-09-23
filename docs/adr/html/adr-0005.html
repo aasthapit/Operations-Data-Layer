@@ -236,7 +236,7 @@ pre.mermaid svg{ max-width: 100%; height: auto; }
 <div class="page">
 
   <header class="masthead">
-    <p class="eyebrow">ADR-0005 · Operations Data Layer · Plan</p>
+    <p class="eyebrow">ADR-0005 · Operations Data Layer · Landed September 2026</p>
     <h1>Dashboard to TypeScript and MUI</h1>
     <p class="standfirst">The dashboard is 11,000 lines of plain JavaScript with two dependencies and a hand-rolled design system. It moves to TypeScript first, so the API boundary is checked, and to Material UI second, so the component swap is typed and reviewable. Six phases, each landing only when the type check, the 896 tests and the build all pass.</p>
   </header>
@@ -244,7 +244,7 @@ pre.mermaid svg{ max-width: 100%; height: auto; }
   <div class="layout">
     <aside class="rail">
       <div class="glance">
-        <span class="pill">Phases 1 to 5 landed</span>
+        <span class="pill">Landed</span>
         <dl class="meta">
           <dt>Branch</dt>
           <dd><span class="mono">feat/dashboard-typescript-mui</span>, cut from <span class="mono">feat/redis-store-nl-query</span> at <span class="mono">889fecc</span></dd>
@@ -384,6 +384,7 @@ flowchart LR
         <p class="tnote">Phase 1 also typed the test fixtures against the response interfaces and found eleven places where a fixture misdescribed its endpoint (channel rows, blast-radius placements, manifest availability totals, storage classes); all eleven were fixed in the fixtures. The backend now marks the two free-form <span class="mono">params</span> bodies as open objects so the generated request types accept keys.</p>
         <p class="tnote">Phase 2 kept every component, prop and export name. Strict mode found 544 errors, 414 of them in the suite; 197 were one shape (a nullable DOM walk handed to <span class="mono">within</span>) and were replaced by two throwing helpers in the test harness. The tree ends with one non-null assertion, no <span class="mono">@ts-ignore</span>, and every <span class="mono">any</span> carrying a reason. The module-level column lists follow one convention, <span class="mono">const COLUMNS: Column&lt;Row&gt;[]</span>, recorded in the ADR.</p>
         <p class="tnote">Phases 3 to 5 kept React 18 (every MUI 9 package accepts it), gained the light theme the app never had, and replaced the hand-rolled table and chart with the community DataGrid and Charts: a 1,000-row table renders 128 cells instead of 8,000, and the one loss, "show all rows" in one scroll, is answered by a CSV export of every filtered row. The libraries account for the bundle growth and sit in their own cached chunks.</p>
+        <p class="tnote">Phase 6 deleted the stylesheet: the result table and the status pills render through the theme (pills are MUI Chips, table links are real buttons), the pre-mount paint lives inline in index.html, and the build emits no CSS file at all. 916 tests, statements 93.5%, lines 95.5%; JavaScript unchanged at 472 KB gzip.</p>
         <div class="scroll">
           <table>
             <caption>Per phase</caption>

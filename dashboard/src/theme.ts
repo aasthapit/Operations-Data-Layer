@@ -44,6 +44,13 @@ import type {} from "@mui/x-data-grid/themeAugmentation";
  * generate transcript, a table's sticky header) offset by this. */
 export const TOPBAR_HEIGHT = 58;
 
+/** The monospace stack every reading-that-has-to-line-up column reaches for:
+ * a cluster id, a digest, a query cell. `styles.css` said this once as `.mono`
+ * and every table column asked a `Column.className` for it; phase 6 folds
+ * that into the theme, in one place, so `ResultTable`'s own inline runs and
+ * the grid's cell classes draw the same face. */
+export const MONO_FONT = '"SF Mono", ui-monospace, "Menlo", monospace';
+
 /** The health vocabulary the API speaks, plus the "unknown" the UI falls back
  * to when something has never reported. */
 export type StatusTone = "healthy" | "warning" | "critical" | "unknown";
@@ -487,9 +494,20 @@ export function createAppTheme(mode: "light" | "dark"): Theme {
 
             // ----- the column classes a view asks for -------------------------
             // A column's `className` reaches the cell and its `headerClassName`
-            // the header, so these three - which were `td.wrap`, `td.nowrap` and
-            // `.matrix th.rot` in styles.css, scoped to a `<table>` nothing
-            // renders any more - live here instead.
+            // the header, so these five - which were `td.wrap`, `td.nowrap`,
+            // `.matrix th.rot`, `.mono` and `.muted` in styles.css, the first
+            // three scoped to a `<table>` nothing renders any more and the last
+            // two plain global rules over 50-odd `Column.className` values across
+            // the views - live here instead. `.mono` and `.muted` are also what
+            // `ResultTable`'s own `Cell` draws through the shared `Mono` and
+            // `Muted` runs, so a query result and a fleet table read the same.
+            "& .MuiDataGrid-cell.mono, & .MuiDataGrid-columnHeader.mono": {
+              fontFamily: MONO_FONT,
+              fontSize: 12.5,
+            },
+            "& .MuiDataGrid-cell.muted": {
+              color: theme.palette.text.disabled,
+            },
             // A cell that wraps still has the row's fixed height to live in, so
             // it is clamped to the two lines that fit rather than left to spill
             // half a third line over the row below it.
@@ -537,8 +555,8 @@ export type ColorModePreference = ColorMode | "system";
 export const COLOR_MODE_KEY = "odl.color-mode";
 /** `<html data-theme="...">`. The attribute is the document's copy of the
  * resolved mode: index.html sets it before React mounts so the first paint is
- * not a flash of the wrong theme, and it is what the handful of rules left in
- * styles.css key off. */
+ * not a flash of the wrong theme, and it is what that file's own inline
+ * pre-mount style (styles.css is gone as of phase 6) keys off. */
 export const COLOR_MODE_ATTRIBUTE = "data-theme";
 
 const isMode = (v: unknown): v is ColorMode => v === "light" || v === "dark";
@@ -583,7 +601,8 @@ export function resolveColorMode(preference: ColorModePreference): ColorMode {
 }
 
 /** Publish the resolved mode to the document, for the no-flash script's benefit
- * on the next load and for the reset rules in styles.css on this one. */
+ * on the next load and for the background/colour rules in index.html on this
+ * one - they key off `data-theme` too, so setting it here repaints them live. */
 export function applyColorMode(mode: ColorMode): void {
   document.documentElement.setAttribute(COLOR_MODE_ATTRIBUTE, mode);
 }

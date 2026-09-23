@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import DataTable from "./DataTable";
 import type { Column, DataTableProps } from "./DataTable";
 import { Pill } from "./components";
+import { closestElement } from "./test/harness";
 import {
   cellTexts, columnHeader, filterColumn, gridRows, rowCells, searchBox, sortBy, sortDirection,
 } from "./test/grid";
@@ -70,8 +71,9 @@ describe("rendering", () => {
   it("renders a cell through its render function and a missing value as nothing", () => {
     setup();
     // The status column draws a Pill rather than the word, and the Pill's own
-    // classes are what say it is the component and not the raw value.
-    expect(within(rowFor("ocp-prod-iad-01")).getByText("healthy")).toHaveClass("pill", "healthy");
+    // data-status attribute is what says so and not the raw value.
+    expect(closestElement(within(rowFor("ocp-prod-iad-01")).getByText("healthy"), "[data-status]"))
+      .toHaveAttribute("data-status", "healthy");
     expect(rowCells(rowFor("ocp-prod-iad-02")).at(-1)).toBeEmptyDOMElement();
   });
 

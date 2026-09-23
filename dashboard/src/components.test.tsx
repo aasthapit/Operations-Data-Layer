@@ -57,16 +57,18 @@ describe("formatters", () => {
 describe("status chrome", () => {
   it("names the status on the pill and falls back to unknown", () => {
     const { rerender } = renderThemed(<Pill status="critical" />);
-    expect(screen.getByText("critical")).toHaveClass("pill", "critical");
+    expect(closestElement(screen.getByText("critical"), "[data-status]"))
+      .toHaveAttribute("data-status", "critical");
     rerender(<Pill status={null} />);
-    expect(screen.getByText("unknown")).toHaveClass("pill", "unknown");
+    expect(closestElement(screen.getByText("unknown"), "[data-status]"))
+      .toHaveAttribute("data-status", "unknown");
   });
 
-  it("gives the dot the status as its class", () => {
+  it("gives the dot the status as a data attribute", () => {
     const { container, rerender } = renderThemed(<Dot status="warning" />);
-    expect(container.firstChild).toHaveClass("dot-s", "warning");
+    expect(container.firstChild).toHaveAttribute("data-status", "warning");
     rerender(<Dot status={null} />);
-    expect(container.firstChild).toHaveClass("unknown");
+    expect(container.firstChild).toHaveAttribute("data-status", "unknown");
   });
 
   it("marks a critical tier and says nothing for a namespace that has none", () => {

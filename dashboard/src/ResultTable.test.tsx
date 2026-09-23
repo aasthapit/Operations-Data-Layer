@@ -1,14 +1,21 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ResultTable, { Cell, linkKindFor } from "./ResultTable";
 import type { CellProps } from "./ResultTable";
+import { MONO_FONT, createAppTheme } from "./theme";
+import { renderThemed } from "./test/harness";
 import { cellTexts, columnHeader, filterColumn, gridRows, rowCells, sortBy } from "./test/grid";
 
 /** How a cell is lined up, as the browser resolves it: the grid says it in a
  * class of its own, and what the column asked for is the text alignment that
  * comes out of it. */
 const alignmentOf = (cell: HTMLElement) => window.getComputedStyle(cell).textAlign;
+
+// `renderThemed` is dark by default, same as the app; read the disabled tone
+// off the real theme rather than hard-coding its hex, so a repaint of the
+// palette cannot make this drift from what a muted cell actually renders.
+const DISABLED_TEXT = createAppTheme("dark").palette.text.disabled;
 
 const nav = () => ({ openCluster: vi.fn(), openApp: vi.fn() });
 
@@ -43,7 +50,7 @@ describe("linkKindFor", () => {
 });
 
 describe("Cell", () => {
-  const draw = (props: CellProps) => render(<Cell {...props} />);
+  const draw = (props: CellProps) => renderThemed(<Cell {...props} />);
 
   it("draws a missing value as a dash rather than as nothing", () => {
     const { container } = draw({ name: "reason", value: null });
@@ -52,9 +59,9 @@ describe("Cell", () => {
 
   it("draws numbers and booleans in the monospace column", () => {
     expect(draw({ name: "health_score", value: 97 }).container.firstChild)
-      .toHaveClass("mono");
-    expect(draw({ name: "upgrading", value: false }).container.firstChild)
-      .toHaveClass("mono", "muted");
+      .toHaveStyle({ fontFamily: MONO_FONT });
+    const falseCell = draw({ name: "upgrading", value: false }).container.firstChild;
+    expect(falseCell).toHaveStyle({ fontFamily: MONO_FONT, color: DISABLED_TEXT });
     expect(screen.getByText("false")).toBeInTheDocument();
   });
 
@@ -81,34 +88,34 @@ describe("Cell", () => {
 
   it("draws the fleet's own status vocabulary as a pill and a chip", () => {
     expect(draw({ name: "overall_status", value: "critical" }).container.firstChild)
-      .toHaveClass("pill", "critical");
+      .toHaveAttribute("data-status", "critical");
     expect(draw({ name: "pvc_status", value: "pending" }).container.firstChild)
-      .toHaveClass("chip", "pending");
+      .toHaveAttribute("data-status", "pending");
   });
 
   it("leaves a status-named column that holds a sentence as plain text", () => {
     const { container } = draw({ name: "status", value: "Waiting for the next sweep" });
     expect(container).toHaveTextContent("Waiting for the next sweep");
-    expect(container.querySelector(".chip")).toBeNull();
+    expect(container.querySelector("[data-status]")).toBeNull();
   });
 
   it("truncates a long value with the whole of it in the title", () => {
     const long = "back-off 5m0s restarting failed container=api pod=checkout-api-7d9f8b6c4-2xk9p";
     const { container } = draw({ name: "message", value: long });
-    expect(container.firstChild).toHaveClass("q-trunc");
+    expect(container.firstChild).toHaveStyle({ textOverflow: "ellipsis" });
     expect(container.firstChild).toHaveAttribute("title", long);
   });
 });
 
 describe("ResultTable", () => {
   it("draws a column per result column and a row per result row", () => {
-    render(<ResultTable result={result()} id="query.results" />);
+    renderThemed(<ResultTable result={result()} id="query.results" />);
     expect(columnHeader("cluster_name")).toBeInTheDocument();
     expect(gridRows()).toHaveLength(2);
   });
 
   it("right-aligns a column whose every present value is a number", () => {
-    render(<ResultTable result={result()} id="query.results" />);
+    renderThemed(<ResultTable result={result()} id="query.results" />);
     const cells = rowCells(gridRows()[0]);
     expect(alignmentOf(cells[2])).toBe("right");
     expect(alignmentOf(cells[0])).not.toBe("right");
@@ -116,13 +123,13 @@ describe("ResultTable", () => {
 
   it("does not call a column of mixed types numeric", () => {
     const mixed = result({ rows: [["a", "healthy", 97], ["b", "warning", "n/a"]] });
-    render(<ResultTable result={mixed} id="query.results" />);
+    renderThemed(<ResultTable result={mixed} id="query.results" />);
     expect(alignmentOf(rowCells(gridRows()[0])[2])).not.toBe("right");
   });
 
   it("sorts on the value rather than on what the cell drew", async () => {
     const user = userEvent.setup();
-    render(<ResultTable result={result()} id="query.results" />);
+    renderThemed(<ResultTable result={result()} id="query.results" />);
     await sortBy("health_score", { user });
     expect(cellTexts("cluster_name")[0]).toBe("ocp-prod-iad-02");
   });
@@ -130,18 +137,18 @@ describe("ResultTable", () => {
   it("links a cluster column through to the cluster the row is about", async () => {
     const navigation = nav();
     const user = userEvent.setup();
-    render(<ResultTable result={result()} id="query.results" nav={navigation} />);
+    renderThemed(<ResultTable result={result()} id="query.results" nav={navigation} />);
     await user.click(screen.getByText("ocp-prod-iad-01"));
     expect(navigation.openCluster).toHaveBeenCalledWith("ocp-prod-iad-01");
   });
 
   it("says a query ran and returned nothing, in the page's own words", () => {
-    render(<ResultTable result={result({ rows: [], row_count: 0 })} id="query.results" />);
+    renderThemed(<ResultTable result={result({ rows: [], row_count: 0 })} id="query.results" />);
     expect(screen.getByText("The query ran and returned no rows.")).toBeInTheDocument();
   });
 
   it("leaves the filter row off where the panel is too short for it", () => {
-    render(<ResultTable result={result()} id="panel" filter={false} />);
+    renderThemed(<ResultTable result={result()} id="panel" filter={false} />);
     expect(screen.queryByLabelText("Filter by cluster_name")).toBeNull();
   });
 
@@ -151,7 +158,7 @@ describe("ResultTable", () => {
       rows: [[{ team: "payments" }], [{ team: "retail" }], [null]], row_count: 3,
     };
     const user = userEvent.setup();
-    render(<ResultTable result={withJson} id="query.results" />);
+    renderThemed(<ResultTable result={withJson} id="query.results" />);
     await filterColumn("labels", "payments", { user });
     await waitFor(() => expect(gridRows()).toHaveLength(1));
     expect(screen.getByText('{"team":"payments"}')).toBeInTheDocument();

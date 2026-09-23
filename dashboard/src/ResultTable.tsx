@@ -6,11 +6,23 @@
 // the whole of it in the title - are written once and both pages obey them.
 import { useMemo } from "react";
 import type { ReactNode } from "react";
-import { DataTable, Pill } from "./components";
+import Box from "@mui/material/Box";
+import Link from "@mui/material/Link";
+import type { SxProps, Theme } from "@mui/material/styles";
+import { DataTable, Mono, Muted, Pill, StatusChip } from "./components";
 import type { Column } from "./components";
+import { MONO_FONT } from "./theme";
 import type { QueryResult, QueryRow } from "./api/types";
 
 const STATUS_WORD = /^[a-z][a-z-]{1,19}$/;
+
+// What `.q-trunc` in styles.css drew: one line, clipped, the whole value kept
+// in `title` for a hover. `noWrap` alone would clip without the ellipsis this
+// column has always shown, so the rules that draw both are spelled out here.
+const TRUNC_SX: SxProps<Theme> = {
+  display: "inline-block", maxWidth: 360, overflow: "hidden",
+  textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom",
+};
 
 /**
  * What a table can be drawn from: a query result that ran. A batch entry that
@@ -61,27 +73,32 @@ export interface CellProps {
 }
 
 export function Cell({ name, value, link, nav }: CellProps) {
-  if (value == null) return <span className="muted">—</span>;
+  if (value == null) return <Muted>—</Muted>;
   if (typeof value === "boolean") {
-    return <span className={`mono${value ? "" : " muted"}`}>{String(value)}</span>;
+    return <Mono sx={value ? undefined : { color: "text.disabled" }}>{String(value)}</Mono>;
   }
-  if (typeof value === "number") return <span className="mono">{value}</span>;
+  if (typeof value === "number") return <Mono>{value}</Mono>;
   if (typeof value === "object") {
     const text = JSON.stringify(value);
-    return <span className="mono q-trunc" title={text}>{text}</span>;
+    return <Mono title={text} sx={TRUNC_SX}>{text}</Mono>;
   }
   const text = String(value);
   if (link === "cluster" && text && nav) {
-    return <span className="link mono" onClick={() => nav.openCluster(text)}>{text}</span>;
+    return (
+      <Link component="button" type="button" onClick={() => nav.openCluster(text)}
+        sx={{ fontFamily: MONO_FONT, fontSize: 12.5 }}>
+        {text}
+      </Link>
+    );
   }
   if (link === "app" && text && nav) {
-    return <span className="link" onClick={() => nav.openApp(text)}>{text}</span>;
+    return <Link component="button" type="button" onClick={() => nav.openApp(text)}>{text}</Link>;
   }
   if (/(^|_)overall_status$/.test(name)) return <Pill status={text} />;
   if (/(^|_)status$/.test(name) && STATUS_WORD.test(text)) {
-    return <span className={`chip ${text}`}>{text}</span>;
+    return <StatusChip status={text} />;
   }
-  if (text.length > 48) return <span className="q-trunc" title={text}>{text}</span>;
+  if (text.length > 48) return <Box component="span" title={text} sx={TRUNC_SX}>{text}</Box>;
   return text;
 }
 

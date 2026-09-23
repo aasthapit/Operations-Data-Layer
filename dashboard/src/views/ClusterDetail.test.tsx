@@ -44,7 +44,8 @@ describe("the header", () => {
   it("names the cluster, its status, its hub and its version", async () => {
     open();
     const head = parentOf(await screen.findByRole("heading", { name: CLUSTER_NAME }));
-    expect(within(head).getByText("warning")).toHaveClass("pill");
+    expect(closestElement(within(head).getByText("warning"), "[data-status]"))
+      .toHaveAttribute("data-status", "warning");
     expect(within(head).getByText("hub-east · 4.16.7")).toBeInTheDocument();
   });
 
@@ -92,7 +93,8 @@ describe("the header", () => {
     cache.put(api.clusters({}).url, clustersResponse(CLUSTERS));
     open();
     const head = parentOf(await screen.findByRole("heading", { name: CLUSTER_NAME }));
-    expect(within(head).getByText("warning")).toHaveClass("pill");
+    expect(closestElement(within(head).getByText("warning"), "[data-status]"))
+      .toHaveAttribute("data-status", "warning");
   });
 
   it("shows the failure in place of the whole page", async () => {

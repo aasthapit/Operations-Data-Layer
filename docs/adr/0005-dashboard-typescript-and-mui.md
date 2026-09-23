@@ -1,6 +1,6 @@
 # ADR-0005: The dashboard moves to TypeScript, then to Material UI
 
-- Status: in progress (September 2026), on branch `feat/dashboard-typescript-mui`
+- Status: landed (September 2026), on branch `feat/dashboard-typescript-mui`
 - Related: [ADR-0004](0004-generative-ui.md) (the Generate view this migration must carry), [docs/ci.md](../ci.md) (the coverage floor that gates every phase)
 
 ## Context
@@ -241,3 +241,38 @@ Bar value labels are kept for single-measure bars and dropped for grouped bars.
 
 Tests changed for structure, never weakened: tabs are `role="tab"`, dialog and menu handles moved from class names to roles and `data-*` attributes, the grid renders `row` / `gridcell` / `grid`, the chart renders MUI bars and carries its accessible name on a wrapping element.
 Convention kept: the module-level column list annotation, and every remaining `any` with a reason.
+
+### Phase 6 - retiring styles.css
+
+**What was retired.**
+The file's last 95 lines: the pre-mount paint (the `:root` / `html` background and text-colour rules) and the five classes `ResultTable.tsx` still emitted - `.mono`, `.muted`, `.link`, `.chip`, `.q-trunc`.
+The pre-mount paint moved into a `<style>` in `index.html`, scoped to the `data-theme` attribute the existing no-flash script already sets before first paint, so a reload still does not flash.
+`ResultTable.tsx`'s `Cell` now draws through the same primitives a view does: `Mono` and `Muted` for the monospace and secondary-text runs, MUI `Link` (`component="button"`, the pattern already used at a dozen other call sites) for the two navigable columns, `StatusChip` for a generic status word, and a local `sx` constant for the truncation `.q-trunc` drew.
+`Pill` and `Dot` in `components.tsx` are a MUI `Chip` and a plain `Box` circle now.
+The class names they carried (`pill <status>`, `dot-s <status>`) were only ever a test handle since phase 3 - the tint and the type have read off the theme since then - so the tests that asserted on them now read a `data-status` attribute instead, walking up from the label text with the harness's `closestElement` where the match sits inside the chip's label rather than on its root.
+
+**A dependency the brief did not name.**
+`.mono` and `.muted` were not only `ResultTable`'s classes: fifty-odd `Column.className` values across nine views (`ClusterDetail`, `Insights`, `Manifest`, `Applications`, `BlastRadius`, `Clusters`, `Metrics`, `Overview`, `Patching`) read the same two names, relying on the plain global rule in styles.css to reach whatever `cellClassName` put them on in the grid.
+Deleting the stylesheet without moving them would have left every one of those columns in the DataGrid's default face - a real, silent visual regression across most of the app's tables, not merely a lost test hook.
+They now live in `theme.ts`'s `MuiDataGrid` override, beside the `wrap` / `nowrap` / `rot` / `cell` classes phase 3 already moved there, reading a new `MONO_FONT` export (`components.tsx` re-exports it, so `Patching.tsx`'s existing import is untouched) and `theme.palette.text.disabled`.
+
+**One deliberate deviation, flagged for review rather than made silently.**
+The brief asked for `Cell`'s muted text to read `text.secondary`; this lands on `text.disabled` instead.
+`theme.ts`'s own token table says `--text-faint -> palette.text.disabled`, and `--odl-faint` (`#6b7785` in both palettes, checked byte-for-byte) is exactly what `.muted` read in the old stylesheet.
+`text.secondary` is a different, already-spoken-for token (`--text-dim`) that would have shifted the colour of every muted cell against the rest of the app, and the existing `Muted` component already uses `text.disabled` for the identical reason.
+If `text.secondary` was actually wanted, it is a two-line change - flagging here rather than guessing.
+
+**Final CSS: 0.**
+`src/styles.css` is deleted and nothing imports it; `npm run build` emits no `dist/assets/*.css` at all, only the app / `mui` / `mui-grid` / `mui-charts` JS chunks and whatever emotion injects at runtime.
+JS gzip is unchanged at 472 kB across the same four chunks - this phase touched three source files, not the dependency graph.
+
+| | before phase 6 | after |
+|---|---|---|
+| tests | 916 in 36 files | 916 in 36 files |
+| statements / lines | 93.49% / 95.50% | 93.49% / 95.50% |
+| CSS | 1.53 kB raw / 0.67 kB gzip | 0 |
+| JS gzip | 472 kB, four chunks | 472 kB, four chunks (unchanged) |
+
+Tests changed for structure, never weakened, in six files: `components.test.tsx`, `ResultTable.test.tsx`, `DataTable.test.tsx`, and the `Patching`, `ClusterDetail` and `Applications` view tests.
+Every `toHaveClass("pill" | "dot-s" | "mono" | "muted" | "chip" | "q-trunc", ...)` became a `data-status` attribute check, or a `toHaveStyle` check on the one property the migration actually promises (`fontFamily`, `textOverflow`, a computed colour read off the real theme rather than hard-coded).
+`ResultTable.test.tsx` also switched its render helper to `renderThemed`: `Cell`'s status-word branch reuses `StatusChip`, which reads the app's own `palette.status` slot and throws under MUI's stock theme, so the "no ThemeProvider" constraint `Pill` and `Dot` still honour could not extend to it without duplicating `StatusChip`'s tone vocabulary a second time - reusing the shared component was judged worth the wider test theme.

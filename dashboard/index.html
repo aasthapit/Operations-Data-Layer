@@ -24,6 +24,17 @@
         }
       })();
     </script>
+    <style>
+      /* The colour the page is painted before React mounts (phase 6, moved
+         out of styles.css, which is now gone). MUI's CssBaseline paints this
+         once the app renders, which is one frame too late to stop a reload
+         flashing the wrong background; the script above has already set
+         data-theme by the time this is parsed, so there is no bare :root
+         case to cover. Values copied from theme.ts's DARK.bg/text and
+         LIGHT.bg/text - if those ever move, move these with them. */
+      html[data-theme="dark"] { background: #0f1419; color: #e6edf3; color-scheme: dark; }
+      html[data-theme="light"] { background: #f4f6f9; color: #151b23; color-scheme: light; }
+    </style>
   </head>
   <body>
     <div id="root"></div>

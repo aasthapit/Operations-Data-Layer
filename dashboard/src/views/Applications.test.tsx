@@ -117,7 +117,8 @@ describe("one application", () => {
   it("names it, with its status, tier and owner", async () => {
     const { container } = open("/applications/checkout", "checkout");
     const head = parentOf(await screen.findByRole("heading", { name: "checkout" }));
-    expect(within(head).getByText("warning")).toHaveClass("pill");
+    expect(closestElement(within(head).getByText("warning"), "[data-status]"))
+      .toHaveAttribute("data-status", "warning");
     expect(within(head).getByText("critical").closest("[data-tier]"))
       .toHaveAttribute("data-tier", "critical");
     expect(within(head).getByText("LOB payments")).toBeInTheDocument();
@@ -170,6 +171,7 @@ describe("one application", () => {
       cache.put(listUrl, APPLICATIONS);
       open("/applications/checkout", "checkout");
       const head = parentOf(await screen.findByRole("heading", { name: "checkout" }));
-      expect(within(head).getByText("warning")).toHaveClass("pill");
+      expect(closestElement(within(head).getByText("warning"), "[data-status]"))
+        .toHaveAttribute("data-status", "warning");
     });
 });

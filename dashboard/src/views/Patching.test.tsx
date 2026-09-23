@@ -105,7 +105,8 @@ describe("one job", () => {
   it("names it, with its status and how it did against the threshold", async () => {
     openJob();
     const head = parentOf(await screen.findByRole("heading", { name: "patch-2026-09-20-a" }));
-    expect(within(head).getByText("paused")).toHaveClass("pill", "warning");
+    expect(closestElement(within(head).getByText("paused"), "[data-status]"))
+      .toHaveAttribute("data-status", "warning");
     expect(within(head).getByText("60% success (threshold 80%)")).toBeInTheDocument();
   });
 
